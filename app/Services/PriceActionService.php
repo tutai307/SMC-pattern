@@ -614,10 +614,16 @@ class PriceActionService
                 $aiData = json_decode($content, true);
                 
                 if ($aiData) {
-                    $signal['ai_score'] = $aiData['score'] ?? 50;
-                    $signal['ai_analysis'] = $aiData['analysis'] ?? 'Không có phân tích.';
-                    $signal['ai_risk'] = $aiData['risk_warning'] ?? 'Không có cảnh báo.';
-                    $signal['ai_recommendation'] = $aiData['recommendation'] ?? 'Cân nhắc kỹ.';
+                    $signal['ai_score'] = is_array($aiData['score'] ?? null) ? ($aiData['score'][0] ?? 50) : ($aiData['score'] ?? 50);
+                    
+                    $aiAnalysis = $aiData['analysis'] ?? 'Không có phân tích.';
+                    $signal['ai_analysis'] = is_array($aiAnalysis) ? implode(' ', $aiAnalysis) : $aiAnalysis;
+                    
+                    $aiRisk = $aiData['risk_warning'] ?? 'Không có cảnh báo.';
+                    $signal['ai_risk'] = is_array($aiRisk) ? implode(' ', $aiRisk) : $aiRisk;
+                    
+                    $aiRec = $aiData['recommendation'] ?? 'Cân nhắc kỹ.';
+                    $signal['ai_recommendation'] = is_array($aiRec) ? implode(' ', $aiRec) : $aiRec;
                 }
             } catch (\Exception $e) {
                 $signal['ai_error'] = "OpenRouter Error: " . $e->getMessage();
