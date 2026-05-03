@@ -15,6 +15,23 @@ class TradingSignal extends Model
         'sl_price',
         'winrate',
         'status',
-        'reason'
+        'reason',
+        'notified_near_sl',
+        'notified_near_tp',
+        'notified_structure_break',
+        'notified_tp',
+        'notified_sl',
+        'capital',
+        'filled_at',
+    ];
+
+    protected $casts = [
+        'notified_near_sl'         => 'boolean',
+        'notified_near_tp'         => 'boolean',
+        'notified_structure_break' => 'boolean',
+        'notified_tp'              => 'boolean',
+        'notified_sl'              => 'boolean',
+        'capital'                  => 'decimal:2',
+        'filled_at'                => 'datetime',
     ];
 }

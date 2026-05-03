@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"D:\\\\Web\\\\price_action\\\\price_action\" -Recurse -Depth 2 -Name)",
+      "PowerShell(head *)",
+      "Bash(php artisan *)"
+    ]
+  }
+}

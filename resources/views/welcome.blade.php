@@ -91,9 +91,18 @@
             <div class="glass-card p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider">Dự đoán Vào lệnh AI</h3>
-                    <a href="{{ request()->fullUrlWithQuery(['propose' => 1]) }}" class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all">
-                        ĐỀ XUẤT LỆNH
-                    </a>
+                    <form action="{{ url()->current() }}" method="GET" class="flex items-center gap-2">
+                        <input type="hidden" name="symbol" value="{{ request('symbol', $symbol) }}">
+                        <input type="hidden" name="timeframe" value="{{ request('timeframe', $timeframe) }}">
+                        <input type="hidden" name="method" value="{{ request('method', $method ?? 'smc') }}">
+                        <input type="hidden" name="propose" value="1">
+                        
+                        <input type="number" name="capital" value="{{ request('capital', 100) }}" placeholder="Vốn ($)" class="bg-white/5 border border-white/10 rounded px-2 py-1 text-[10px] w-20 text-white focus:outline-none focus:border-blue-500/50" min="1" step="any" required>
+                        
+                        <button type="submit" class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all font-bold">
+                            ĐỀ XUẤT LỆNH
+                        </button>
+                    </form>
                 </div>
                 
                 @if($analysis['signal'])
@@ -130,11 +139,103 @@
                             </span>
                             <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold mr-10">{{ $analysis['signal']['winrate'] }}% Tỉ lệ Thắng</span>
                         </div>
-                        <div class="space-y-2 text-sm">
-                            <div class="flex justify-between"><span class="text-slate-500">Điểm vào</span> <span class="font-mono text-white">${{ number_format($analysis['signal']['entry'], 2) }}</span></div>
-                            <div class="flex justify-between"><span class="text-slate-500">Chốt lời</span> <span class="font-mono text-green-400">${{ number_format($analysis['signal']['tp'], 2) }}</span></div>
-                            <div class="flex justify-between"><span class="text-slate-500">Cắt lỗ</span> <span class="font-mono text-red-400">${{ number_format($analysis['signal']['sl'], 2) }}</span></div>
+                        @php
+                            $capital = request('capital', 0);
+                            $margin = 0;
+                            $leverage = 0;
+                            $volume = 0;
+                            $rrRatio = 0;
+                            $liqPrice = 0;
+                            $riskAmount = 0;
+                            $slTooTight = false;
+
+                            if ($capital > 0 && isset($analysis['signal']['entry'], $analysis['signal']['sl'], $analysis['signal']['tp'])) {
+                                $entry = $analysis['signal']['entry'];
+                                $sl    = $analysis['signal']['sl'];
+                                $tp    = $analysis['signal']['tp'];
+                                $isLong = ($analysis['signal']['type'] === 'MUA' || $analysis['signal']['type'] === 'LONG');
+
+                                $slPercent = abs($entry - $sl) / $entry;
+                                $tpPercent = abs($tp - $entry) / $entry;
+
+                                if ($slPercent > 0) {
+                                    // Cảnh báo nếu SL quá chật (< 0.8%) — dễ bị quét bởi noise
+                                    $slTooTight = $slPercent < 0.008;
+
+                                    // Leverage an toàn: giữ khoảng cách liquidation = 2× SL distance
+                                    // Công thức: liq_distance ≈ 1/leverage → cần 1/L ≥ 2×SL%
+                                    // → leverage ≤ 1/(2×SL%), cap cứng tại 20x
+                                    $safeLeverage = floor(1 / ($slPercent * 2));
+                                    $leverage = max(1, min(20, $safeLeverage));
+
+                                    // Rủi ro tối đa = 2% vốn
+                                    $riskAmount = $capital * 0.02;
+
+                                    // Khối lượng notional dựa trên rủi ro thực
+                                    $volume = $riskAmount / $slPercent;
+
+                                    // Margin cần nạp = notional / leverage
+                                    $margin = $volume / $leverage;
+
+                                    // R:R ratio
+                                    $rrRatio = $slPercent > 0 ? round($tpPercent / $slPercent, 2) : 0;
+
+                                    // Giá thanh lý ước tính (isolated margin, bỏ qua fee ~0.5%)
+                                    $liqBuffer = 1 / $leverage;
+                                    $liqPrice = $isLong
+                                        ? $entry * (1 - $liqBuffer * 0.9)
+                                        : $entry * (1 + $liqBuffer * 0.9);
+                                }
+                            }
+
+                            // Màu đòn bẩy
+                            $levColor = $leverage <= 10 ? 'text-green-400' : ($leverage <= 15 ? 'text-amber-400' : 'text-red-400');
+                            // Màu R:R
+                            $rrColor  = $rrRatio >= 2 ? 'text-green-400' : ($rrRatio >= 1.5 ? 'text-amber-400' : 'text-red-400');
+                        @endphp
+                        <div class="space-y-2 text-sm mb-3">
+                            <div class="flex justify-between"><span class="text-slate-500">Điểm vào</span> <span class="font-mono text-white">${{ number_format($analysis['signal']['entry'], 4) }}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">Chốt lời</span> <span class="font-mono text-green-400">${{ number_format($analysis['signal']['tp'], 4) }}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">Cắt lỗ</span> <span class="font-mono text-red-400">${{ number_format($analysis['signal']['sl'], 4) }}</span></div>
                         </div>
+
+                        @if($capital > 0)
+                        @if($slTooTight)
+                        <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-2 mb-2 text-[10px] text-red-400">
+                            ⚠ SL quá chật (&lt;0.8%) — dễ bị quét bởi noise thị trường. Nên mở rộng SL hoặc chờ setup rõ hơn.
+                        </div>
+                        @endif
+                        <div class="bg-black/20 border border-white/5 rounded-lg p-3 text-sm space-y-2 mb-2">
+                            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+                                <span>Quản lý vốn (Risk 2%)</span>
+                                <span>Vốn: <span class="text-white">${{ number_format($capital, 2) }}</span></span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Ký quỹ cần nạp</span>
+                                <span class="font-mono text-blue-400 font-bold">${{ number_format($margin, 2) }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Đòn bẩy đề xuất</span>
+                                <span class="font-mono {{ $levColor }} font-bold">{{ $leverage }}x</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Khối lượng lệnh</span>
+                                <span class="font-mono text-white">${{ number_format($volume, 2) }}</span>
+                            </div>
+                            <div class="border-t border-white/5 pt-2 flex justify-between items-center">
+                                <span class="text-slate-500">Tỉ lệ R:R</span>
+                                <span class="font-mono {{ $rrColor }} font-bold">1 : {{ $rrRatio }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Lỗ tối đa</span>
+                                <span class="font-mono text-red-400">-${{ number_format($riskAmount, 2) }} (2% vốn)</span>
+                            </div>
+                            <div class="flex justify-between items-center text-[10px]">
+                                <span class="text-slate-500">Giá thanh lý (~)</span>
+                                <span class="font-mono text-orange-400">${{ number_format($liqPrice, 4) }}</span>
+                            </div>
+                        </div>
+                        @endif
                     </div>
 
                     <!-- AI Deep Insights Section -->
@@ -377,9 +478,22 @@
                                 </td>
                                 <td class="py-4 text-center">
                                     @if($signal->status == 'PENDING')
-                                        <span class="text-blue-400 text-[10px] animate-pulse">ĐANG THEO DÕI...</span>
+                                        @if($signal->filled_at)
+                                            <span class="text-green-400 text-[10px] animate-pulse font-bold">ĐANG THEO DÕI</span>
+                                            <div class="text-slate-600 text-[9px] mt-0.5">Khớp {{ $signal->filled_at->format('H:i d/m') }}</div>
+                                        @else
+                                            <span class="text-amber-400 text-[10px] font-bold">CHỜ KHỚP</span>
+                                            <form action="{{ route('signals.fill', $signal->id) }}" method="POST" class="mt-1">
+                                                @csrf
+                                                <button type="submit" class="text-[9px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 hover:bg-green-500/30 transition-all">
+                                                    ✓ Đã khớp
+                                                </button>
+                                            </form>
+                                        @endif
                                     @elseif($signal->status == 'WIN')
                                         <span class="bg-green-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Thắng 🚀</span>
+                                    @elseif($signal->status == 'CANCELLED')
+                                        <span class="bg-slate-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Đã huỷ</span>
                                     @else
                                         <span class="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Thua 💀</span>
                                     @endif

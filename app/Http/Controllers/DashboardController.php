@@ -6,16 +6,19 @@ use Illuminate\Http\Request;
 
 use App\Services\BinanceService;
 use App\Services\PriceActionService;
+use App\Services\TelegramService;
 
 class DashboardController extends Controller
 {
     protected $binanceService;
     protected $priceActionService;
+    protected $telegramService;
 
-    public function __construct(BinanceService $binanceService, PriceActionService $priceActionService)
+    public function __construct(BinanceService $binanceService, PriceActionService $priceActionService, TelegramService $telegramService)
     {
         $this->binanceService = $binanceService;
         $this->priceActionService = $priceActionService;
+        $this->telegramService = $telegramService;
     }
 
     public function index()
@@ -35,27 +38,32 @@ class DashboardController extends Controller
         $klinesHTF = $this->binanceService->getKlines($symbol, $htf, 50);
 
         // Phân tích AI
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method);
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe);
 
         // Lưu tín hiệu nếu có và người dùng yêu cầu (qua click reload)
         if ($analysis['signal'] && request('propose')) {
             try {
-                \App\Models\TradingSignal::create([
-                    'symbol' => $symbol,
-                    'timeframe' => $timeframe,
-                    'type' => $analysis['signal']['type'] == 'MUA' ? 'LONG' : 'SHORT',
-                    'entry_price' => $analysis['signal']['entry'],
-                    'tp_price' => $analysis['signal']['tp'],
-                    'sl_price' => $analysis['signal']['sl'],
-                    'winrate' => $analysis['signal']['winrate'],
-                    'reason' => $analysis['signal']['reason'],
-                    'status' => 'PENDING'
+                $signal = \App\Models\TradingSignal::create([
+                    'symbol'       => $symbol,
+                    'timeframe'    => $timeframe,
+                    'type'         => $analysis['signal']['type'] == 'MUA' ? 'LONG' : 'SHORT',
+                    'entry_price'  => $analysis['signal']['entry'],
+                    'tp_price'     => $analysis['signal']['tp'],
+                    'sl_price'     => $analysis['signal']['sl'],
+                    'winrate'      => $analysis['signal']['winrate'],
+                    'reason'       => $analysis['signal']['reason'],
+                    'capital'      => request('capital') ?: null,
+                    'status'       => 'PENDING',
                 ]);
+
+                // Gửi chi tiết lệnh qua Telegram ngay khi đề xuất
+                $this->telegramService->sendNewSignal($signal, $currentPrice);
                 // Sau khi lưu xong, chuyển hướng để xoá tham số 'propose' khỏi URL
                 return redirect()->route('dashboard', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
-                    'method' => $method
+                    'method' => $method,
+                    'capital' => request('capital')
                 ])->with('success', 'Đã đề xuất lệnh thành công!');
             } catch (\Exception $e) {
                 \Log::error("Lỗi lưu tín hiệu: " . $e->getMessage());
@@ -132,6 +140,17 @@ class DashboardController extends Controller
                 $signal->update(['status' => $hitStatus]);
             }
         }
+    }
+
+    public function fillSignal($id)
+    {
+        $signal = \App\Models\TradingSignal::where('id', $id)->where('status', 'PENDING')->firstOrFail();
+
+        if (!$signal->filled_at) {
+            $signal->update(['filled_at' => now()]);
+        }
+
+        return back()->with('success', "Lệnh #{$id} {$signal->symbol} đã được đánh dấu KHỚP — bot bắt đầu theo dõi.");
     }
 
     public function academy()

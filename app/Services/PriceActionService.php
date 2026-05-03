@@ -7,7 +7,7 @@ class PriceActionService
     /**
      * Analyze market data with SMC (Smart Money Concepts).
      */
-    public function analyze(array $klines, array $klinesHTF = [], string $method = 'smc')
+    public function analyze(array $klines, array $klinesHTF = [], string $method = 'smc', string $symbol = '', string $timeframe = '')
     {
         $default = [
             'method' => $method,
@@ -24,23 +24,23 @@ class PriceActionService
 
         $candles = $this->formatCandles($klines);
         $candlesHTF = !empty($klinesHTF) ? $this->formatCandles($klinesHTF) : [];
-        
+
         // 1. Indicators
         $ema200 = $this->calculateEMA($candles, 200);
         $atr = $this->calculateATR($candles, 14);
         $adx = $this->calculateADX($candles, 14);
-        
+
         // 2. SMC Structure
         $structure = $this->detectSMCStructure($candles);
         $htfStructure = !empty($candlesHTF) ? $this->detectSMCStructure($candlesHTF) : ['trend' => 'unknown'];
-        
+
         $volumeProfile = $this->calculateVolumeProfile($candles);
 
         // 4. Analysis by Method
         $waves = [];
         $orderBlocks = [];
         $fvgs = [];
-        
+
         if ($method === 'elliot') {
             $waves = $this->detectElliotWaves($candles);
             $signal = $this->generateElliotSignal($waves, end($candles)['close'], end($atr));
@@ -50,13 +50,14 @@ class PriceActionService
             $htfOBs = !empty($candlesHTF) ? $this->findHighQualityOB($candlesHTF, $this->detectFVG($candlesHTF)) : [];
             foreach ($htfOBs as &$ob) { $ob['label'] = 'HTF ' . $ob['label']; }
             $orderBlocks = array_merge($orderBlocks, array_slice($htfOBs, -2));
-            
+
             $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr);
         }
 
         // 5. Advanced AI Scoring
         if ($signal) {
-            $signal = $this->enrichWithAIScore($signal, array_slice($candles, -60), $structure, $htfStructure, $method);
+            $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
+            $signal = $this->enrichWithAIScore($signal, array_slice($candles, -20), $structure, $htfStructure, $method, $symbol, $timeframe, $indicators);
         }
 
         return [
@@ -74,6 +75,13 @@ class PriceActionService
                 'ema200' => end($ema200)
             ]
         ];
+    }
+
+    // Dùng bởi MonitorSignalsCommand
+    public function getStructure(array $klines): array
+    {
+        if (count($klines) < 50) return ['trend' => 'không rõ', 'bos' => false, 'choch' => false, 'last_price' => 0];
+        return $this->detectSMCStructure($this->formatCandles($klines));
     }
 
     private function formatCandles(array $klines)
@@ -228,96 +236,106 @@ class PriceActionService
         
         if ($lastAdx < 15) return null; // Lọc thị trường quá lặng sóng (sideway không biên độ)
 
-        foreach ($zones as $zone) {
-            $buffer = $lastAtr * 0.5; // Tăng biên độ để dễ bắt được vùng giá hơn
+        // Duyệt từ zone gần nhất (cuối mảng) -> xa nhất để ưu tiên zone mới nhất
+        $reversedZones = array_reverse($zones);
 
-            // --- SMC LONG SETUP ---
+        foreach ($reversedZones as $zone) {
+            $buffer = $lastAtr * 0.5;
+
+            // --- SMC LONG SETUP (Buy Limit) ---
+            // Entry PHẢI nằm DƯỚI giá hiện tại (đợi giá rớt về Demand rồi mới mua)
             if ($zone['type'] == 'demand') {
-                if ($lastPrice >= $zone['bottom'] - $buffer && $lastPrice <= $zone['top'] + $buffer) {
+                $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Demand (Mean Threshold)
+                
+                // RULE: Entry Buy Limit phải THẤP HƠN giá hiện tại
+                // Nếu giá đã rớt dưới cả zone -> zone đã bị xuyên thủng (mitigated), bỏ qua
+                if ($entry >= $lastPrice) continue;
+                if ($lastPrice < $zone['bottom'] - $buffer) continue; // Giá đã rớt quá xa dưới zone
+                
+                // Giá phải đang ở gần zone (trong tầm buffer) để tín hiệu có ý nghĩa
+                if ($lastPrice > $zone['top'] + $buffer * 3) continue; // Giá đã bay quá xa lên trên zone
                     
-                    $isCounterTrend = ($htfStructure['trend'] == 'GIẢM GIÁ');
-                    $confluence = 0;
-                    if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                    if ($htfStructure['trend'] == 'TĂNG GIÁ') $confluence += 30;
-                    
-                    // Check if price is in a bullish FVG
-                    $inFvg = false;
-                    foreach(array_slice($fvgs, -5) as $f) {
-                        if ($f['type'] == 'BULLISH' && $lastPrice >= $f['bottom'] && $lastPrice <= $f['top']) {
-                            $inFvg = true; break;
-                        }
+                $isCounterTrend = ($htfStructure['trend'] == 'GIẢM GIÁ');
+                $confluence = 0;
+                if ($structure['choch'] || $structure['bos']) $confluence += 20;
+                if ($htfStructure['trend'] == 'TĂNG GIÁ') $confluence += 30;
+                
+                // Check if entry zone aligns with a bullish FVG
+                $inFvg = false;
+                foreach(array_slice($fvgs, -5) as $f) {
+                    if ($f['type'] == 'BULLISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
+                        $inFvg = true; break;
                     }
-                    if ($inFvg) $confluence += 15;
-
-                    $confidence = 50 + $confluence;
-                    if ($isCounterTrend) $confidence -= 20;
-
-                    if ($confidence < 40) continue; // Nới lỏng để AI (Claude) tự lọc lại
-
-                    $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Demand for better price
-                    
-                    // Đảm bảo entry phải thấp hơn giá hiện tại cho lệnh MUA
-                    if ($entry >= $lastPrice) {
-                        $entry = $zone['bottom'] + ($lastAtr * 0.1); 
-                    }
-
-                    $sl = $zone['bottom'] - ($lastAtr * 0.2);
-                    $tp = $entry + ($entry - $sl) * 3.0;
-
-                    return [
-                        'type' => 'MUA',
-                        'entry' => round($entry, 2),
-                        'tp' => round($tp, 2), 
-                        'sl' => round($sl, 2), 
-                        'winrate' => min(95, $confidence),
-                        'reason' => "SMC: Đặt lệnh chờ tại 50% vùng Demand (Mean Threshold) để tối ưu điểm vào và R:R.",
-                        'is_counter_trend' => $isCounterTrend
-                    ];
                 }
+                if ($inFvg) $confluence += 15;
+
+                $confidence = 50 + $confluence;
+                if ($isCounterTrend) $confidence -= 20;
+
+                if ($confidence < 40) continue;
+
+                // SL an toàn dưới đáy zone cộng thêm buffer
+                $sl = $zone['bottom'] - ($lastAtr * 0.2);
+                // TP R:R 1:3
+                $tp = $entry + ($entry - $sl) * 3.0;
+
+                return [
+                    'type' => 'MUA',
+                    'entry' => round($entry, 2),
+                    'tp' => round($tp, 2), 
+                    'sl' => round($sl, 2), 
+                    'winrate' => min(95, $confidence),
+                    'reason' => "SMC: Đặt lệnh Buy Limit chờ giá hồi về 50% vùng Demand (Mean Threshold). Kiên nhẫn đợi cấu trúc retest.",
+                    'is_counter_trend' => $isCounterTrend
+                ];
             }
 
-            // --- SMC SHORT SETUP ---
+            // --- SMC SHORT SETUP (Sell Limit) ---
+            // Entry PHẢI nằm TRÊN giá hiện tại (đợi giá hồi lên Supply rồi mới bán)
             if ($zone['type'] == 'supply') {
-                if ($lastPrice <= $zone['top'] + $buffer && $lastPrice >= $zone['bottom'] - $buffer) {
+                $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Supply (Mean Threshold)
+                
+                // RULE: Entry Sell Limit phải CAO HƠN giá hiện tại
+                // Nếu giá đã vượt lên trên cả zone -> zone đã bị xuyên thủng (mitigated), bỏ qua
+                if ($entry <= $lastPrice) continue;
+                if ($lastPrice > $zone['top'] + $buffer) continue; // Giá đã bay quá xa trên zone
+                
+                // Giá phải đang ở gần zone (trong tầm buffer) để tín hiệu có ý nghĩa
+                if ($lastPrice < $zone['bottom'] - $buffer * 3) continue; // Giá đã rớt quá xa dưới zone
                     
-                    $isCounterTrend = ($htfStructure['trend'] == 'TĂNG GIÁ');
-                    $confluence = 0;
-                    if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                    if ($htfStructure['trend'] == 'GIẢM GIÁ') $confluence += 30;
-                    
-                    $inFvg = false;
-                    foreach(array_slice($fvgs, -5) as $f) {
-                        if ($f['type'] == 'BEARISH' && $lastPrice >= $f['bottom'] && $lastPrice <= $f['top']) {
-                            $inFvg = true; break;
-                        }
+                $isCounterTrend = ($htfStructure['trend'] == 'TĂNG GIÁ');
+                $confluence = 0;
+                if ($structure['choch'] || $structure['bos']) $confluence += 20;
+                if ($htfStructure['trend'] == 'GIẢM GIÁ') $confluence += 30;
+                
+                // Check if entry zone aligns with a bearish FVG
+                $inFvg = false;
+                foreach(array_slice($fvgs, -5) as $f) {
+                    if ($f['type'] == 'BEARISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
+                        $inFvg = true; break;
                     }
-                    if ($inFvg) $confluence += 15;
-
-                    $confidence = 50 + $confluence;
-                    if ($isCounterTrend) $confidence -= 20;
-
-                    if ($confidence < 60) continue;
-
-                    $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Supply
-                    
-                    // Đảm bảo entry phải cao hơn giá hiện tại cho lệnh BÁN
-                    if ($entry <= $lastPrice) {
-                        $entry = $zone['top'] - ($lastAtr * 0.1);
-                    }
-
-                    $sl = $zone['top'] + ($lastAtr * 0.2);
-                    $tp = $entry - ($sl - $entry) * 3.0;
-
-                    return [
-                        'type' => 'BÁN',
-                        'entry' => round($entry, 2),
-                        'tp' => round($tp, 2), 
-                        'sl' => round($sl, 2), 
-                        'winrate' => min(95, $confidence),
-                        'reason' => "SMC: Đặt lệnh chờ tại 50% vùng Supply (Mean Threshold) để đón đầu nhịp đảo chiều với giá tốt nhất.",
-                        'is_counter_trend' => $isCounterTrend
-                    ];
                 }
+                if ($inFvg) $confluence += 15;
+
+                $confidence = 50 + $confluence;
+                if ($isCounterTrend) $confidence -= 20;
+
+                if ($confidence < 60) continue;
+
+                // SL an toàn trên đỉnh zone cộng thêm buffer
+                $sl = $zone['top'] + ($lastAtr * 0.2);
+                // TP R:R 1:3
+                $tp = $entry - ($sl - $entry) * 3.0;
+
+                return [
+                    'type' => 'BÁN',
+                    'entry' => round($entry, 2),
+                    'tp' => round($tp, 2), 
+                    'sl' => round($sl, 2), 
+                    'winrate' => min(95, $confidence),
+                    'reason' => "SMC: Đặt lệnh Sell Limit chờ giá hồi về 50% vùng Supply (Mean Threshold). Kiên nhẫn đợi cấu trúc retest.",
+                    'is_counter_trend' => $isCounterTrend
+                ];
             }
         }
 
@@ -551,82 +569,90 @@ class PriceActionService
         return null;
     }
 
-    private function enrichWithAIScore(array $signal, array $recentCandles, $structure, $htfStructure, $method)
+    private function enrichWithAIScore(array $signal, array $recentCandles, $structure, $htfStructure, $method, string $symbol = '', string $timeframe = '', array $indicators = [])
     {
         $apiKey = env('OPENROUTER_API_KEY');
         if (!$apiKey) return $signal;
 
-        // Tạo cache key dựa trên các yếu tố cốt lõi của tín hiệu
-        $signalKey = md5($signal['type'] . round($signal['entry'], 4) . $method . ($structure['trend'] ?? ''));
-        $cacheKey = "ai_analysis_{$signalKey}";
+        // Cache key đủ cụ thể: symbol + timeframe + type + entry + tp + sl + method + 10-minute bucket
+        // 10-minute bucket đảm bảo phân tích mới khi thị trường thay đổi, không bị stale 1 giờ
+        $timeBucket = floor(time() / 600);
+        $signalKey = md5(
+            $symbol . $timeframe . $signal['type'] .
+            round($signal['entry'], 2) . round($signal['tp'], 2) . round($signal['sl'], 2) .
+            $method . $timeBucket
+        );
+        $cacheKey = "ai_v2_{$signalKey}";
 
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 3600, function() use ($apiKey, $signal, $recentCandles, $structure, $htfStructure, $method) {
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 600, function() use ($apiKey, $signal, $recentCandles, $structure, $htfStructure, $method, $symbol, $timeframe, $indicators) {
             try {
                 $client = new \GuzzleHttp\Client();
-                $dataString = "";
-                foreach ($recentCandles as $c) {
-                    $dataString .= "O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']}\n";
-                }
 
-                $methodName = ($method === 'elliot') ? "Sóng Elliot" : "Smart Money Concepts (SMC)";
-                
-                $prompt = "Bạn là một Quản lý Quỹ Đầu tư (Hedge Fund Manager) chuyên nghiệp với 20 năm kinh nghiệm trong phương pháp {$methodName}.\n" .
-                          "DỮ LIỆU THỊ TRƯỜNG (60 nến gần nhất):\n" . $dataString . 
-                          "\nTÍN HIỆU KỸ THUẬT CẦN PHÊ DUYỆT:\n" .
-                          "- Loại lệnh: {$signal['type']}\n" .
-                          "- Điểm vào: {$signal['entry']}\n" .
-                          "- Chốt lời (TP): {$signal['tp']}\n" .
-                          "- Cắt lỗ (SL): {$signal['sl']}\n" .
-                          "- Cấu trúc LTF: {$structure['trend']}\n" .
-                          "- Xu hướng HTF: {$htfStructure['trend']}\n" .
-                          "- Lý do hệ thống: {$signal['reason']}\n" .
-                          "\nNHIỆM VỤ CỦA BẠN:\n" .
-                          "1. Phân tích nến (Candlestick Patterns): Tìm các dấu hiệu Rejection, Exhaustion hoặc Momentum.\n" .
-                          "2. Đánh giá vùng giá (Zone Validation): Điểm vào lệnh có nằm trong vùng thanh khoản (Liquidity) tốt không?\n" .
-                          "3. Quản trị rủi ro: Tỉ lệ R:R này có thực sự khả thi trong bối cảnh hiện tại?\n" .
-                          "4. Đưa ra điểm số từ 0-100 (Chỉ vào lệnh nếu score > 80).\n" .
-                          "\nYÊU CẦU TRẢ VỀ JSON CHI TIẾT:\n" .
-                          "{\n" .
-                          "  \"score\": 85,\n" .
-                          "  \"analysis\": \"Phân tích chi tiết về nến và xu hướng...\",\n" .
-                          "  \"risk_warning\": \"Cảnh báo rủi ro cụ thể...\",\n" .
-                          "  \"recommendation\": \"Nên vào lệnh hay đợi retest thêm?\"\n" .
-                          "}";
+                // Chỉ gửi 20 giá đóng cửa gần nhất — đủ để AI đánh giá momentum, tiết kiệm token
+                $closes = array_map(fn($c) => round($c['close'], 4), array_slice($recentCandles, -20));
+                $closesStr = implode(', ', $closes);
 
-                $response = $client->post("https://openrouter.ai/api/v1/chat/completions", [
+                $methodName = ($method === 'elliot') ? 'Elliott Wave' : 'Smart Money Concepts (SMC)';
+
+                $slPct  = $signal['entry'] > 0 ? round(abs($signal['entry'] - $signal['sl']) / $signal['entry'] * 100, 2) : 0;
+                $tpPct  = $signal['entry'] > 0 ? round(abs($signal['tp'] - $signal['entry']) / $signal['entry'] * 100, 2) : 0;
+                $rr     = $slPct > 0 ? round($tpPct / $slPct, 2) : 0;
+                $adx    = round($indicators['adx'] ?? 0, 1);
+                $atr    = round($indicators['atr'] ?? 0, 4);
+                $ema200 = round($indicators['ema200'] ?? 0, 4);
+                $aboveEma = $signal['entry'] > $ema200 ? 'trên EMA200 (bullish bias)' : 'dưới EMA200 (bearish bias)';
+
+                $prompt = <<<PROMPT
+Cặp: {$symbol} | Khung: {$timeframe} | Phương pháp: {$methodName}
+
+LỆNH CẦN ĐÁNH GIÁ:
+- Hướng: {$signal['type']}
+- Entry: {$signal['entry']} | TP: {$signal['tp']} (+{$tpPct}%) | SL: {$signal['sl']} (-{$slPct}%)
+- R:R = 1:{$rr}
+
+CHỈ BÁO KỸ THUẬT:
+- ADX: {$adx} (>25 = xu hướng mạnh, <20 = ranging)
+- ATR(14): {$atr} (độ biến động)
+- Giá {$aboveEma}
+- Xu hướng LTF: {$structure['trend']}
+- Xu hướng HTF: {$htfStructure['trend']}
+- Lý do hệ thống: {$signal['reason']}
+
+20 GIÁ ĐÓNG CỬA GẦN NHẤT: {$closesStr}
+
+Đánh giá tín hiệu này. Chỉ trả về JSON, không giải thích thêm:
+{"score":0-100,"analysis":"nhận xét cụ thể về momentum và vùng giá của {$symbol}","risk_warning":"rủi ro thực tế cần chú ý","recommendation":"quyết định: VÀO LỆNH / CHỜ RETEST / BỎ QUA, lý do ngắn"}
+PROMPT;
+
+                $response = $client->post('https://openrouter.ai/api/v1/chat/completions', [
                     'headers' => [
                         'Authorization' => 'Bearer ' . $apiKey,
-                        'Content-Type' => 'application/json',
-                        'HTTP-Referer' => 'http://localhost',
+                        'Content-Type'  => 'application/json',
+                        'HTTP-Referer'  => 'http://localhost',
                     ],
                     'json' => [
-                        'model' => 'openai/gpt-4o',
-                        'messages' => [
-                            ['role' => 'system', 'content' => 'Bạn là một chuyên gia phân tích tài chính chỉ trả về JSON.'],
-                            ['role' => 'user', 'content' => $prompt]
+                        'model'           => 'openai/gpt-4o',
+                        'temperature'     => 0.3,
+                        'messages'        => [
+                            ['role' => 'system', 'content' => 'Bạn là trader chuyên nghiệp phân tích crypto futures. Chỉ trả về JSON hợp lệ, không markdown, không giải thích.'],
+                            ['role' => 'user', 'content' => $prompt],
                         ],
-                        'response_format' => ['type' => 'json_object']
-                    ]
+                        'response_format' => ['type' => 'json_object'],
+                    ],
                 ]);
 
-                $result = json_decode($response->getBody(), true);
+                $result  = json_decode($response->getBody(), true);
                 $content = $result['choices'][0]['message']['content'] ?? '{}';
-                $aiData = json_decode($content, true);
-                
+                $aiData  = json_decode($content, true);
+
                 if ($aiData) {
-                    $signal['ai_score'] = is_array($aiData['score'] ?? null) ? ($aiData['score'][0] ?? 50) : ($aiData['score'] ?? 50);
-                    
-                    $aiAnalysis = $aiData['analysis'] ?? 'Không có phân tích.';
-                    $signal['ai_analysis'] = is_array($aiAnalysis) ? implode(' ', $aiAnalysis) : $aiAnalysis;
-                    
-                    $aiRisk = $aiData['risk_warning'] ?? 'Không có cảnh báo.';
-                    $signal['ai_risk'] = is_array($aiRisk) ? implode(' ', $aiRisk) : $aiRisk;
-                    
-                    $aiRec = $aiData['recommendation'] ?? 'Cân nhắc kỹ.';
-                    $signal['ai_recommendation'] = is_array($aiRec) ? implode(' ', $aiRec) : $aiRec;
+                    $signal['ai_score']          = is_numeric($aiData['score'] ?? null) ? (int) $aiData['score'] : 50;
+                    $signal['ai_analysis']        = is_array($aiData['analysis'] ?? null) ? implode(' ', $aiData['analysis']) : ($aiData['analysis'] ?? '');
+                    $signal['ai_risk']            = is_array($aiData['risk_warning'] ?? null) ? implode(' ', $aiData['risk_warning']) : ($aiData['risk_warning'] ?? '');
+                    $signal['ai_recommendation']  = is_array($aiData['recommendation'] ?? null) ? implode(' ', $aiData['recommendation']) : ($aiData['recommendation'] ?? '');
                 }
             } catch (\Exception $e) {
-                $signal['ai_error'] = "OpenRouter Error: " . $e->getMessage();
+                $signal['ai_error'] = 'OpenRouter Error: ' . $e->getMessage();
             }
 
             return $signal;
