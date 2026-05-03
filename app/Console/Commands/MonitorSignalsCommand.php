@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Events\SignalStatusChanged;
 use App\Models\TradingSignal;
 use App\Services\BinanceService;
 use App\Services\PriceActionService;
@@ -89,6 +90,7 @@ class MonitorSignalsCommand extends Command
 
             if ($filled) {
                 $signal->update(['filled_at' => now()]);
+                broadcast(new SignalStatusChanged($signal->fresh()));
                 $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
                 $this->telegramService->sendEntryFilled($signal, $currentPrice);
                 $this->info("  [{$signal->symbol}] 🟢 Lệnh #{$signal->id} khớp tự động tại entry {$signal->entry_price}");
@@ -116,6 +118,7 @@ class MonitorSignalsCommand extends Command
         $tpHit = $isLong ? ($high >= $signal->tp_price) : ($low <= $signal->tp_price);
         if ($tpHit && !$signal->notified_tp) {
             $signal->update(['status' => 'WIN', 'notified_tp' => true]);
+            broadcast(new SignalStatusChanged($signal->fresh()));
             $this->telegramService->sendTpHit($signal, $currentPrice);
             $this->info("  [{$signal->symbol}] ✅ TP hit → WIN");
             return;
@@ -125,6 +128,7 @@ class MonitorSignalsCommand extends Command
         $slHit = $isLong ? ($low <= $signal->sl_price) : ($high >= $signal->sl_price);
         if ($slHit && !$signal->notified_sl) {
             $signal->update(['status' => 'LOSS', 'notified_sl' => true]);
+            broadcast(new SignalStatusChanged($signal->fresh()));
             $this->telegramService->sendSlHit($signal, $currentPrice);
             $this->info("  [{$signal->symbol}] 🔴 SL hit → LOSS");
             return;
@@ -140,6 +144,7 @@ class MonitorSignalsCommand extends Command
 
             if ($structureBroken) {
                 $signal->update(['notified_structure_break' => true, 'status' => 'CANCELLED']);
+                broadcast(new SignalStatusChanged($signal->fresh()));
                 $this->telegramService->sendStructureBreak($signal, $currentPrice, $structure['trend']);
                 $this->info("  [{$signal->symbol}] 🚨 Cấu trúc phá vỡ → CANCELLED");
                 return;

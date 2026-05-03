@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tom AI - Price Action Terminal</title>
-    <meta http-equiv="refresh" content="60">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="{{ asset('css/dashboard.css') }}?v=3">
+    @vite(['resources/js/app.js'])
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body class="bg-[#0a0e17] text-white">
@@ -265,6 +265,30 @@
                         @endif
                     </div>
 
+                    <!-- VERDICT BANNER -->
+                    @php
+                        $vDecision = $verdict['decision'] ?? 'NEUTRAL';
+                        $vReasons  = $verdict['reasons'] ?? [];
+                        $vStyle = match($vDecision) {
+                            'ENTER'   => ['border' => 'border-green-500/60',  'bg' => 'bg-green-500/10',  'text' => 'text-green-400',  'icon' => '✅', 'label' => 'VÀO LỆNH'],
+                            'CAUTION' => ['border' => 'border-amber-500/60',  'bg' => 'bg-amber-500/10',  'text' => 'text-amber-400',  'icon' => '⚠️', 'label' => 'CẨN THẬN'],
+                            'SKIP'    => ['border' => 'border-red-500/60',    'bg' => 'bg-red-500/10',    'text' => 'text-red-400',    'icon' => '❌', 'label' => 'KHÔNG VÀO'],
+                            default   => ['border' => 'border-slate-500/40',  'bg' => 'bg-slate-500/5',   'text' => 'text-slate-400',  'icon' => '—',  'label' => 'CHƯA RÕ'],
+                        };
+                    @endphp
+                    <div class="border {{ $vStyle['border'] }} {{ $vStyle['bg'] }} rounded-xl p-3 mb-4">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Phán quyết cuối</span>
+                            <span class="{{ $vStyle['text'] }} font-black text-sm tracking-wide">{{ $vStyle['icon'] }} {{ $vStyle['label'] }}</span>
+                        </div>
+                        @foreach($vReasons as $reason)
+                        <div class="text-[10px] text-slate-400 flex items-start gap-1.5 mt-1">
+                            <span class="{{ $vStyle['text'] }} mt-0.5 flex-shrink-0">›</span>
+                            <span>{{ $reason }}</span>
+                        </div>
+                        @endforeach
+                    </div>
+
                     <!-- AI Deep Insights Section -->
                     @if(isset($analysis['signal']['ai_analysis']))
                     <div class="space-y-3 mt-4">
@@ -422,6 +446,67 @@
                     @endif
                 </div>
             </div>
+
+            <!-- Coin Quality Card -->
+            @php
+                $cqStatus = $coinQuality['status'] ?? 'CAUTION';
+                $cqScore  = $coinQuality['score']  ?? 50;
+                $cqColor  = match($cqStatus) {
+                    'SAFE'    => ['bar' => 'bg-green-500', 'badge' => 'bg-green-500/20 text-green-400',  'border' => 'border-green-500/20'],
+                    'AVOID'   => ['bar' => 'bg-red-500',   'badge' => 'bg-red-500/20 text-red-400',      'border' => 'border-red-500/20'],
+                    default   => ['bar' => 'bg-amber-500', 'badge' => 'bg-amber-500/20 text-amber-400',  'border' => 'border-amber-500/20'],
+                };
+                $cqLabel  = match($cqStatus) { 'SAFE' => 'AN TOÀN', 'AVOID' => 'TRÁNH', default => 'CẨN THẬN' };
+            @endphp
+            <div class="glass-card p-3 md:p-4 {{ $cqColor['border'] }} border">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider">Chất lượng Coin</h3>
+                    <span class="text-[10px] font-black px-2 py-0.5 rounded-full {{ $cqColor['badge'] }}">{{ $cqLabel }}</span>
+                </div>
+
+                <!-- Score bar -->
+                <div class="mb-3">
+                    <div class="flex justify-between text-[9px] text-slate-600 mb-1">
+                        <span>Score</span><span class="font-bold text-slate-400">{{ $cqScore }}/100</span>
+                    </div>
+                    <div class="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div class="{{ $cqColor['bar'] }} h-full rounded-full transition-all" style="width:{{ $cqScore }}%"></div>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex justify-between items-center text-[11px]">
+                        <span class="text-slate-500">Volume 24h</span>
+                        <span class="font-mono {{ ($coinQuality['volume24h'] ?? 0) >= 10_000_000 ? 'text-green-400' : (($coinQuality['volume24h'] ?? 0) >= 1_000_000 ? 'text-amber-400' : 'text-red-400') }}">
+                            ${{ number_format(($coinQuality['volume24h'] ?? 0) / 1_000_000, 1) }}M
+                        </span>
+                    </div>
+                    <div class="flex justify-between items-center text-[11px]">
+                        <span class="text-slate-500">Open Interest</span>
+                        <span class="font-mono {{ ($coinQuality['oi_usdt'] ?? 0) >= 3_000_000 ? 'text-green-400' : (($coinQuality['oi_usdt'] ?? 0) >= 500_000 ? 'text-amber-400' : 'text-red-400') }}">
+                            ${{ number_format(($coinQuality['oi_usdt'] ?? 0) / 1_000_000, 2) }}M
+                        </span>
+                    </div>
+                    <div class="flex justify-between items-center text-[11px]">
+                        <span class="text-slate-500">Funding Rate</span>
+                        @php $fr = ($coinQuality['funding'] ?? 0) * 100; @endphp
+                        <span class="font-mono {{ abs($fr) <= 0.03 ? 'text-green-400' : (abs($fr) <= 0.1 ? 'text-amber-400' : 'text-red-400') }}">
+                            {{ $fr >= 0 ? '+' : '' }}{{ number_format($fr, 4) }}%
+                        </span>
+                    </div>
+                </div>
+
+                @if(!empty($coinQuality['flags']))
+                <div class="mt-3 space-y-1 border-t border-white/5 pt-2">
+                    @foreach($coinQuality['flags'] as $flag)
+                    <div class="text-[10px] text-red-400 flex items-start gap-1">
+                        <span class="flex-shrink-0 mt-0.5">⚠</span>
+                        <span>{{ $flag }}</span>
+                    </div>
+                    @endforeach
+                </div>
+                @endif
+            </div>
         </div>
     </main>
 
@@ -484,7 +569,7 @@
                         </thead>
                         <tbody class="text-sm">
                             @forelse($signals as $signal)
-                            <tr class="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                            <tr class="border-b border-white/5 hover:bg-white/[0.02] transition-colors" data-signal-id="{{ $signal->id }}">
                                 <td class="py-3">
                                     <input type="checkbox" name="ids[]" value="{{ $signal->id }}" class="signal-checkbox rounded border-white/10 bg-white/5 text-blue-500 focus:ring-0">
                                 </td>
@@ -503,7 +588,7 @@
                                     <div class="text-green-400 text-[9px] font-mono">${{ number_format($signal->tp_price, 2) }}</div>
                                     <div class="text-red-400 text-[9px] font-mono">${{ number_format($signal->sl_price, 2) }}</div>
                                 </td>
-                                <td class="py-3 text-center">
+                                <td class="py-3 text-center signal-status-cell">
                                     @if($signal->status == 'PENDING')
                                         @if($signal->filled_at)
                                             <span class="text-green-400 text-[9px] animate-pulse font-bold block">THEO DÕI</span>
@@ -740,6 +825,41 @@
             if (!el.classList.contains('hidden')) {
                 el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
+        }
+
+        // --- WEBSOCKET: Live signal status updates ---
+        document.addEventListener('DOMContentLoaded', function() {
+            if (window.Echo) {
+                window.Echo.channel('signals')
+                    .listen('.signal.updated', function(data) {
+                        updateSignalRow(data);
+                    });
+            }
+        });
+
+        function updateSignalRow(data) {
+            const row = document.querySelector(`tr[data-signal-id="${data.id}"]`);
+            if (!row) return;
+
+            const statusCell = row.querySelector('.signal-status-cell');
+            if (!statusCell) return;
+
+            if (data.status === 'PENDING' && data.filled_at) {
+                statusCell.innerHTML = `<span class="text-green-400 text-[9px] animate-pulse font-bold block">THEO DÕI</span><div class="text-slate-600 text-[8px] mt-0.5">${data.filled_at}</div>`;
+            } else if (data.status === 'PENDING') {
+                statusCell.innerHTML = `<span class="text-amber-400 text-[9px] font-bold block">CHỜ KHỚP</span><div class="text-slate-600 text-[8px] mt-0.5">Bot tự theo dõi</div>`;
+            } else if (data.status === 'WIN') {
+                statusCell.innerHTML = `<span class="bg-green-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Thắng</span>`;
+            } else if (data.status === 'LOSS') {
+                statusCell.innerHTML = `<span class="bg-red-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Thua</span>`;
+            } else if (data.status === 'CANCELLED') {
+                statusCell.innerHTML = `<span class="bg-slate-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Huỷ</span>`;
+            }
+
+            // Flash row to signal update
+            row.style.transition = 'background 0.4s';
+            row.style.background = 'rgba(59, 130, 246, 0.12)';
+            setTimeout(() => { row.style.background = ''; }, 1200);
         }
 
         // --- CHECKBOX & BULK DELETE LOGIC ---

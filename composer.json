@@ -8,6 +8,7 @@
     "require": {
         "php": "^8.2",
         "laravel/framework": "^12.0",
+        "laravel/reverb": "^1.10",
         "laravel/tinker": "^2.10.1"
     },
     "require-dev": {
@@ -42,7 +43,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#93c5fd,#c4b5fd,#fdba74,#86efac,#fcd34d,#f9a8d4\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"npm run dev\" \"php artisan schedule:work\" \"php artisan telegram:bot\" \"php artisan signals:monitor\" --names=server,queue,vite,scheduler,telegram,monitor"
+            "npx concurrently -c \"#93c5fd,#c4b5fd,#fdba74,#86efac,#fcd34d,#f9a8d4,#fb7185\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"npm run dev\" \"php artisan schedule:work\" \"php artisan telegram:bot\" \"php artisan signals:monitor\" \"php artisan reverb:start\" --names=server,queue,vite,scheduler,telegram,monitor,reverb"
         ],
         "test": [
             "@php artisan config:clear --ansi",

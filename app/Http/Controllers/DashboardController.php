@@ -2,11 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-
+use App\Events\SignalStatusChanged;
 use App\Services\BinanceService;
 use App\Services\PriceActionService;
 use App\Services\TelegramService;
+use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
@@ -58,6 +58,7 @@ class DashboardController extends Controller
 
                 // Gửi chi tiết lệnh qua Telegram ngay khi đề xuất
                 $this->telegramService->sendNewSignal($signal, $currentPrice);
+                broadcast(new SignalStatusChanged($signal));
                 // Sau khi lưu xong, chuyển hướng để xoá tham số 'propose' khỏi URL
                 return redirect()->route('dashboard', [
                     'symbol' => $symbol,
@@ -70,8 +71,11 @@ class DashboardController extends Controller
             }
         }
 
-        // Cập nhật trạng thái các lệnh đang chờ (PENDING)
-        $this->updateSignalStatuses($klines);
+        // Kiểm tra chất lượng coin
+        $coinQuality = $this->binanceService->getCoinQuality($symbol);
+
+        // Phán quyết: ENTER | CAUTION | SKIP
+        $verdict = $this->computeVerdict($analysis['signal'] ?? null, $coinQuality);
 
         // Lấy 10 lệnh gần nhất của ĐỒNG COIN ĐANG XEM
         $signals = \App\Models\TradingSignal::where('symbol', $symbol)
@@ -89,7 +93,74 @@ class DashboardController extends Controller
             ->groupBy('symbol')
             ->get();
 
-        return view('welcome', compact('klines', 'symbol', 'currentPrice', 'analysis', 'timeframe', 'signals', 'coinStats', 'method'));
+        return view('welcome', compact('klines', 'symbol', 'currentPrice', 'analysis', 'timeframe', 'signals', 'coinStats', 'method', 'coinQuality', 'verdict'));
+    }
+
+    private function computeVerdict(?array $signal, array $coinQuality): array
+    {
+        $decision = 'NEUTRAL';
+        $reasons  = [];
+
+        if ($coinQuality['status'] === 'AVOID') {
+            $decision  = 'SKIP';
+            $reasons[] = 'Coin rác / thanh khoản cực thấp';
+        }
+
+        if (!$signal) {
+            return ['decision' => $decision ?: 'NEUTRAL', 'reasons' => $reasons];
+        }
+
+        $entry = (float) ($signal['entry'] ?? 0);
+        $sl    = (float) ($signal['sl']    ?? 0);
+        $tp    = (float) ($signal['tp']    ?? 0);
+
+        if ($entry > 0 && $sl > 0) {
+            $slPct = abs($entry - $sl) / $entry;
+
+            if ($slPct < 0.008) {
+                $decision  = 'SKIP';
+                $reasons[] = 'SL quá chật (<0.8%) — dễ bị noise quét';
+            }
+
+            $tpPct   = $tp > 0 ? abs($tp - $entry) / $entry : 0;
+            $rrRatio = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
+
+            if ($rrRatio > 0 && $rrRatio < 1.5 && $decision !== 'SKIP') {
+                $decision  = 'CAUTION';
+                $reasons[] = "R:R thấp (1:{$rrRatio})";
+            }
+        }
+
+        $aiScore = $signal['ai_score'] ?? null;
+        if ($aiScore !== null && $aiScore < 50) {
+            $decision  = 'SKIP';
+            $reasons[] = "AI score thấp ({$aiScore}/100)";
+        }
+
+        $aiRec = strtolower($signal['ai_recommendation'] ?? '');
+        if (str_contains($aiRec, 'bỏ qua') || str_contains($aiRec, 'không vào') || str_contains($aiRec, 'skip') || str_contains($aiRec, 'avoid')) {
+            if ($decision !== 'SKIP') {
+                $decision  = 'SKIP';
+                $reasons[] = 'AI khuyên bỏ qua';
+            }
+        }
+
+        if ($coinQuality['status'] === 'CAUTION' && $decision === 'NEUTRAL') {
+            $decision  = 'CAUTION';
+            $reasons[] = 'Thanh khoản coin trung bình';
+        }
+
+        if ($decision === 'NEUTRAL') {
+            if (($signal['winrate'] ?? 0) >= 65 && ($aiScore === null || $aiScore >= 65)) {
+                $decision  = 'ENTER';
+                $reasons[] = 'Setup hợp lệ — coin thanh khoản tốt';
+            } else {
+                $decision  = 'CAUTION';
+                $reasons[] = 'Tín hiệu chưa đủ mạnh để tự tin vào';
+            }
+        }
+
+        return compact('decision', 'reasons');
     }
 
     private function updateSignalStatuses($klines)
