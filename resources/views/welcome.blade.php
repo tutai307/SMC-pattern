@@ -609,6 +609,11 @@
                                     {{ $signal->reason }}
                                 </td>
                                 <td class="py-3 text-right">
+                                    @if(in_array($signal->status, ['WIN', 'LOSS', 'CANCELLED']))
+                                    <button type="button" onclick="if(confirm('Reset lệnh này về PENDING?')) document.getElementById('reset-form-{{ $signal->id }}').submit();" class="text-slate-500/50 hover:text-amber-400 transition-colors p-1" title="Reset về PENDING">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                    </button>
+                                    @endif
                                     <button type="button" onclick="event.preventDefault(); if(confirm('Xoá lệnh này?')) document.getElementById('delete-form-{{ $signal->id }}').submit();" class="text-red-500/50 hover:text-red-400 transition-colors p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                                     </button>
@@ -625,11 +630,14 @@
                     </table>
                 </form>
 
-                <!-- Hidden Individual Delete Forms -->
+                <!-- Hidden Individual Delete / Reset Forms -->
                 @foreach($signals as $signal)
                 <form id="delete-form-{{ $signal->id }}" action="{{ route('signals.delete', $signal->id) }}" method="POST" class="hidden">
                     @csrf
                     @method('DELETE')
+                </form>
+                <form id="reset-form-{{ $signal->id }}" action="{{ route('signals.reset', $signal->id) }}" method="POST" class="hidden">
+                    @csrf
                 </form>
                 @endforeach
             </div>
@@ -638,6 +646,41 @@
 
 
     <script>
+        // Global — used by price feed, kline stream, and chart
+        const symbolLower = "{{ strtolower($symbol) }}";
+        const wsTimeframe = "{{ $timeframe }}";
+
+        // === PRICE FEED — độc lập, auto-reconnect, không liên quan chart ===
+        (function initPriceFeed() {
+            const priceEl = document.getElementById('current-price-display');
+            if (!priceEl) return;
+
+            function connect() {
+                const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@aggTrade`);
+
+                ws.onmessage = function(e) {
+                    const d = JSON.parse(e.data);
+                    const price = parseFloat(d.p);
+                    const old   = parseFloat(priceEl.dataset.lastPrice || price);
+                    // Số thập phân: coin nhỏ giữ 4 chữ số, coin lớn giữ 2
+                    const decimals = price < 10 ? 4 : price < 1000 ? 2 : 2;
+                    const fmt = new Intl.NumberFormat('en-US', {
+                        minimumFractionDigits: decimals,
+                        maximumFractionDigits: decimals,
+                    }).format(price);
+                    priceEl.style.color = price >= old ? '#22c55e' : '#ef4444';
+                    priceEl.textContent = '$' + fmt;
+                    priceEl.dataset.lastPrice = price;
+                };
+
+                ws.onclose = () => setTimeout(connect, 2000);
+                ws.onerror  = () => ws.close();
+            }
+
+            connect();
+        })();
+
+        // === CHART ===
         document.addEventListener('DOMContentLoaded', function() {
             const chartElement = document.getElementById('chart');
             if (!chartElement) return;
@@ -783,36 +826,20 @@
 
                 chart.timeScale().fitContent();
 
-                // --- REALTIME WEBSOCKET INTEGRATION ---
-                const symbolLower = "{{ strtolower($symbol) }}";
-                const timeframe = "{{ $timeframe }}";
-                
-                // Stream nến cho biểu đồ
-                const socketKline = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@kline_${timeframe}`);
-                socketKline.onmessage = function(event) {
-                    const message = JSON.parse(event.data);
-                    const k = message.k;
-                    candleSeries.update({
-                        time: k.t / 1000,
-                        open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l), close: parseFloat(k.c),
-                    });
-                };
-
-                // Stream ticker cho giá header (nhảy liên tục)
-                const socketTicker = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@ticker`);
-                socketTicker.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    const priceElement = document.getElementById('current-price-display');
-                    if (priceElement) {
-                        const price = parseFloat(data.c);
-                        const oldPrice = parseFloat(priceElement.dataset.lastPrice || 0);
-                        const formattedPrice = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(price);
-                        
-                        priceElement.style.color = price >= oldPrice ? '#22c55e' : '#ef4444';
-                        priceElement.innerText = `$${formattedPrice}`;
-                        priceElement.dataset.lastPrice = price;
-                    }
-                };
+                // === KLINE STREAM — cập nhật nến real-time, auto-reconnect ===
+                (function connectKlines() {
+                    const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@kline_${wsTimeframe}`);
+                    ws.onmessage = function(event) {
+                        const k = JSON.parse(event.data).k;
+                        candleSeries.update({
+                            time: k.t / 1000,
+                            open: parseFloat(k.o), high: parseFloat(k.h),
+                            low:  parseFloat(k.l), close: parseFloat(k.c),
+                        });
+                    };
+                    ws.onclose = () => setTimeout(connectKlines, 3000);
+                    ws.onerror  = () => ws.close();
+                })();
 
             } catch (err) {
                 console.error("Chart Error:", err);

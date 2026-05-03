@@ -213,6 +213,21 @@ class DashboardController extends Controller
         }
     }
 
+    public function resetSignal($id)
+    {
+        $signal = \App\Models\TradingSignal::findOrFail($id);
+        $signal->update([
+            'status'                   => 'PENDING',
+            'filled_at'                => null,
+            'notified_tp'              => false,
+            'notified_sl'              => false,
+            'notified_near_tp'         => false,
+            'notified_near_sl'         => false,
+            'notified_structure_break' => false,
+        ]);
+        return back()->with('success', "Lệnh #{$id} đã reset về PENDING — bot sẽ theo dõi lại.");
+    }
+
     public function fillSignal($id)
     {
         $signal = \App\Models\TradingSignal::where('id', $id)->where('status', 'PENDING')->firstOrFail();

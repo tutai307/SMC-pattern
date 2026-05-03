@@ -101,7 +101,9 @@ class MonitorSignalsCommand extends Command
 
     private function checkSignal(TradingSignal $signal): void
     {
-        $klines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
+        // Fetch candles from fill time — so we check every candle the position was open for
+        $startMs = $signal->filled_at->timestamp * 1000;
+        $klines  = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500, $startMs);
 
         if (empty($klines)) {
             $this->warn("  [{$signal->symbol}] Không lấy được klines.");
@@ -109,35 +111,42 @@ class MonitorSignalsCommand extends Command
         }
 
         $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
-        $lastCandle   = end($klines);
-        $high         = (float) $lastCandle[2];
-        $low          = (float) $lastCandle[3];
         $isLong       = $signal->type === 'LONG';
 
-        // 1. TP hit
-        $tpHit = $isLong ? ($high >= $signal->tp_price) : ($low <= $signal->tp_price);
-        if ($tpHit && !$signal->notified_tp) {
-            $signal->update(['status' => 'WIN', 'notified_tp' => true]);
-            broadcast(new SignalStatusChanged($signal->fresh()));
-            $this->telegramService->sendTpHit($signal, $currentPrice);
-            $this->info("  [{$signal->symbol}] ✅ TP hit → WIN");
-            return;
+        // Walk every candle in chronological order — first TP or SL touch wins
+        foreach ($klines as $k) {
+            $high = (float) $k[2];
+            $low  = (float) $k[3];
+
+            // 1. TP hit (check before SL — if same candle hits both, TP came first for trend direction)
+            if (!$signal->notified_tp) {
+                $tpHit = $isLong ? ($high >= $signal->tp_price) : ($low <= $signal->tp_price);
+                if ($tpHit) {
+                    $signal->update(['status' => 'WIN', 'notified_tp' => true]);
+                    broadcast(new SignalStatusChanged($signal->fresh()));
+                    $this->telegramService->sendTpHit($signal, $currentPrice);
+                    $this->info("  [{$signal->symbol}] ✅ TP hit → WIN");
+                    return;
+                }
+            }
+
+            // 2. SL hit
+            if (!$signal->notified_sl) {
+                $slHit = $isLong ? ($low <= $signal->sl_price) : ($high >= $signal->sl_price);
+                if ($slHit) {
+                    $signal->update(['status' => 'LOSS', 'notified_sl' => true]);
+                    broadcast(new SignalStatusChanged($signal->fresh()));
+                    $this->telegramService->sendSlHit($signal, $currentPrice);
+                    $this->info("  [{$signal->symbol}] 🔴 SL hit → LOSS");
+                    return;
+                }
+            }
         }
 
-        // 2. SL hit
-        $slHit = $isLong ? ($low <= $signal->sl_price) : ($high >= $signal->sl_price);
-        if ($slHit && !$signal->notified_sl) {
-            $signal->update(['status' => 'LOSS', 'notified_sl' => true]);
-            broadcast(new SignalStatusChanged($signal->fresh()));
-            $this->telegramService->sendSlHit($signal, $currentPrice);
-            $this->info("  [{$signal->symbol}] 🔴 SL hit → LOSS");
-            return;
-        }
-
-        // 3. Cấu trúc phá vỡ (CHoCH ngược chiều lệnh)
+        // 3. Structure break — use recent candles (last 100 from now, no startTime)
         if (!$signal->notified_structure_break) {
-            $structure = $this->priceActionService->getStructure($klines);
-
+            $recentKlines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
+            $structure       = $this->priceActionService->getStructure($recentKlines);
             $structureBroken = $isLong
                 ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
                 : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
@@ -151,28 +160,26 @@ class MonitorSignalsCommand extends Command
             }
         }
 
-        // 4. Tiến gần TP (còn ≤ 1.5%) — gợi ý dời SL hoặc chốt một phần
+        // 4. Near TP (≤ 1.5% away by current price)
         if (!$signal->notified_near_tp && $signal->tp_price > 0) {
-            $tpDistance = abs($currentPrice - $signal->tp_price) / $signal->tp_price;
-            if ($tpDistance <= 0.015) {
+            if (abs($currentPrice - $signal->tp_price) / $signal->tp_price <= 0.015) {
                 $signal->update(['notified_near_tp' => true]);
                 $this->telegramService->sendNearTp($signal, $currentPrice);
                 $this->info("  [{$signal->symbol}] 🎯 Tiến gần TP ({$currentPrice} → {$signal->tp_price})");
             }
         }
 
-        // 5. Tiến gần SL (còn ≤ 0.5%)
+        // 5. Near SL (≤ 0.5% away by current price)
         if (!$signal->notified_near_sl && $signal->sl_price > 0) {
-            $slDistance = abs($currentPrice - $signal->sl_price) / $signal->sl_price;
-            if ($slDistance <= 0.005) {
+            if (abs($currentPrice - $signal->sl_price) / $signal->sl_price <= 0.005) {
                 $signal->update(['notified_near_sl' => true]);
                 $this->telegramService->sendNearSl($signal, $currentPrice);
                 $this->info("  [{$signal->symbol}] ⚠️ Tiến gần SL");
             }
         }
 
-        $tpDist = round(abs($currentPrice - $signal->tp_price) / $signal->tp_price * 100, 2);
-        $slDist = round(abs($currentPrice - $signal->sl_price) / $signal->sl_price * 100, 2);
+        $tpDist = $signal->tp_price > 0 ? round(abs($currentPrice - $signal->tp_price) / $signal->tp_price * 100, 2) : 0;
+        $slDist = $signal->sl_price > 0 ? round(abs($currentPrice - $signal->sl_price) / $signal->sl_price * 100, 2) : 0;
         $this->line("  [{$signal->symbol}] {$signal->type} giá={$currentPrice} | TP còn {$tpDist}% | SL còn {$slDist}%");
     }
 }
