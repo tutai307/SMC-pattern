@@ -98,13 +98,14 @@
                         </a>
                     </div>
 
-                    <a href="/?symbol={{ $symbol }}&timeframe=15m" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                    @php $m = $method ?? 'smc'; @endphp
+                    <a href="/?symbol={{ $symbol }}&timeframe=15m&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
                         M15
                     </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=1h" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '1h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                    <a href="/?symbol={{ $symbol }}&timeframe=1h&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '1h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
                         H1
                     </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=4h" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '4h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                    <a href="/?symbol={{ $symbol }}&timeframe=4h&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '4h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
                         H4
                     </a>
                 </div>
@@ -619,31 +620,80 @@
                     });
                 }
 
-                // Draw Elliot Waves (ZigZag)
+                // Draw Elliot Waves (ZigZag) với animation mượt mà
                 if (analysis.method === 'elliot' && analysis.waves.length > 0) {
+                    // Màu theo loại sóng
+                    const impulseLabels  = ['1','3','5'];
+                    const correctLabels  = ['2','4'];
+                    const abcLabels      = ['A','B','C'];
+
+                    const wavePointColor = (label) => {
+                        if (impulseLabels.includes(label)) return '#22c55e';  // Xanh lá — sóng đẩy
+                        if (correctLabels.includes(label)) return '#ef4444';  // Đỏ — sóng điều chỉnh
+                        return '#a78bfa';                                       // Tím — A-B-C
+                    };
+
                     const waveSeries = chart.addLineSeries({
-                        color: '#f59e0b',
+                        color: 'rgba(245, 158, 11, 0.85)',
                         lineWidth: 2,
                         lineStyle: LightweightCharts.LineStyle.Solid,
+                        lastValueVisible: false,
+                        priceLineVisible: false,
+                        crosshairMarkerVisible: false,
                     });
-                    
-                    const waveData = analysis.waves.map(w => ({
-                        time: w.time / 1000,
-                        value: w.price
-                    }));
-                    waveSeries.setData(waveData);
 
-                    // Add Labels for waves
-                    analysis.waves.forEach(w => {
-                        waveSeries.setMarkers([{
-                            time: w.time / 1000,
-                            position: w.type === 'high' ? 'aboveBar' : 'belowBar',
-                            color: '#f59e0b',
-                            shape: 'circle',
-                            text: w.label,
-                            size: 1.5
-                        }]);
+                    // Sắp xếp theo time để đảm bảo LightweightCharts không lỗi
+                    const waveData = analysis.waves
+                        .map(w => ({ time: Math.floor(w.time / 1000), value: w.price, label: w.label, type: w.type }))
+                        .sort((a, b) => a.time - b.time);
+
+                    // Tập hợp tất cả markers một lần — FIX bug setMarkers trong loop
+                    const allMarkers = waveData.map(w => ({
+                        time: w.time,
+                        position: w.type === 'high' ? 'aboveBar' : 'belowBar',
+                        color: wavePointColor(w.label),
+                        shape: 'circle',
+                        text: w.label,
+                        size: abcLabels.includes(w.label) ? 1.5 : 2,
+                    }));
+
+                    // Price lines tại các điểm chốt quan trọng
+                    waveData.forEach(w => {
+                        if (['1','3','5'].includes(w.label)) {
+                            candleSeries.createPriceLine({
+                                price: w.value,
+                                color: 'rgba(34, 197, 94, 0.25)',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: `W${w.label}`,
+                            });
+                        }
+                        if (w.label === 'C') {
+                            candleSeries.createPriceLine({
+                                price: w.value,
+                                color: 'rgba(167, 139, 250, 0.35)',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: 'WC',
+                            });
+                        }
                     });
+
+                    // Animation: vẽ từng điểm một với delay 80ms
+                    let step = 0;
+                    function animateWave() {
+                        if (step >= waveData.length) {
+                            waveSeries.setMarkers(allMarkers);
+                            return;
+                        }
+                        waveSeries.setData(waveData.slice(0, step + 1).map(d => ({ time: d.time, value: d.value })));
+                        step++;
+                        setTimeout(animateWave, 80);
+                    }
+                    // Delay nhỏ để chờ candles render xong
+                    setTimeout(animateWave, 200);
                 }
 
                 chart.timeScale().fitContent();
