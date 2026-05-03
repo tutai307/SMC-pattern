@@ -11,59 +11,85 @@
 </head>
 <body class="bg-[#0a0e17] text-white">
     <!-- Header -->
-    <header class="p-6 border-b border-white/10 flex justify-between items-center bg-[#0a0e17]/80 sticky top-0 z-50 backdrop-blur-md">
-        <div class="flex items-center space-x-4">
-            <div class="text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                TOM AI <span class="text-xs font-normal text-slate-500">v1.0</span>
+    <header class="px-4 py-3 md:px-6 md:py-4 border-b border-white/10 bg-[#0a0e17]/80 sticky top-0 z-50 backdrop-blur-md">
+        <!-- Row 1: Logo + Price -->
+        <div class="flex justify-between items-center">
+            <div class="flex items-center gap-2 md:gap-4">
+                <div class="text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+                    TOM AI <span class="text-xs font-normal text-slate-500">v1.0</span>
+                </div>
+                <div class="hidden sm:flex items-center text-sm text-slate-400">
+                    <span class="indicator-dot dot-online"></span> Market Online
+                </div>
+                <a href="/academy" class="hidden sm:flex px-3 py-1 bg-purple-500/10 text-purple-400 text-[10px] font-bold rounded-lg border border-purple-500/20 hover:bg-purple-500/20 transition-all items-center space-x-1">
+                    <span class="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></span>
+                    <span>TOM ACADEMY</span>
+                </a>
+                <a href="/planner" class="hidden sm:flex px-3 py-1 bg-blue-500/10 text-blue-400 text-[10px] font-bold rounded-lg border border-blue-500/20 hover:bg-blue-500/20 transition-all items-center space-x-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                    <span>KẾ HOẠCH</span>
+                </a>
             </div>
-            <div class="flex items-center text-sm text-slate-400">
-                <span class="indicator-dot dot-online"></span> Market Online
+
+            <div class="flex items-center gap-2 md:gap-6">
+                <!-- Search: desktop only -->
+                <form action="/" method="GET" class="relative group hidden md:block">
+                    <input type="text" name="symbol" value="{{ $symbol }}"
+                        class="bg-white/5 border border-white/10 rounded-lg px-4 py-1.5 text-sm focus:outline-none focus:border-blue-500/50 w-32 transition-all group-hover:w-48 font-mono uppercase"
+                        placeholder="Search Symbol...">
+                    <button type="submit" class="absolute right-3 top-2 text-slate-500 hover:text-blue-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    </button>
+                </form>
+
+                <div class="text-right">
+                    <div class="text-[10px] text-slate-500 uppercase">{{ $symbol }}</div>
+                    <div id="current-price-display" class="text-base md:text-xl font-mono text-green-400" data-last-price="{{ $currentPrice }}">
+                        ${{ number_format($currentPrice, 2) }}
+                    </div>
+                </div>
+                <div class="hidden md:flex items-center gap-4">
+                    <div class="h-10 w-px bg-white/10"></div>
+                    <button class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg font-semibold transition-all text-sm">
+                        Connect API
+                    </button>
+                </div>
             </div>
-            <a href="/academy" class="ml-4 px-3 py-1 bg-purple-500/10 text-purple-400 text-[10px] font-bold rounded-lg border border-purple-500/20 hover:bg-purple-500/20 transition-all flex items-center space-x-1">
-                <span class="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></span>
-                <span>TOM ACADEMY</span>
-            </a>
-            <a href="/planner" class="ml-2 px-3 py-1 bg-blue-500/10 text-blue-400 text-[10px] font-bold rounded-lg border border-blue-500/20 hover:bg-blue-500/20 transition-all flex items-center space-x-1">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                <span>KẾ HOẠCH</span>
-            </a>
         </div>
-        
-        <div class="flex items-center space-x-6">
-            <!-- Symbol Search -->
-            <form action="/" method="GET" class="relative group">
-                <input type="text" name="symbol" value="{{ $symbol }}" 
-                    class="bg-white/5 border border-white/10 rounded-lg px-4 py-1.5 text-sm focus:outline-none focus:border-blue-500/50 w-32 transition-all group-hover:w-48 font-mono uppercase"
-                    placeholder="Search Symbol...">
-                <button type="submit" class="absolute right-3 top-2 text-slate-500 hover:text-blue-400">
+
+        <!-- Row 2: Mobile nav + search -->
+        <div class="flex items-center gap-2 mt-2 sm:hidden">
+            <a href="/academy" class="flex items-center gap-1 px-2.5 py-1 bg-purple-500/10 text-purple-400 text-[10px] font-bold rounded-lg border border-purple-500/20">
+                <span class="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></span>
+                <span>ACADEMY</span>
+            </a>
+            <a href="/planner" class="flex items-center gap-1 px-2.5 py-1 bg-blue-500/10 text-blue-400 text-[10px] font-bold rounded-lg border border-blue-500/20">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                <span>PLAN</span>
+            </a>
+            <form action="/" method="GET" class="relative flex-1">
+                <input type="text" name="symbol" value="{{ $symbol }}"
+                    class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500/50 w-full font-mono uppercase"
+                    placeholder="Tìm coin...">
+                <button type="submit" class="absolute right-2.5 top-2 text-slate-500 hover:text-blue-400">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                 </button>
             </form>
-
-            <div class="text-right">
-                <div class="text-xs text-slate-500 uppercase">Current {{ $symbol }}</div>
-                <div id="current-price-display" class="text-xl font-mono text-green-400" data-last-price="{{ $currentPrice }}">
-                    ${{ number_format($currentPrice, 2) }}
-                </div>
-            </div>
-            <div class="h-10 w-px bg-white/10"></div>
-            <button class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded-lg font-semibold transition-all">
-                Connect API
-            </button>
         </div>
     </header>
 
     <main class="trading-container">
         <!-- Chart Section -->
         <div class="glass-card p-4">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-semibold flex items-center">
-                    <svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
-                    Price Action Terminal
+            <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                <h2 class="text-base md:text-lg font-semibold flex items-center">
+                    <svg class="w-4 h-4 md:w-5 md:h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
+                    <span class="hidden sm:inline">Price Action Terminal</span>
+                    <span class="sm:hidden">Terminal</span>
                 </h2>
-                <div class="flex space-x-2">
+                <div class="flex flex-wrap gap-1.5 justify-end">
                     <!-- Method Toggle -->
-                    <div class="flex bg-white/5 p-1 rounded-lg mr-4">
+                    <div class="flex bg-white/5 p-1 rounded-lg">
                         <a href="{{ request()->fullUrlWithQuery(['method' => 'smc']) }}" class="px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'smc' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">
                             SMC
                         </a>
@@ -72,14 +98,14 @@
                         </a>
                     </div>
 
-                    <a href="/?symbol={{ $symbol }}&timeframe=15m" class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        SCALP M15
+                    <a href="/?symbol={{ $symbol }}&timeframe=15m" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                        M15
                     </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=1h" class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all {{ $timeframe == '1h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        INTRADAY H1
+                    <a href="/?symbol={{ $symbol }}&timeframe=1h" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '1h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                        H1
                     </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=4h" class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all {{ $timeframe == '4h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        SWING H4
+                    <a href="/?symbol={{ $symbol }}&timeframe=4h" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '4h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
+                        H4
                     </a>
                 </div>
             </div>
@@ -89,17 +115,17 @@
         <!-- Sidebar / Signals -->
         <div class="space-y-6">
             <div class="glass-card p-6">
-                <div class="flex justify-between items-center mb-4">
-                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider">Dự đoán Vào lệnh AI</h3>
+                <div class="mb-4">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Dự đoán Vào lệnh AI</h3>
                     <form action="{{ url()->current() }}" method="GET" class="flex items-center gap-2">
                         <input type="hidden" name="symbol" value="{{ request('symbol', $symbol) }}">
                         <input type="hidden" name="timeframe" value="{{ request('timeframe', $timeframe) }}">
                         <input type="hidden" name="method" value="{{ request('method', $method ?? 'smc') }}">
                         <input type="hidden" name="propose" value="1">
-                        
-                        <input type="number" name="capital" value="{{ request('capital', 100) }}" placeholder="Vốn ($)" class="bg-white/5 border border-white/10 rounded px-2 py-1 text-[10px] w-20 text-white focus:outline-none focus:border-blue-500/50" min="1" step="any" required>
-                        
-                        <button type="submit" class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-1 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all font-bold">
+
+                        <input type="number" name="capital" value="{{ request('capital', 100) }}" placeholder="Vốn ($)" class="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[10px] flex-1 min-w-0 text-white focus:outline-none focus:border-blue-500/50" min="1" step="any" required>
+
+                        <button type="submit" class="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1.5 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all font-bold whitespace-nowrap flex-shrink-0">
                             ĐỀ XUẤT LỆNH
                         </button>
                     </form>
@@ -401,38 +427,42 @@
     </main>
 
     <!-- AI Signal History Table -->
-    <div class="max-w-[1400px] mx-auto px-4 pb-12">
-        <div class="glass-card p-6">
-            <div class="flex justify-between items-center mb-6">
-                <div>
-                    <h3 class="text-white font-bold text-lg">Lịch sử Tín hiệu AI</h3>
-                    <p class="text-slate-500 text-xs mt-1">Ghi lại kết quả thực tế của các lệnh AI đã đề xuất</p>
-                </div>
-                <div class="flex items-center gap-4">
-                    <!-- Bulk Action Button -->
-                    <button type="submit" form="bulk-delete-form" class="hidden id-selected-actions text-[10px] bg-amber-500/10 text-amber-400 px-3 py-1.5 rounded-lg border border-amber-500/20 hover:bg-amber-500/20 transition-all uppercase font-bold">
-                        Xoá mục đã chọn
-                    </button>
-
-                    <form action="{{ route('signals.clearAll') }}" method="POST" onsubmit="return confirm('Bạn có chắc muốn xoá sạch lịch sử?')">
-                        @csrf
-                        <button type="submit" class="text-[10px] bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition-all uppercase font-bold">
-                            Làm sạch tất cả
-                        </button>
-                    </form>
-                    <div class="flex flex-wrap gap-4">
-                        @forelse($coinStats as $stat)
-                        <div class="bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-center min-w-[120px]">
-                            <p class="text-[10px] text-slate-500 uppercase font-bold mb-1">{{ $stat->symbol }}</p>
-                            <p class="text-blue-400 font-bold text-lg">
-                                {{ $stat->total > 0 ? round(($stat->wins / $stat->total) * 100) : 0 }}%
-                            </p>
-                            <p class="text-[9px] text-slate-600">{{ $stat->wins }}W - {{ $stat->losses }}L</p>
-                        </div>
-                        @empty
-                        <p class="text-slate-600 text-xs italic">Chưa đủ dữ liệu thống kê theo Coin...</p>
-                        @endforelse
+    <div class="max-w-[1400px] mx-auto px-3 md:px-4 pb-12">
+        <div class="glass-card p-4 md:p-6">
+            <div class="mb-4 md:mb-6">
+                <!-- Title + action buttons -->
+                <div class="flex justify-between items-start gap-3">
+                    <div>
+                        <h3 class="text-white font-bold text-base md:text-lg">Lịch sử Tín hiệu AI</h3>
+                        <p class="text-slate-500 text-xs mt-1 hidden sm:block">Ghi lại kết quả thực tế của các lệnh AI đã đề xuất</p>
                     </div>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <!-- Bulk Action Button -->
+                        <button type="submit" form="bulk-delete-form" class="hidden id-selected-actions text-[10px] bg-amber-500/10 text-amber-400 px-3 py-1.5 rounded-lg border border-amber-500/20 hover:bg-amber-500/20 transition-all uppercase font-bold">
+                            Xoá đã chọn
+                        </button>
+
+                        <form action="{{ route('signals.clearAll') }}" method="POST" onsubmit="return confirm('Bạn có chắc muốn xoá sạch lịch sử?')">
+                            @csrf
+                            <button type="submit" class="text-[10px] bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition-all uppercase font-bold">
+                                Xoá tất cả
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <!-- Coin stats: full-width row below -->
+                <div class="flex flex-wrap gap-2 md:gap-3 mt-3">
+                    @forelse($coinStats as $stat)
+                    <div class="bg-white/5 border border-white/10 rounded-lg px-3 md:px-4 py-2 text-center min-w-[90px]">
+                        <p class="text-[10px] text-slate-500 uppercase font-bold mb-1">{{ $stat->symbol }}</p>
+                        <p class="text-blue-400 font-bold text-base md:text-lg">
+                            {{ $stat->total > 0 ? round(($stat->wins / $stat->total) * 100) : 0 }}%
+                        </p>
+                        <p class="text-[9px] text-slate-600">{{ $stat->wins }}W - {{ $stat->losses }}L</p>
+                    </div>
+                    @empty
+                    <p class="text-slate-600 text-xs italic mt-1">Chưa đủ dữ liệu thống kê...</p>
+                    @endforelse
                 </div>
             </div>
 
@@ -447,70 +477,68 @@
                                 </th>
                                 <th class="pb-3 font-medium">Thời gian</th>
                                 <th class="pb-3 font-medium">Loại</th>
-                                <th class="pb-3 font-medium text-right">Điểm vào</th>
-                                <th class="pb-3 font-medium text-right">TP / SL</th>
+                                <th class="pb-3 font-medium text-right">Vào / TP / SL</th>
                                 <th class="pb-3 font-medium text-center">Trạng thái</th>
-                                <th class="pb-3 font-medium">Lý do phân tích</th>
+                                <th class="pb-3 font-medium hidden md:table-cell">Lý do</th>
                                 <th class="pb-3 font-medium text-right">Xoá</th>
                             </tr>
                         </thead>
                         <tbody class="text-sm">
                             @forelse($signals as $signal)
                             <tr class="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
-                                <td class="py-4">
+                                <td class="py-3">
                                     <input type="checkbox" name="ids[]" value="{{ $signal->id }}" class="signal-checkbox rounded border-white/10 bg-white/5 text-blue-500 focus:ring-0">
                                 </td>
-                                <td class="py-4 text-slate-400 text-xs">
-                                    {{ $signal->created_at->format('H:i d/m') }}
+                                <td class="py-3 text-slate-400 text-[10px] whitespace-nowrap">
+                                    {{ $signal->created_at->format('H:i') }}<br>
+                                    <span class="text-slate-600">{{ $signal->created_at->format('d/m') }}</span>
                                 </td>
-                                <td class="py-4">
+                                <td class="py-3">
                                     <span class="px-2 py-0.5 rounded text-[10px] font-bold {{ $signal->type == 'LONG' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400' }}">
                                         {{ $signal->type }}
                                     </span>
-                                    <span class="text-[10px] text-slate-600 ml-1">{{ $signal->timeframe }}</span>
+                                    <div class="text-[9px] text-slate-600 mt-0.5">{{ $signal->timeframe }}</div>
                                 </td>
-                                <td class="py-4 text-right font-mono text-white">
-                                    ${{ number_format($signal->entry_price, 2) }}
+                                <td class="py-3 text-right">
+                                    <div class="font-mono text-white text-[10px]">${{ number_format($signal->entry_price, 2) }}</div>
+                                    <div class="text-green-400 text-[9px] font-mono">${{ number_format($signal->tp_price, 2) }}</div>
+                                    <div class="text-red-400 text-[9px] font-mono">${{ number_format($signal->sl_price, 2) }}</div>
                                 </td>
-                                <td class="py-4 text-right">
-                                    <div class="text-green-400 text-[10px] font-mono">${{ number_format($signal->tp_price, 2) }}</div>
-                                    <div class="text-red-400 text-[10px] font-mono">${{ number_format($signal->sl_price, 2) }}</div>
-                                </td>
-                                <td class="py-4 text-center">
+                                <td class="py-3 text-center">
                                     @if($signal->status == 'PENDING')
                                         @if($signal->filled_at)
-                                            <span class="text-green-400 text-[10px] animate-pulse font-bold">ĐANG THEO DÕI</span>
-                                            <div class="text-slate-600 text-[9px] mt-0.5">Khớp {{ $signal->filled_at->format('H:i d/m') }}</div>
+                                            <span class="text-green-400 text-[9px] animate-pulse font-bold block">THEO DÕI</span>
+                                            <div class="text-slate-600 text-[8px] mt-0.5">{{ $signal->filled_at->format('H:i d/m') }}</div>
                                         @else
-                                            <span class="text-amber-400 text-[10px] font-bold">CHỜ KHỚP</span>
+                                            <span class="text-amber-400 text-[9px] font-bold block">CHỜ KHỚP</span>
                                             <form action="{{ route('signals.fill', $signal->id) }}" method="POST" class="mt-1">
                                                 @csrf
-                                                <button type="submit" class="text-[9px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 hover:bg-green-500/30 transition-all">
-                                                    ✓ Đã khớp
+                                                <button type="submit" class="text-[8px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 hover:bg-green-500/30 transition-all">
+                                                    ✓ Khớp
                                                 </button>
                                             </form>
                                         @endif
                                     @elseif($signal->status == 'WIN')
-                                        <span class="bg-green-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Thắng 🚀</span>
+                                        <span class="bg-green-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Thắng</span>
                                     @elseif($signal->status == 'CANCELLED')
-                                        <span class="bg-slate-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Đã huỷ</span>
+                                        <span class="bg-slate-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Huỷ</span>
                                     @else
-                                        <span class="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded font-bold uppercase">Thua 💀</span>
+                                        <span class="bg-red-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Thua</span>
                                     @endif
                                 </td>
-                                <td class="py-4 text-slate-500 text-xs max-w-xs truncate">
+                                <td class="py-3 text-slate-500 text-xs max-w-[200px] truncate hidden md:table-cell">
                                     {{ $signal->reason }}
                                 </td>
-                                <td class="py-4 text-right">
-                                    <button type="button" onclick="event.preventDefault(); if(confirm('Xoá lệnh này?')) document.getElementById('delete-form-{{ $signal->id }}').submit();" class="text-red-500/50 hover:text-red-400 transition-colors">
+                                <td class="py-3 text-right">
+                                    <button type="button" onclick="event.preventDefault(); if(confirm('Xoá lệnh này?')) document.getElementById('delete-form-{{ $signal->id }}').submit();" class="text-red-500/50 hover:text-red-400 transition-colors p-1">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                                     </button>
                                 </td>
                             </tr>
                             @empty
                             <tr>
-                                <td colspan="8" class="py-12 text-center text-slate-600 italic">
-                                    Chưa có dữ liệu lịch sử lệnh. Bấm "ĐỀ XUẤT LỆNH" để bắt đầu ghi lại.
+                                <td colspan="7" class="py-12 text-center text-slate-600 italic text-sm">
+                                    Chưa có dữ liệu. Bấm "ĐỀ XUẤT LỆNH" để bắt đầu.
                                 </td>
                             </tr>
                             @endforelse

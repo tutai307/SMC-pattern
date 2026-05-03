@@ -63,3 +63,15 @@ body {
 }
 
 .dot-online { background-color: var(--success); box-shadow: 0 0 10px var(--success); }
+
+@media (max-width: 768px) {
+    .trading-container {
+        grid-template-columns: 1fr;
+        padding: 12px;
+        gap: 12px;
+    }
+
+    .chart-container {
+        height: 280px;
+    }
+}
