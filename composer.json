@@ -42,7 +42,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#93c5fd,#c4b5fd,#fdba74,#86efac,#fcd34d\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"npm run dev\" \"php artisan schedule:work\" \"php artisan telegram:bot\" --names=server,queue,vite,scheduler,telegram"
+            "npx concurrently -c \"#93c5fd,#c4b5fd,#fdba74,#86efac,#fcd34d,#f9a8d4\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"npm run dev\" \"php artisan schedule:work\" \"php artisan telegram:bot\" \"php artisan signals:monitor\" --names=server,queue,vite,scheduler,telegram,monitor"
         ],
         "test": [
             "@php artisan config:clear --ansi",

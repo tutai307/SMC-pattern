@@ -46,7 +46,7 @@ class TelegramService
                           . "📦 Khối lượng: <code>\${$volume}</code> | Lỗ tối đa: <code>\${$riskAmt}</code>";
         }
 
-        $text = "🔔 <b>TÍN HIỆU MỚI</b>\n\n"
+        $text = "🔔 <b>TÍN HIỆU MỚI — ĐANG THEO DÕI</b>\n\n"
               . "📊 <b>{$signal->symbol}</b> | {$signal->timeframe} | {$dir}\n"
               . "━━━━━━━━━━━━━━━\n"
               . "📌 Entry: <code>{$signal->entry_price}</code>\n"
@@ -58,7 +58,8 @@ class TelegramService
               . "━━━━━━━━━━━━━━━\n"
               . "🔍 <i>{$signal->reason}</i>\n\n"
               . "🆔 ID: <b>#{$signal->id}</b>\n"
-              . "👉 Vào lệnh thật rồi gõ: /filled {$signal->id}";
+              . "🤖 Bot tự động theo dõi — sẽ báo khi entry khớp, TP/SL chạm.\n"
+              . "📋 Xem chi tiết: /signal {$signal->id}";
 
         $this->send($text);
     }

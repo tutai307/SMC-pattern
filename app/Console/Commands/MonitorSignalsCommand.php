@@ -34,6 +34,23 @@ class MonitorSignalsCommand extends Command
             return;
         }
 
+        $this->info('Monitor bắt đầu — kiểm tra mỗi 30 giây...');
+
+        while (true) {
+            try {
+                $this->runCycle();
+            } catch (\Exception $e) {
+                $this->warn('[' . now()->format('H:i:s') . '] Lỗi: ' . $e->getMessage());
+                \Log::error('MonitorSignals: ' . $e->getMessage());
+            }
+            sleep(30);
+        }
+    }
+
+    private function runCycle(): void
+    {
+        $ts = now()->format('H:i:s');
+
         // Bước 1: Tự động phát hiện lệnh khớp (filled_at IS NULL)
         $unfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
         foreach ($unfilled as $signal) {
@@ -44,13 +61,11 @@ class MonitorSignalsCommand extends Command
         $pending = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
 
         if ($pending->isEmpty()) {
-            $unfilledCount = $unfilled->count();
-            $this->line("Không có lệnh đang chạy. ({$unfilledCount} đang chờ khớp)");
+            $this->line("[{$ts}] Chờ: {$unfilled->count()} lệnh chờ khớp, 0 đang chạy.");
             return;
         }
 
-        $this->info("Đang kiểm tra {$pending->count()} lệnh đang chạy...");
-
+        $this->info("[{$ts}] Kiểm tra {$pending->count()} lệnh đang chạy...");
         foreach ($pending as $signal) {
             $this->checkSignal($signal);
         }

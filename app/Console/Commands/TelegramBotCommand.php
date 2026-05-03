@@ -359,13 +359,19 @@ class TelegramBotCommand extends Command
             . "• <code>cho tôi lệnh scalp xagusdt vốn 70u</code>\n"
             . "• <code>kèo intraday btcusdt 100$</code>\n"
             . "• <code>swing ethusdt 50u</code>\n"
-            . "Sau đó gõ <b>có</b> để ghi lệnh thật, <b>không</b> để bỏ qua.\n\n"
+            . "Sau đó gõ <b>có</b> để ghi vào hệ thống, <b>không</b> để bỏ qua.\n\n"
+            . "🤖 Bot tự động theo dõi từng lệnh — sẽ báo ngay khi:\n"
+            . "  🟢 Entry được khớp\n"
+            . "  🎯 Giá tiến gần TP\n"
+            . "  ⚠️ Giá tiến gần SL\n"
+            . "  ✅ TP chạm (WIN) / 🔴 SL chạm (LOSS)\n"
+            . "  🚨 Cấu trúc phá vỡ\n\n"
             . "<b>Lệnh nhanh:</b>\n"
             . "/status — P&L realtime lệnh đang chạy\n"
             . "/list — Tất cả lệnh PENDING\n"
             . "/signal &lt;id&gt; — Chi tiết lệnh\n"
-            . "/filled &lt;id&gt; — Đánh dấu khớp thủ công\n"
-            . "/cancel &lt;id&gt; — Huỷ lệnh"
+            . "/cancel &lt;id&gt; — Huỷ lệnh\n"
+            . "/filled &lt;id&gt; — Khớp thủ công (nếu bot chưa nhận ra)"
         );
     }
 

@@ -511,12 +511,7 @@
                                             <div class="text-slate-600 text-[8px] mt-0.5">{{ $signal->filled_at->format('H:i d/m') }}</div>
                                         @else
                                             <span class="text-amber-400 text-[9px] font-bold block">CHỜ KHỚP</span>
-                                            <form action="{{ route('signals.fill', $signal->id) }}" method="POST" class="mt-1">
-                                                @csrf
-                                                <button type="submit" class="text-[8px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 hover:bg-green-500/30 transition-all">
-                                                    ✓ Khớp
-                                                </button>
-                                            </form>
+                                            <div class="text-slate-600 text-[8px] mt-0.5">Bot tự theo dõi</div>
                                         @endif
                                     @elseif($signal->status == 'WIN')
                                         <span class="bg-green-500 text-white text-[9px] px-2 py-0.5 rounded font-bold uppercase">Thắng</span>
