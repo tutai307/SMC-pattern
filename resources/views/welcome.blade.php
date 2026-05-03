@@ -6,7 +6,7 @@
     <title>Tom AI - Price Action Terminal</title>
     <meta http-equiv="refresh" content="60">
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="{{ asset('css/dashboard.css') }}">
+    <link rel="stylesheet" href="{{ asset('css/dashboard.css') }}?v=3">
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body class="bg-[#0a0e17] text-white">
@@ -113,8 +113,8 @@
         </div>
 
         <!-- Sidebar / Signals -->
-        <div class="space-y-6">
-            <div class="glass-card p-6">
+        <div class="space-y-4 md:space-y-6">
+            <div class="glass-card p-3 md:p-6">
                 <div class="mb-4">
                     <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Dự đoán Vào lệnh AI</h3>
                     <form action="{{ url()->current() }}" method="GET" class="flex items-center gap-2">
@@ -159,11 +159,11 @@
                         @endif
 
                         <div class="flex justify-between items-start mb-2">
-                            <span class="{{ $textColor }} font-bold text-lg">
+                            <span class="{{ $textColor }} font-bold text-base md:text-lg">
                                 Lệnh {{ $analysis['signal']['type'] }}
                                 @if($isCounter) <span class="text-[10px] ml-1 px-1 rounded bg-amber-500/20">RỦI RO</span> @endif
                             </span>
-                            <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold mr-10">{{ $analysis['signal']['winrate'] }}% Tỉ lệ Thắng</span>
+                            <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold" style="margin-right:{{ $aiScore ? '44px' : '0' }}">{{ $analysis['signal']['winrate'] }}% Thắng</span>
                         </div>
                         @php
                             $capital = request('capital', 0);
@@ -370,48 +370,46 @@
                 </div>
             </div>
 
-            <div class="glass-card p-6">
-                <h3 class="text-slate-400 text-xs font-bold uppercase mb-4 tracking-wider">Phân tích Thị trường</h3>
-                <div class="space-y-4">
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Xu hướng Hiện tại</span>
+            <div class="glass-card p-3 md:p-6">
+                <h3 class="text-slate-400 text-xs font-bold uppercase mb-3 md:mb-4 tracking-wider">Phân tích Thị trường</h3>
+                <div class="space-y-3 md:space-y-4">
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">Xu hướng</span>
                         <div class="flex flex-col items-end">
                             <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase {{ $analysis['structure']['trend'] == 'TĂNG GIÁ' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400' }}">
                                 {{ $analysis['structure']['trend'] }}
                             </span>
-                            @if($analysis['structure']['bos']) <span class="text-[9px] text-blue-400 font-bold mt-1">BOS DETECTED</span> @endif
-                            @if($analysis['structure']['choch']) <span class="text-[9px] text-amber-400 font-bold mt-1">CHoCH DETECTED</span> @endif
+                            @if($analysis['structure']['bos']) <span class="text-[9px] text-blue-400 font-bold mt-1">BOS</span> @endif
+                            @if($analysis['structure']['choch']) <span class="text-[9px] text-amber-400 font-bold mt-1">CHoCH</span> @endif
                         </div>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Xác nhận Khung lớn (HTF)</span>
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">HTF</span>
                         <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase {{ $analysis['htf_trend'] == 'TĂNG GIÁ' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400' }}">
                             {{ $analysis['htf_trend'] }}
                         </span>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Vùng SMC OB</span>
-                        <span class="text-white font-mono">Phát hiện {{ count($analysis['orderBlocks']) }} vùng</span>
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">SMC OB</span>
+                        <span class="text-white font-mono text-xs">{{ count($analysis['orderBlocks']) }} vùng</span>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Vùng SMC FVG</span>
-                        <span class="text-amber-400 font-mono">{{ count($analysis['fvgs']) }} vùng trống</span>
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">SMC FVG</span>
+                        <span class="text-amber-400 font-mono text-xs">{{ count($analysis['fvgs']) }} vùng</span>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Lực xu hướng (ADX)</span>
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">ADX</span>
                         <span class="font-bold {{ $analysis['indicators']['adx'] > 25 ? 'text-green-400' : 'text-slate-500' }}">
                             {{ round($analysis['indicators']['adx'], 1) }}
                         </span>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">Biến động (ATR)</span>
-                        <span class="text-xs text-blue-400">
-                            {{ number_format($analysis['indicators']['atr'], 2) }}
-                        </span>
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">ATR</span>
+                        <span class="text-xs text-blue-400 font-mono">{{ number_format($analysis['indicators']['atr'], 2) }}</span>
                     </div>
-                    <div class="flex justify-between items-center text-sm">
-                        <span class="text-slate-500">EMA 200</span>
-                        <span class="text-xs {{ $currentPrice > $analysis['indicators']['ema200'] ? 'text-green-400' : 'text-red-400' }}">
+                    <div class="flex justify-between items-center text-sm gap-2">
+                        <span class="text-slate-500 flex-shrink-0">EMA 200</span>
+                        <span class="text-xs font-bold {{ $currentPrice > $analysis['indicators']['ema200'] ? 'text-green-400' : 'text-red-400' }}">
                             {{ $currentPrice > $analysis['indicators']['ema200'] ? 'ABOVE' : 'BELOW' }}
                         </span>
                     </div>
@@ -563,11 +561,12 @@
 
             try {
                 const chart = LightweightCharts.createChart(chartElement, {
-                    width: chartElement.clientWidth,
-                    height: chartElement.clientHeight,
+                    autoSize: true,
                     layout: { background: { type: 'solid', color: '#0a0e17' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: 'rgba(255, 255, 255, 0.05)' }, horzLines: { color: 'rgba(255, 255, 255, 0.05)' } },
                     timeScale: { borderColor: 'rgba(255, 255, 255, 0.1)', timeVisible: true },
+                    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+                    handleScale: { pinch: true, mouseWheel: true },
                 });
 
                 const candleSeries = chart.addCandlestickSeries({
@@ -680,9 +679,6 @@
                     }
                 };
 
-                window.addEventListener('resize', () => {
-                    chart.resize(chartElement.clientWidth, chartElement.clientHeight);
-                });
             } catch (err) {
                 console.error("Chart Error:", err);
             }
