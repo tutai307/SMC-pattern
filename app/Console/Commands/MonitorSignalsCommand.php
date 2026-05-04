@@ -76,14 +76,18 @@ class MonitorSignalsCommand extends Command
     {
         if (!$signal->entry_price) return;
 
-        $startTime = $signal->created_at->timestamp * 1000;
-        $klines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 200, $startTime);
+        // Fetch recent candles without startTime — ensures we always have the latest data.
+        // Using startTime+limit=200 caused fills to be missed for signals older than 200 candles.
+        $klines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500);
 
         if (empty($klines)) return;
 
-        $isLong = $signal->type === 'LONG';
+        $createdAtMs = $signal->created_at->timestamp * 1000;
+        $isLong      = $signal->type === 'LONG';
 
         foreach ($klines as $k) {
+            if ((int) $k[0] < $createdAtMs) continue; // Skip candles before signal creation
+
             $high   = (float) $k[2];
             $low    = (float) $k[3];
             $filled = $isLong ? ($low <= (float) $signal->entry_price) : ($high >= (float) $signal->entry_price);
@@ -101,14 +105,18 @@ class MonitorSignalsCommand extends Command
 
     private function checkSignal(TradingSignal $signal): void
     {
-        // Fetch candles from fill time — so we check every candle the position was open for
-        $startMs = $signal->filled_at->timestamp * 1000;
-        $klines  = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500, $startMs);
+        // Fetch recent candles without startTime — same reason as autoDetectFill:
+        // startTime+limit can leave a blind spot for positions open longer than limit candles.
+        $klines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500);
 
         if (empty($klines)) {
             $this->warn("  [{$signal->symbol}] Không lấy được klines.");
             return;
         }
+
+        $filledAtMs = $signal->filled_at->timestamp * 1000;
+        $klines = array_filter($klines, fn($k) => (int) $k[0] >= $filledAtMs);
+        $klines = array_values($klines);
 
         $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
         $isLong       = $signal->type === 'LONG';

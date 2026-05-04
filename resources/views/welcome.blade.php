@@ -688,6 +688,8 @@
             const rawData = @json($klines);
             const analysis = @json($analysis);
 
+            let candleSeries = null; // declared outside try so kline stream can always access it
+
             try {
                 const chart = LightweightCharts.createChart(chartElement, {
                     autoSize: true,
@@ -698,7 +700,7 @@
                     handleScale: { pinch: true, mouseWheel: true },
                 });
 
-                const candleSeries = chart.addCandlestickSeries({
+                candleSeries = chart.addCandlestickSeries({
                     upColor: '#22c55e', downColor: '#ef4444', borderDownColor: '#ef4444', borderUpColor: '#22c55e', wickDownColor: '#ef4444', wickUpColor: '#22c55e',
                 });
 
@@ -826,23 +828,29 @@
 
                 chart.timeScale().fitContent();
 
-                // === KLINE STREAM — cập nhật nến real-time, auto-reconnect ===
+            } catch (err) {
+                console.error("Chart Error:", err);
+            }
+
+            // === KLINE STREAM — outside try-catch, always starts if chart series is ready ===
+            if (candleSeries) {
                 (function connectKlines() {
                     const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@kline_${wsTimeframe}`);
                     ws.onmessage = function(event) {
-                        const k = JSON.parse(event.data).k;
-                        candleSeries.update({
-                            time: k.t / 1000,
-                            open: parseFloat(k.o), high: parseFloat(k.h),
-                            low:  parseFloat(k.l), close: parseFloat(k.c),
-                        });
+                        try {
+                            const msg = JSON.parse(event.data);
+                            if (!msg.k) return; // skip ping/non-kline frames
+                            const k = msg.k;
+                            candleSeries.update({
+                                time: Math.floor(k.t / 1000),
+                                open: parseFloat(k.o), high: parseFloat(k.h),
+                                low:  parseFloat(k.l), close: parseFloat(k.c),
+                            });
+                        } catch(e) {}
                     };
                     ws.onclose = () => setTimeout(connectKlines, 3000);
                     ws.onerror  = () => ws.close();
                 })();
-
-            } catch (err) {
-                console.error("Chart Error:", err);
             }
         });
 

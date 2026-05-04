@@ -15,6 +15,7 @@ class PriceActionService
             'orderBlocks' => [],
             'fvgs' => [],
             'waves' => [],
+            'volumeProfile' => ['bins' => [], 'poc' => 0],
             'signal' => null,
             'htf_trend' => 'không rõ',
             'indicators' => []
