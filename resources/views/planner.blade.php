@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tom AI Planner - Lập Kế Hoạch Giao Dịch</title>
+    <title>Felix Planner - Lập Kế Hoạch Giao Dịch</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -153,7 +153,7 @@
                 </div>
 
                 <div class="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-500 leading-relaxed italic">
-                    💡 Lời khuyên: Vì bạn ${userData.time === 'busy' ? 'rất bận' : 'khá rảnh'}, hãy dùng Tom AI ở khung ${style}. Tuyệt đối không nhồi lệnh khi thua.
+                    💡 Lời khuyên: Vì bạn ${userData.time === 'busy' ? 'rất bận' : 'khá rảnh'}, hãy dùng Felix ở khung ${style}. Tuyệt đối không nhồi lệnh khi thua.
                 </div>
             `;
         }

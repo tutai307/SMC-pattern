@@ -241,7 +241,7 @@ class TelegramService
     public function sendTestMessage(): void
     {
         $this->send(
-            "✅ <b>TOM AI Bot đang hoạt động</b>\n\n"
+            "✅ <b>Felix Bot đang hoạt động</b>\n\n"
             . "Gõ /help để xem danh sách lệnh.\n\n"
             . "Bot sẽ tự động ping khi:\n"
             . "🔔 Có tín hiệu mới được đề xuất\n"

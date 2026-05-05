@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 — TOM AI Terminal</title>
+    <title>404 — Felix Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background: #0a0e17; font-family: ui-monospace, monospace; }
@@ -15,7 +15,7 @@
 <body class="min-h-screen flex items-center justify-center text-white">
     <div class="text-center px-6 space-y-6 max-w-md">
         <!-- Logo -->
-        <div class="text-sm font-bold tracking-widest text-blue-500/60 uppercase mb-2">TOM AI Terminal</div>
+        <div class="text-sm font-bold tracking-widest text-blue-500/60 uppercase mb-2">Felix Terminal</div>
 
         <!-- 404 -->
         <div class="text-[96px] md:text-[120px] font-black leading-none text-slate-800 glow flicker select-none">

@@ -6,7 +6,7 @@
     </style>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${{ number_format($currentPrice, $currentPrice < 10 ? 4 : 2) }} {{ $symbol }} — TOM AI</title>
+    <title>${{ number_format($currentPrice, $currentPrice < 10 ? 4 : 2) }} {{ $symbol }} — Felix</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="shortcut icon" href="/favicon.ico">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -22,7 +22,7 @@
         <div class="flex justify-between items-center">
             <div class="flex items-center gap-2 md:gap-4">
                 <div class="text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                    TOM AI <span class="text-xs font-normal text-slate-500">v1.0</span>
+                    Felix <span class="text-xs font-normal text-slate-500">v1.0</span>
                 </div>
                 <div class="hidden sm:flex items-center text-sm text-slate-400">
                     <span class="indicator-dot dot-online"></span> Market Online
@@ -100,8 +100,7 @@
             <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
                 <h2 class="text-base md:text-lg font-semibold flex items-center">
                     <svg class="w-4 h-4 md:w-5 md:h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
-                    <span class="hidden sm:inline">Price Action Terminal</span>
-                    <span class="sm:hidden">Terminal</span>
+                    <span class="hidden sm:inline">Chart</span>
                 </h2>
                 <div class="flex flex-wrap gap-1.5 justify-end">
                     <!-- Method Toggle -->
@@ -742,7 +741,7 @@
                     priceEl.textContent = '$' + fmt;
                     priceEl.dataset.lastPrice = price;
                     const sym = "{{ strtoupper($symbol) }}";
-                    document.title = `$${fmt} ${sym} — TOM AI`;
+                    document.title = `$${fmt} ${sym} — Felix`;
                 };
 
                 ws.onclose = () => setTimeout(connect, 2000);

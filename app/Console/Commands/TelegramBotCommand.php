@@ -354,7 +354,7 @@ class TelegramBotCommand extends Command
     private function cmdHelp(): void
     {
         $this->telegram->reply(
-            "🤖 <b>TOM AI — Felix Bot</b>\n\n"
+            "🤖 <b>Felix — Felix Bot</b>\n\n"
             . "<b>Chat tự nhiên:</b>\n"
             . "• <code>cho tôi lệnh scalp xagusdt vốn 70u</code>\n"
             . "• <code>kèo intraday btcusdt 100$</code>\n"

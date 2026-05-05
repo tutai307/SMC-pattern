@@ -1,4 +1,4 @@
-# TOM AI — Price Action Terminal
+# Felix — Price Action Terminal
 
 Ứng dụng phân tích kỹ thuật crypto futures thời gian thực, kết hợp SMC + Elliott Wave + AI validation để tạo tín hiệu giao dịch có xác suất thắng cao.
 

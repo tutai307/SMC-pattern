@@ -3,7 +3,10 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"D:\\\\Web\\\\price_action\\\\price_action\" -Recurse -Depth 2 -Name)",
       "PowerShell(head *)",
-      "Bash(php artisan *)"
+      "Bash(php artisan *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
