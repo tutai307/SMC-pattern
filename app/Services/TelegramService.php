@@ -66,7 +66,7 @@ class TelegramService
               . "📌 Entry: <code>{$signal->entry_price}</code>\n"
               . "🎯 TP:    <code>{$signal->tp_price}</code> (+{$tpPct}%)\n"
               . "🛑 SL:    <code>{$signal->sl_price}</code> (-{$slPct}%)\n"
-              . "📐 R:R = 1:{$rr} | ⭐ Winrate: {$signal->winrate}%"
+              . "📐 R:R = 1:{$rr} | ⭐ Confluence: {$signal->winrate}%"
               . $positionInfo . "\n"
               . "━━━━━━━━━━━━━━━\n"
               . "🔍 <i>{$signal->reason}</i>\n\n"

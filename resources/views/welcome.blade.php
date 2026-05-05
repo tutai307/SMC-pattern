@@ -223,7 +223,7 @@
                                 Lệnh {{ $analysis['signal']['type'] }}
                                 @if($isCounter) <span class="text-[10px] ml-1 px-1 rounded bg-amber-500/20">RỦI RO</span> @endif
                             </span>
-                            <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold" style="margin-right:{{ $aiScore ? '44px' : '0' }}">{{ $analysis['signal']['winrate'] }}% Thắng</span>
+                            <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold" title="Điểm confluence (không phải winrate lịch sử)" style="margin-right:{{ $aiScore ? '44px' : '0' }}">{{ $analysis['signal']['winrate'] }}% Confluence</span>
                         </div>
                         @php
                             $capital = request('capital', 0);
@@ -432,8 +432,8 @@
                         </ul>
                     </div>
                     <div class="bg-black/20 p-3 rounded border border-white/5">
-                        <p class="text-green-300 font-bold mb-1">Cách tính Tỉ lệ Thắng (Winrate):</p>
-                        <p class="text-slate-400">Tỉ lệ thắng được AI tính toán dựa trên trọng số điểm:</p>
+                        <p class="text-green-300 font-bold mb-1">Cách tính điểm Confluence:</p>
+                        <p class="text-slate-400">Điểm confluence đo mức độ hội tụ tín hiệu — <span class="text-amber-400">không phải winrate lịch sử</span>. Điểm càng cao = setup càng nhiều xác nhận:</p>
                         <div class="grid grid-cols-2 gap-2 mt-2">
                             <div class="text-[10px] border-r border-white/10 pr-2">
                                 <span class="block text-slate-500">Thuận xu hướng</span>

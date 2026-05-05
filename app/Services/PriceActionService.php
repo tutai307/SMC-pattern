@@ -409,7 +409,7 @@ class PriceActionService
         $lastAdx   = end($adx);
         $lastAtr   = end($atr);
 
-        if ($lastAdx < 15) return null;
+        if ($lastAdx < 22) return null;
 
         // Kiểm tra giá có đang trong vùng HTF POI không
         $inHtfPoi = false;
@@ -425,6 +425,7 @@ class PriceActionService
         foreach ($reversedZones as $zone) {
             $buffer    = $lastAtr * 0.5;
             $isSniper  = ($zone['strength'] ?? '') === 'SNIPER';
+            $obHeight  = $zone['top'] - $zone['bottom'];
 
             // ─── LONG SETUP ───────────────────────────────────────────────
             if ($zone['type'] === 'demand') {
@@ -434,10 +435,13 @@ class PriceActionService
                 if ($lastPrice < $zone['bottom'] - $buffer) continue;
                 if ($lastPrice > $zone['top'] + $buffer * 3) continue;
 
+                // OB mitigated: giá đã xuyên sâu hơn 50% OB → OB yếu, bỏ qua
+                if ($obHeight > 0 && $lastPrice < $zone['bottom'] + $obHeight * 0.5) continue;
+
                 // SNIPER: bắt buộc xác nhận CHoCH trên LTF
                 $choch = null;
                 if ($isSniper) {
-                    $choch = $this->detectCHoCH($candles, 'BULLISH');
+                    $choch = $this->detectCHoCH($candles, 'BULLISH', 60, 5);
                     if (!$choch) continue; // chưa có CHoCH → bỏ qua, không vào sớm
                     $entry = $choch['choch_level']; // entry tại điểm phá CHoCH
                 }
@@ -463,7 +467,7 @@ class PriceActionService
 
                 if ($confidence < 40) continue;
 
-                $sl = $zone['bottom'] - ($lastAtr * 0.2);
+                $sl = $zone['bottom'] - ($lastAtr * 0.8);
                 $tp = $entry + ($entry - $sl) * 3.0;
 
                 if ($isSniper && $choch) {
@@ -499,10 +503,13 @@ class PriceActionService
                 if ($lastPrice > $zone['top'] + $buffer) continue;
                 if ($lastPrice < $zone['bottom'] - $buffer * 3) continue;
 
+                // OB mitigated: giá đã xuyên sâu hơn 50% OB → OB yếu, bỏ qua
+                if ($obHeight > 0 && $lastPrice > $zone['top'] - $obHeight * 0.5) continue;
+
                 // SNIPER: bắt buộc xác nhận CHoCH trên LTF
                 $choch = null;
                 if ($isSniper) {
-                    $choch = $this->detectCHoCH($candles, 'BEARISH');
+                    $choch = $this->detectCHoCH($candles, 'BEARISH', 60, 5);
                     if (!$choch) continue;
                     $entry = $choch['choch_level'];
                 }
@@ -528,7 +535,7 @@ class PriceActionService
 
                 if ($confidence < 60) continue;
 
-                $sl = $zone['top'] + ($lastAtr * 0.2);
+                $sl = $zone['top'] + ($lastAtr * 0.8);
                 $tp = $entry - ($sl - $entry) * 3.0;
 
                 if ($isSniper && $choch) {
