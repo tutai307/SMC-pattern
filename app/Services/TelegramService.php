@@ -25,41 +25,53 @@ class TelegramService
 
     // --- Gửi thông báo chủ động ---
 
-    public function sendNewSignal(TradingSignal $signal, float $currentPrice): void
+    public function sendNewSignal(TradingSignal $signal, float $currentPrice, array $analysisSignal = [], ?array $posSize = null): void
     {
-        $dir     = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
-        $slPct   = $signal->entry_price > 0 ? round(abs($signal->entry_price - $signal->sl_price) / $signal->entry_price * 100, 2) : 0;
-        $tpPct   = $signal->entry_price > 0 ? round(abs($signal->tp_price - $signal->entry_price) / $signal->entry_price * 100, 2) : 0;
-        $rr      = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
+        $dir    = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        $slPct  = $signal->entry_price > 0 ? round(abs($signal->entry_price - $signal->sl_price) / $signal->entry_price * 100, 2) : 0;
+        $tpPct  = $signal->entry_price > 0 ? round(abs($signal->tp_price - $signal->entry_price) / $signal->entry_price * 100, 2) : 0;
+        $rr     = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
 
-        // Tính margin/leverage nếu có capital
+        $isSniper = str_contains($signal->reason ?? '', '🎯 SNIPER');
+        $pattern  = $analysisSignal['pattern'] ?? ($isSniper ? 'OB + CHoCH' : 'SMC');
+        $header   = $isSniper
+            ? "⚡ <b>SNIPER SIGNAL</b> ⚡"
+            : "🔔 <b>TÍN HIỆU MỚI — ĐANG THEO DÕI</b>";
+
+        // Position sizing block — dùng calculatePositionSize nếu có, fallback về cách cũ
         $positionInfo = '';
-        if ($signal->capital > 0 && $slPct > 0) {
-            $riskAmt    = round($signal->capital * 0.02, 2);
-            $slFrac     = $slPct / 100;
-            $leverage   = max(1, min(20, floor(1 / ($slFrac * 2))));
-            $volume     = round($riskAmt / $slFrac, 2);
-            $margin     = round($volume / $leverage, 2);
+        if ($posSize && $posSize['volume'] > 0) {
+            $baseAsset    = str_replace('USDT', '', $signal->symbol);
             $positionInfo = "\n━━━━━━━━━━━━━━━\n"
-                          . "💰 Vốn: <b>\${$signal->capital}</b>\n"
-                          . "📊 Ký quỹ: <code>\${$margin}</code> | Đòn bẩy: <b>{$leverage}x</b>\n"
-                          . "📦 Khối lượng: <code>\${$volume}</code> | Lỗ tối đa: <code>\${$riskAmt}</code>";
+                          . "💰 Vốn: <b>\${$signal->capital}</b> | Risk: <b>2% = \${$posSize['risk_usd']}</b>\n"
+                          . "📦 Khối lượng: <code>{$posSize['volume']} {$baseAsset}</code>\n"
+                          . "🔧 Đòn bẩy: <b>{$posSize['leverage']}x</b> | Ký quỹ: <code>\${$posSize['margin_usd']}</code>\n"
+                          . "💀 Lỗ tối đa tại SL: <code>\${$posSize['actual_risk_usd']}</code>";
+        } elseif ($signal->capital > 0 && $slPct > 0) {
+            // Fallback calculation
+            $riskAmt  = round($signal->capital * 0.02, 2);
+            $slFrac   = $slPct / 100;
+            $leverage = max(1, min(20, (int) ceil(($riskAmt / $slFrac) / $signal->capital)));
+            $volume   = round($riskAmt / $slFrac, 6);
+            $margin   = round($volume / $leverage / ((float)$signal->entry_price ?: 1), 4);
+            $positionInfo = "\n━━━━━━━━━━━━━━━\n"
+                          . "💰 Vốn: <b>\${$signal->capital}</b> | Risk: <b>2% = \${$riskAmt}</b>\n"
+                          . "📦 Khối lượng: <code>{$volume}</code> | 🔧 Đòn bẩy: <b>{$leverage}x</b>";
         }
 
-        $text = "🔔 <b>TÍN HIỆU MỚI — ĐANG THEO DÕI</b>\n\n"
+        $text = "{$header}\n\n"
               . "📊 <b>{$signal->symbol}</b> | {$signal->timeframe} | {$dir}\n"
+              . "📐 Pattern: <code>{$pattern}</code>\n"
               . "━━━━━━━━━━━━━━━\n"
               . "📌 Entry: <code>{$signal->entry_price}</code>\n"
-              . "🎯 TP: <code>{$signal->tp_price}</code> (+{$tpPct}%)\n"
-              . "🛑 SL: <code>{$signal->sl_price}</code> (-{$slPct}%)\n"
-              . "📐 R:R = 1:{$rr}\n"
-              . "⭐ Winrate dự đoán: {$signal->winrate}%"
+              . "🎯 TP:    <code>{$signal->tp_price}</code> (+{$tpPct}%)\n"
+              . "🛑 SL:    <code>{$signal->sl_price}</code> (-{$slPct}%)\n"
+              . "📐 R:R = 1:{$rr} | ⭐ Winrate: {$signal->winrate}%"
               . $positionInfo . "\n"
               . "━━━━━━━━━━━━━━━\n"
               . "🔍 <i>{$signal->reason}</i>\n\n"
               . "🆔 ID: <b>#{$signal->id}</b>\n"
-              . "🤖 Bot tự động theo dõi — sẽ báo khi entry khớp, TP/SL chạm.\n"
-              . "📋 Xem chi tiết: /signal {$signal->id}";
+              . "🤖 Bot tự động theo dõi — báo khi entry khớp, TP/SL chạm.";
 
         $this->send($text);
     }

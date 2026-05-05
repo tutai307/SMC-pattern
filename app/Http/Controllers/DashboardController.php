@@ -7,6 +7,7 @@ use App\Services\BinanceService;
 use App\Services\PriceActionService;
 use App\Services\TelegramService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class DashboardController extends Controller
 {
@@ -60,8 +61,19 @@ class DashboardController extends Controller
                     'status'       => 'PENDING',
                 ]);
 
+                // Tính position sizing nếu có capital
+                $positionSize = null;
+                if ($signal->capital > 0) {
+                    $positionSize = PriceActionService::calculatePositionSize(
+                        balance:    (float) $signal->capital,
+                        riskPercent: 2.0,
+                        entry:      (float) $signal->entry_price,
+                        stopLoss:   (float) $signal->sl_price,
+                    );
+                }
+
                 // Gửi chi tiết lệnh qua Telegram ngay khi đề xuất
-                $this->telegramService->sendNewSignal($signal, $currentPrice);
+                $this->telegramService->sendNewSignal($signal, $currentPrice, $analysis['signal'] ?? [], $positionSize);
                 broadcast(new SignalStatusChanged($signal));
                 // Sau khi lưu xong, chuyển hướng để xoá tham số 'propose' khỏi URL
                 return redirect()->route('dashboard', [

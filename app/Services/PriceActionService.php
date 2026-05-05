@@ -189,41 +189,203 @@ class PriceActionService
         return $fvgs;
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SNIPER MODULE 1: Swing point detection
+    // ─────────────────────────────────────────────────────────────────────────
+    private function detectSwingPoints(array $candles, int $wing = 5): array
+    {
+        $highs = [];
+        $lows  = [];
+        $n = count($candles);
+
+        for ($i = $wing; $i < $n - $wing; $i++) {
+            $h = $candles[$i]['high'];
+            $l = $candles[$i]['low'];
+            $isHigh = true;
+            $isLow  = true;
+
+            for ($j = $i - $wing; $j <= $i + $wing; $j++) {
+                if ($j === $i) continue;
+                if ($candles[$j]['high'] >= $h) $isHigh = false;
+                if ($candles[$j]['low']  <= $l) $isLow  = false;
+            }
+            if ($isHigh) $highs[] = ['idx' => $i, 'price' => $h, 'time' => $candles[$i]['time']];
+            if ($isLow)  $lows[]  = ['idx' => $i, 'price' => $l, 'time' => $candles[$i]['time']];
+        }
+        return ['highs' => $highs, 'lows' => $lows];
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SNIPER MODULE 1: Liquidity sweep — wick beyond swing, close back inside
+    // ─────────────────────────────────────────────────────────────────────────
+    private function detectLiquiditySweep(array $candles, int $swingIdx, string $direction, int $maxCandles = 8): ?array
+    {
+        $level = $direction === 'high' ? $candles[$swingIdx]['high'] : $candles[$swingIdx]['low'];
+        $limit = min($swingIdx + $maxCandles + 1, count($candles));
+
+        for ($i = $swingIdx + 1; $i < $limit; $i++) {
+            $c = $candles[$i];
+            if ($direction === 'high' && $c['high'] > $level && $c['close'] < $level) {
+                return ['idx' => $i, 'level' => $level];
+            }
+            if ($direction === 'low' && $c['low'] < $level && $c['close'] > $level) {
+                return ['idx' => $i, 'level' => $level];
+            }
+        }
+        return null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SNIPER MODULE 2: Change of Character (CHoCH) on any timeframe
+    //   Bullish CHoCH: lower-low structure on LTF, then close above swing high
+    //   Bearish CHoCH: higher-high structure on LTF, then close below swing low
+    // ─────────────────────────────────────────────────────────────────────────
+    private function detectCHoCH(array $candles, string $direction, int $lookback = 60, int $wing = 3): ?array
+    {
+        $recent = array_slice($candles, -$lookback);
+        $swings = $this->detectSwingPoints($recent, $wing);
+        $highs  = $swings['highs'];
+        $lows   = $swings['lows'];
+
+        if (count($highs) < 2 || count($lows) < 2) return null;
+
+        $lastClose = end($recent)['close'];
+        $lastTime  = end($recent)['time'];
+
+        if ($direction === 'BULLISH') {
+            $ll = end($lows);
+            $pl = $lows[count($lows) - 2];
+            if ($ll['price'] >= $pl['price']) return null; // need lower low
+            $lh = end($highs);
+            if ($lastClose > $lh['price']) {
+                return [
+                    'confirmed'    => true,
+                    'type'         => 'BULLISH_CHOCH',
+                    'choch_level'  => $lh['price'],
+                    'swept_low'    => $ll['price'],
+                    'time'         => $lastTime,
+                ];
+            }
+        }
+
+        if ($direction === 'BEARISH') {
+            $hh = end($highs);
+            $ph = $highs[count($highs) - 2];
+            if ($hh['price'] <= $ph['price']) return null; // need higher high
+            $hl = end($lows);
+            if ($lastClose < $hl['price']) {
+                return [
+                    'confirmed'    => true,
+                    'type'         => 'BEARISH_CHOCH',
+                    'choch_level'  => $hl['price'],
+                    'swept_high'   => $hh['price'],
+                    'time'         => $lastTime,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SNIPER MODULE 3: Position sizing — loss capped at exactly risk_usd
+    // ─────────────────────────────────────────────────────────────────────────
+    public static function calculatePositionSize(
+        float $balance,
+        float $riskPercent,
+        float $entry,
+        float $stopLoss,
+        float $rrRatio    = 3.0,
+        int   $maxLeverage = 20
+    ): array {
+        if ($entry <= 0 || $stopLoss <= 0 || $entry === $stopLoss) return [];
+
+        $riskUsd    = round($balance * $riskPercent / 100, 4);
+        $slDistance = abs($entry - $stopLoss);
+        $slPct      = $slDistance / $entry;
+
+        // notional so that (notional × sl_pct) = risk_usd exactly
+        $notional    = $riskUsd / $slPct;
+        $rawLeverage = $notional / $balance;
+        $leverage    = max(1, min((int) ceil($rawLeverage), $maxLeverage));
+
+        // Cap notional if leverage hit the ceiling
+        if ($rawLeverage > $maxLeverage) {
+            $notional = $balance * $maxLeverage;
+        }
+
+        $margin  = round($notional / $leverage, 4);
+        $volume  = round($notional / $entry, 6);
+        $isLong  = $entry > $stopLoss;
+        $tp      = round($isLong ? $entry + $slDistance * $rrRatio : $entry - $slDistance * $rrRatio, 6);
+
+        return [
+            'risk_usd'        => $riskUsd,
+            'notional_usd'    => round($notional, 4),
+            'volume'          => $volume,
+            'leverage'        => $leverage,
+            'margin_usd'      => $margin,
+            'sl_pct'          => round($slPct * 100, 4),
+            'tp_price'        => $tp,
+            'actual_risk_usd' => round($volume * $slDistance, 4),
+        ];
+    }
+
     /**
-     * Find Order Blocks with displacement and FVG confirmation.
+     * Find Order Blocks with displacement, FVG, and Liquidity Sweep validation.
+     * OBs with a preceding sweep are marked strength='SNIPER' — highest priority.
      */
     private function findHighQualityOB(array $candles, array $fvgs)
     {
-        $obs = [];
-        $count = count($candles);
-        
-        // Map FVGs by index for quick lookup
+        $obs        = [];
+        $count      = count($candles);
         $fvgIndices = array_column($fvgs, 'index');
+        $swings     = $this->detectSwingPoints($candles, 5);
 
         for ($i = 5; $i < $count - 3; $i++) {
-            $current = $candles[$i];
-            $displacementCandle = $candles[$i+1];
-            
+            $current           = $candles[$i];
+            $displacementCandle = $candles[$i + 1];
+
             $bodySize = abs($displacementCandle['close'] - $displacementCandle['open']);
-            $avgBody = 0;
-            for($j=$i-5; $j<$i; $j++) $avgBody += abs($candles[$j]['close'] - $candles[$j]['open']);
+            $avgBody  = 0;
+            for ($j = $i - 5; $j < $i; $j++) $avgBody += abs($candles[$j]['close'] - $candles[$j]['open']);
             $avgBody /= 5;
 
-            // Check for Displacement (1.8x average body)
-            if ($bodySize > $avgBody * 1.8) {
-                $hasFvgNearby = in_array($i+1, $fvgIndices) || in_array($i+2, $fvgIndices);
-                if (!$hasFvgNearby) continue;
+            if ($bodySize <= $avgBody * 1.8) continue;
 
-                $type = ($displacementCandle['close'] > $displacementCandle['open']) ? 'demand' : 'supply';
-                $obs[] = [
-                    'type' => $type,
-                    'top' => $current['high'],
-                    'bottom' => $current['low'],
-                    'price' => $current['close'],
-                    'label' => ($type == 'demand' ? 'SMC DEMAND' : 'SMC SUPPLY'),
-                    'strength' => 'HIGH'
-                ];
+            $hasFvgNearby = in_array($i + 1, $fvgIndices) || in_array($i + 2, $fvgIndices);
+            if (!$hasFvgNearby) continue;
+
+            $type = ($displacementCandle['close'] > $displacementCandle['open']) ? 'demand' : 'supply';
+
+            // ── Liquidity sweep check ────────────────────────────────────────
+            $liquiditySwept = false;
+            $sweptLevel     = null;
+            $swingList      = ($type === 'demand') ? $swings['lows'] : $swings['highs'];
+            $sweepDir       = ($type === 'demand') ? 'low' : 'high';
+
+            foreach ($swingList as $swing) {
+                if ($swing['idx'] < $i - 20 || $swing['idx'] >= $i) continue;
+                $sweep = $this->detectLiquiditySweep($candles, $swing['idx'], $sweepDir);
+                if ($sweep && $sweep['idx'] <= $i) {
+                    $liquiditySwept = true;
+                    $sweptLevel     = $swing['price'];
+                    break;
+                }
             }
+
+            $obs[] = [
+                'type'            => $type,
+                'top'             => $current['high'],
+                'bottom'          => $current['low'],
+                'price'           => $current['close'],
+                'label'           => $liquiditySwept
+                    ? ($type === 'demand' ? 'SNIPER DEMAND' : 'SNIPER SUPPLY')
+                    : ($type === 'demand' ? 'SMC DEMAND'    : 'SMC SUPPLY'),
+                'strength'        => $liquiditySwept ? 'SNIPER' : 'HIGH',
+                'liquidity_swept' => $liquiditySwept,
+                'swept_level'     => $sweptLevel,
+            ];
         }
 
         return array_slice($obs, -5);
@@ -232,110 +394,153 @@ class PriceActionService
     private function generateSMCSignal($candles, $structure, $zones, $fvgs, $htfStructure, $htfZones, $poc, $adx, $atr)
     {
         $lastPrice = $structure['last_price'];
-        $lastAdx = end($adx);
-        $lastAtr = end($atr);
-        
-        if ($lastAdx < 15) return null; // Lọc thị trường quá lặng sóng (sideway không biên độ)
+        $lastAdx   = end($adx);
+        $lastAtr   = end($atr);
 
-        // Duyệt từ zone gần nhất (cuối mảng) -> xa nhất để ưu tiên zone mới nhất
+        if ($lastAdx < 15) return null;
+
+        // Kiểm tra giá có đang trong vùng HTF POI không
+        $inHtfPoi = false;
+        foreach ($htfZones as $htfOb) {
+            if ($lastPrice >= $htfOb['bottom'] && $lastPrice <= $htfOb['top']) {
+                $inHtfPoi = true;
+                break;
+            }
+        }
+
         $reversedZones = array_reverse($zones);
 
         foreach ($reversedZones as $zone) {
-            $buffer = $lastAtr * 0.5;
+            $buffer    = $lastAtr * 0.5;
+            $isSniper  = ($zone['strength'] ?? '') === 'SNIPER';
 
-            // --- SMC LONG SETUP (Buy Limit) ---
-            // Entry PHẢI nằm DƯỚI giá hiện tại (đợi giá rớt về Demand rồi mới mua)
-            if ($zone['type'] == 'demand') {
-                $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Demand (Mean Threshold)
-                
-                // RULE: Entry Buy Limit phải THẤP HƠN giá hiện tại
-                // Nếu giá đã rớt dưới cả zone -> zone đã bị xuyên thủng (mitigated), bỏ qua
+            // ─── LONG SETUP ───────────────────────────────────────────────
+            if ($zone['type'] === 'demand') {
+                $entry = ($zone['top'] + $zone['bottom']) / 2;
+
                 if ($entry >= $lastPrice) continue;
-                if ($lastPrice < $zone['bottom'] - $buffer) continue; // Giá đã rớt quá xa dưới zone
-                
-                // Giá phải đang ở gần zone (trong tầm buffer) để tín hiệu có ý nghĩa
-                if ($lastPrice > $zone['top'] + $buffer * 3) continue; // Giá đã bay quá xa lên trên zone
-                    
-                $isCounterTrend = ($htfStructure['trend'] == 'GIẢM GIÁ');
+                if ($lastPrice < $zone['bottom'] - $buffer) continue;
+                if ($lastPrice > $zone['top'] + $buffer * 3) continue;
+
+                // SNIPER: bắt buộc xác nhận CHoCH trên LTF
+                $choch = null;
+                if ($isSniper) {
+                    $choch = $this->detectCHoCH($candles, 'BULLISH');
+                    if (!$choch) continue; // chưa có CHoCH → bỏ qua, không vào sớm
+                    $entry = $choch['choch_level']; // entry tại điểm phá CHoCH
+                }
+
+                $isCounterTrend = ($htfStructure['trend'] === 'GIẢM GIÁ');
                 $confluence = 0;
                 if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                if ($htfStructure['trend'] == 'TĂNG GIÁ') $confluence += 30;
-                
-                // Check if entry zone aligns with a bullish FVG
+                if ($htfStructure['trend'] === 'TĂNG GIÁ') $confluence += 30;
+                if ($inHtfPoi) $confluence += 20;
+
                 $inFvg = false;
-                foreach(array_slice($fvgs, -5) as $f) {
-                    if ($f['type'] == 'BULLISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
+                foreach (array_slice($fvgs, -5) as $f) {
+                    if ($f['type'] === 'BULLISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
                         $inFvg = true; break;
                     }
                 }
                 if ($inFvg) $confluence += 15;
 
-                $confidence = 50 + $confluence;
+                $baseConfidence = $isSniper ? 65 : 50;
+                $confidence     = $baseConfidence + $confluence;
+                if ($isSniper && $choch)  $confidence += 15;
                 if ($isCounterTrend) $confidence -= 20;
 
                 if ($confidence < 40) continue;
 
-                // SL an toàn dưới đáy zone cộng thêm buffer
                 $sl = $zone['bottom'] - ($lastAtr * 0.2);
-                // TP R:R 1:3
                 $tp = $entry + ($entry - $sl) * 3.0;
 
+                if ($isSniper && $choch) {
+                    $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
+                    $reason  = "🎯 SNIPER: Liquidity sweep @ " . round($zone['swept_level'] ?? 0, 4)
+                             . " → MSS → CHoCH xác nhận @ " . round($choch['choch_level'], 4)
+                             . ($inHtfPoi ? " | Giá trong vùng HTF POI." : "");
+                    $type    = 'MUA (SNIPER)';
+                } else {
+                    $pattern = 'SMC DEMAND';
+                    $reason  = "SMC: Buy Limit tại 50% vùng Demand. Chờ retest.";
+                    $type    = 'MUA';
+                }
+
                 return [
-                    'type' => 'MUA',
-                    'entry' => round($entry, 2),
-                    'tp' => round($tp, 2), 
-                    'sl' => round($sl, 2), 
-                    'winrate' => min(95, $confidence),
-                    'reason' => "SMC: Đặt lệnh Buy Limit chờ giá hồi về 50% vùng Demand (Mean Threshold). Kiên nhẫn đợi cấu trúc retest.",
-                    'is_counter_trend' => $isCounterTrend
+                    'type'             => $type,
+                    'entry'            => round($entry, 4),
+                    'tp'               => round($tp, 4),
+                    'sl'               => round($sl, 4),
+                    'winrate'          => min(95, $confidence),
+                    'reason'           => $reason,
+                    'pattern'          => $pattern,
+                    'sniper'           => $isSniper && $choch !== null,
+                    'is_counter_trend' => $isCounterTrend,
                 ];
             }
 
-            // --- SMC SHORT SETUP (Sell Limit) ---
-            // Entry PHẢI nằm TRÊN giá hiện tại (đợi giá hồi lên Supply rồi mới bán)
-            if ($zone['type'] == 'supply') {
-                $entry = ($zone['top'] + $zone['bottom']) / 2; // Midpoint of Supply (Mean Threshold)
-                
-                // RULE: Entry Sell Limit phải CAO HƠN giá hiện tại
-                // Nếu giá đã vượt lên trên cả zone -> zone đã bị xuyên thủng (mitigated), bỏ qua
+            // ─── SHORT SETUP ──────────────────────────────────────────────
+            if ($zone['type'] === 'supply') {
+                $entry = ($zone['top'] + $zone['bottom']) / 2;
+
                 if ($entry <= $lastPrice) continue;
-                if ($lastPrice > $zone['top'] + $buffer) continue; // Giá đã bay quá xa trên zone
-                
-                // Giá phải đang ở gần zone (trong tầm buffer) để tín hiệu có ý nghĩa
-                if ($lastPrice < $zone['bottom'] - $buffer * 3) continue; // Giá đã rớt quá xa dưới zone
-                    
-                $isCounterTrend = ($htfStructure['trend'] == 'TĂNG GIÁ');
+                if ($lastPrice > $zone['top'] + $buffer) continue;
+                if ($lastPrice < $zone['bottom'] - $buffer * 3) continue;
+
+                // SNIPER: bắt buộc xác nhận CHoCH trên LTF
+                $choch = null;
+                if ($isSniper) {
+                    $choch = $this->detectCHoCH($candles, 'BEARISH');
+                    if (!$choch) continue;
+                    $entry = $choch['choch_level'];
+                }
+
+                $isCounterTrend = ($htfStructure['trend'] === 'TĂNG GIÁ');
                 $confluence = 0;
                 if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                if ($htfStructure['trend'] == 'GIẢM GIÁ') $confluence += 30;
-                
-                // Check if entry zone aligns with a bearish FVG
+                if ($htfStructure['trend'] === 'GIẢM GIÁ') $confluence += 30;
+                if ($inHtfPoi) $confluence += 20;
+
                 $inFvg = false;
-                foreach(array_slice($fvgs, -5) as $f) {
-                    if ($f['type'] == 'BEARISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
+                foreach (array_slice($fvgs, -5) as $f) {
+                    if ($f['type'] === 'BEARISH' && $entry >= $f['bottom'] && $entry <= $f['top']) {
                         $inFvg = true; break;
                     }
                 }
                 if ($inFvg) $confluence += 15;
 
-                $confidence = 50 + $confluence;
+                $baseConfidence = $isSniper ? 65 : 50;
+                $confidence     = $baseConfidence + $confluence;
+                if ($isSniper && $choch)  $confidence += 15;
                 if ($isCounterTrend) $confidence -= 20;
 
                 if ($confidence < 60) continue;
 
-                // SL an toàn trên đỉnh zone cộng thêm buffer
                 $sl = $zone['top'] + ($lastAtr * 0.2);
-                // TP R:R 1:3
                 $tp = $entry - ($sl - $entry) * 3.0;
 
+                if ($isSniper && $choch) {
+                    $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
+                    $reason  = "🎯 SNIPER: Liquidity sweep @ " . round($zone['swept_level'] ?? 0, 4)
+                             . " → MSS → CHoCH xác nhận @ " . round($choch['choch_level'], 4)
+                             . ($inHtfPoi ? " | Giá trong vùng HTF POI." : "");
+                    $type    = 'BÁN (SNIPER)';
+                } else {
+                    $pattern = 'SMC SUPPLY';
+                    $reason  = "SMC: Sell Limit tại 50% vùng Supply. Chờ retest.";
+                    $type    = 'BÁN';
+                }
+
                 return [
-                    'type' => 'BÁN',
-                    'entry' => round($entry, 2),
-                    'tp' => round($tp, 2), 
-                    'sl' => round($sl, 2), 
-                    'winrate' => min(95, $confidence),
-                    'reason' => "SMC: Đặt lệnh Sell Limit chờ giá hồi về 50% vùng Supply (Mean Threshold). Kiên nhẫn đợi cấu trúc retest.",
-                    'is_counter_trend' => $isCounterTrend
+                    'type'             => $type,
+                    'entry'            => round($entry, 4),
+                    'tp'               => round($tp, 4),
+                    'sl'               => round($sl, 4),
+                    'winrate'          => min(95, $confidence),
+                    'reason'           => $reason,
+                    'pattern'          => $pattern,
+                    'sniper'           => $isSniper && $choch !== null,
+                    'is_counter_trend' => $isCounterTrend,
                 ];
             }
         }
