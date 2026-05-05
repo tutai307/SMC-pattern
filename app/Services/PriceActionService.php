@@ -58,7 +58,19 @@ class PriceActionService
         // 5. Advanced AI Scoring
         if ($signal) {
             $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
-            $signal = $this->enrichWithAIScore($signal, array_slice($candles, -20), $structure, $htfStructure, $method, $symbol, $timeframe, $indicators);
+            $signal = $this->enrichWithAIScore(
+                $signal,
+                array_slice($candles, -50),
+                $structure,
+                $htfStructure,
+                $method,
+                $symbol,
+                $timeframe,
+                $indicators,
+                $orderBlocks ?? [],
+                $fvgs ?? [],
+                $volumeProfile['poc'] ?? 0
+            );
         }
 
         return [
@@ -843,72 +855,160 @@ class PriceActionService
         return null;
     }
 
-    private function enrichWithAIScore(array $signal, array $recentCandles, $structure, $htfStructure, $method, string $symbol = '', string $timeframe = '', array $indicators = [])
-    {
+    private function enrichWithAIScore(
+        array $signal,
+        array $recentCandles,
+        $structure,
+        $htfStructure,
+        string $method,
+        string $symbol = '',
+        string $timeframe = '',
+        array $indicators = [],
+        array $orderBlocks = [],
+        array $fvgs = [],
+        float $poc = 0
+    ) {
         $apiKey = env('OPENROUTER_API_KEY');
         if (!$apiKey) return $signal;
 
-        // Cache key đủ cụ thể: symbol + timeframe + type + entry + tp + sl + method + 10-minute bucket
-        // 10-minute bucket đảm bảo phân tích mới khi thị trường thay đổi, không bị stale 1 giờ
         $timeBucket = floor(time() / 600);
-        $signalKey = md5(
+        $cacheKey = 'ai_v3_' . md5(
             $symbol . $timeframe . $signal['type'] .
-            round($signal['entry'], 2) . round($signal['tp'], 2) . round($signal['sl'], 2) .
+            round($signal['entry'], 4) . round($signal['tp'], 4) . round($signal['sl'], 4) .
             $method . $timeBucket
         );
-        $cacheKey = "ai_v2_{$signalKey}";
 
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 600, function() use ($apiKey, $signal, $recentCandles, $structure, $htfStructure, $method, $symbol, $timeframe, $indicators) {
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 600, function () use (
+            $apiKey, $signal, $recentCandles, $structure, $htfStructure,
+            $method, $symbol, $timeframe, $indicators, $orderBlocks, $fvgs, $poc
+        ) {
             try {
-                $client = new \GuzzleHttp\Client(['timeout' => 8, 'connect_timeout' => 4]);
+                $client = new \GuzzleHttp\Client(['timeout' => 12, 'connect_timeout' => 4]);
 
-                // Chỉ gửi 20 giá đóng cửa gần nhất — đủ để AI đánh giá momentum, tiết kiệm token
-                $closes = array_map(fn($c) => round($c['close'], 4), array_slice($recentCandles, -20));
-                $closesStr = implode(', ', $closes);
+                $last50 = array_slice($recentCandles, -50);
+                $currentPrice = end($last50)['close'] ?? $signal['entry'];
 
-                $methodName = ($method === 'elliot') ? 'Elliott Wave' : 'Smart Money Concepts (SMC)';
-
-                $slPct  = $signal['entry'] > 0 ? round(abs($signal['entry'] - $signal['sl']) / $signal['entry'] * 100, 2) : 0;
-                $tpPct  = $signal['entry'] > 0 ? round(abs($signal['tp'] - $signal['entry']) / $signal['entry'] * 100, 2) : 0;
+                // --- Tính các chỉ số từ candle data ---
+                $slPct  = $signal['entry'] > 0 ? round(abs($signal['entry'] - $signal['sl'])  / $signal['entry'] * 100, 2) : 0;
+                $tpPct  = $signal['entry'] > 0 ? round(abs($signal['tp']    - $signal['entry']) / $signal['entry'] * 100, 2) : 0;
                 $rr     = $slPct > 0 ? round($tpPct / $slPct, 2) : 0;
-                $adx    = round($indicators['adx'] ?? 0, 1);
-                $atr    = round($indicators['atr'] ?? 0, 4);
-                $ema200 = round($indicators['ema200'] ?? 0, 4);
-                $aboveEma = $signal['entry'] > $ema200 ? 'trên EMA200 (bullish bias)' : 'dưới EMA200 (bearish bias)';
+                $adx    = round($indicators['adx']    ?? 0, 1);
+                $atr    = round($indicators['atr']    ?? 0, 6);
+                $ema200 = round($indicators['ema200'] ?? 0, 6);
+
+                // Swing high/low trong 50 nến gần nhất
+                $highs  = array_column($last50, 'high');
+                $lows   = array_column($last50, 'low');
+                $swingH = $highs ? round(max($highs), 6) : 0;
+                $swingL = $lows  ? round(min($lows),  6) : 0;
+                $distToSwingH = $swingH > 0 ? round(abs($currentPrice - $swingH) / $currentPrice * 100, 2) : 0;
+                $distToSwingL = $swingL > 0 ? round(abs($currentPrice - $swingL) / $currentPrice * 100, 2) : 0;
+
+                // Momentum: đếm 5 nến xanh/đỏ gần nhất
+                $last5 = array_slice($last50, -5);
+                $bullCount = count(array_filter($last5, fn($c) => $c['close'] > $c['open']));
+                $bearCount = 5 - $bullCount;
+                $momentumStr = "{$bullCount} xanh / {$bearCount} đỏ trong 5 nến cuối";
+
+                // Kích thước body nến cuối so với ATR
+                $lastC     = end($last5);
+                $lastBody  = $atr > 0 ? round(abs($lastC['close'] - $lastC['open']) / $atr, 2) : 0;
+                $bodyDesc  = $lastBody >= 1.5 ? 'to mạnh' : ($lastBody >= 0.7 ? 'bình thường' : 'nhỏ/hesitation');
+
+                // OB gần nhất với entry
+                $obLines = [];
+                foreach (array_slice($orderBlocks, -3) as $ob) {
+                    $dist = round(abs(($ob['price'] ?? 0) - $signal['entry']) / $signal['entry'] * 100, 2);
+                    $obLines[] = strtoupper($ob['type'] ?? '?') . ' OB @' . ($ob['price'] ?? '?') . " ({$ob['strength']}, cách entry {$dist}%)";
+                }
+                $obStr = $obLines ? implode("\n  ", $obLines) : 'Không có OB nổi bật';
+
+                // FVG gần nhất
+                $fvgLines = [];
+                foreach (array_slice($fvgs, -2) as $fvg) {
+                    $fvgLines[] = strtoupper($fvg['type'] ?? '?') . ' FVG ' . ($fvg['low'] ?? '?') . '–' . ($fvg['high'] ?? '?');
+                }
+                $fvgStr = $fvgLines ? implode(', ', $fvgLines) : 'Không có FVG';
+
+                // POC
+                $pocStr = $poc > 0
+                    ? "@{$poc} (cách giá hiện tại " . round(abs($currentPrice - $poc) / $currentPrice * 100, 2) . "%)"
+                    : 'N/A';
+
+                // EMA200
+                $emaPos = $ema200 > 0
+                    ? ($currentPrice > $ema200
+                        ? 'TRÊN EMA200 @' . $ema200 . ' (+' . round(($currentPrice - $ema200) / $ema200 * 100, 2) . '%)'
+                        : 'DƯỚI EMA200 @' . $ema200 . ' (-' . round(($ema200 - $currentPrice) / $ema200 * 100, 2) . '%)')
+                    : 'N/A';
+
+                // Pattern / Sniper flag
+                $isSniper  = str_contains($signal['reason'] ?? '', 'SNIPER');
+                $patternStr = $signal['pattern'] ?? ($isSniper ? 'SNIPER ENTRY' : 'STANDARD');
+
+                $methodName = $method === 'elliot' ? 'Elliott Wave' : 'SMC';
 
                 $prompt = <<<PROMPT
-Cặp: {$symbol} | Khung: {$timeframe} | Phương pháp: {$methodName}
+SYMBOL: {$symbol} | TF: {$timeframe} | METHOD: {$methodName}
+SIGNAL TYPE: {$signal['type']} | PATTERN: {$patternStr}
 
-LỆNH CẦN ĐÁNH GIÁ:
-- Hướng: {$signal['type']}
-- Entry: {$signal['entry']} | TP: {$signal['tp']} (+{$tpPct}%) | SL: {$signal['sl']} (-{$slPct}%)
-- R:R = 1:{$rr}
+=== ENTRY SETUP ===
+Entry : {$signal['entry']}
+TP    : {$signal['tp']} (+{$tpPct}%)
+SL    : {$signal['sl']} (-{$slPct}%)
+R:R   : 1:{$rr}
+Lý do hệ thống: {$signal['reason']}
 
-CHỈ BÁO KỸ THUẬT:
-- ADX: {$adx} (>25 = xu hướng mạnh, <20 = ranging)
-- ATR(14): {$atr} (độ biến động)
-- Giá {$aboveEma}
-- Xu hướng LTF: {$structure['trend']}
-- Xu hướng HTF: {$htfStructure['trend']}
-- Lý do hệ thống: {$signal['reason']}
+=== GIÁ HIỆN TẠI & VỊ TRÍ ===
+Giá hiện tại : {$currentPrice}
+Swing High 50 nến: {$swingH} (cách {$distToSwingH}%)
+Swing Low  50 nến: {$swingL} (cách {$distToSwingL}%)
+{$emaPos}
+POC Volume Profile: {$pocStr}
 
-20 GIÁ ĐÓNG CỬA GẦN NHẤT: {$closesStr}
+=== MOMENTUM ===
+ADX : {$adx} ({$this->adxDesc($adx)})
+ATR : {$atr}
+Momentum 5 nến: {$momentumStr}
+Nến cuối (body vs ATR): {$lastBody}x — {$bodyDesc}
+Trend LTF: {$structure['trend']} | BOS: {$this->boolStr($structure['bos'] ?? false)} | CHoCH: {$this->boolStr($structure['choch'] ?? false)}
+Trend HTF: {$htfStructure['trend']}
 
-Đánh giá tín hiệu này. Chỉ trả về JSON, không giải thích thêm:
-{"score":0-100,"analysis":"nhận xét cụ thể về momentum và vùng giá của {$symbol}","risk_warning":"rủi ro thực tế cần chú ý","recommendation":"quyết định: VÀO LỆNH / CHỜ RETEST / BỎ QUA, lý do ngắn"}
+=== MARKET STRUCTURE ===
+Order Blocks:
+  {$obStr}
+FVG: {$fvgStr}
+
+Đánh giá tín hiệu này với tư cách senior trader. YÊU CẦU NGHIÊM NGẶT:
+- Phải CITE GIÁ THỰC (số, không nói chung chung "vùng kháng cự")
+- Phải NÊU RÕ lý do score dựa trên data trên (ADX={$adx}, momentum, OB, v.v.)
+- KHÔNG dùng câu chung như "quản lý rủi ro tốt" hay "thị trường biến động"
+- recommendation phải là 1 trong 3: "VÀO LỆNH NGAY" / "CHỜ RETEST {giá cụ thể}" / "BỎ QUA — {lý do ngắn}"
+
+Trả về JSON:
+{
+  "score": 0-100,
+  "analysis": "2-3 câu CITE GIÁ CỤ THỂ: nhận xét momentum, vị trí entry so với swing/OB/FVG",
+  "risk_warning": "1 rủi ro THỰC TẾ nhất với giá cụ thể (vd: resistance tại {$swingH} chỉ cách {$distToSwingH}%)",
+  "recommendation": "VÀO LỆNH NGAY | CHỜ RETEST {giá} | BỎ QUA — {lý do}",
+  "entry_timing": "market order / limit tại {giá} / chờ close {TF}"
+}
 PROMPT;
 
                 $response = $client->post('https://openrouter.ai/api/v1/chat/completions', [
                     'headers' => [
                         'Authorization' => 'Bearer ' . $apiKey,
                         'Content-Type'  => 'application/json',
-                        'HTTP-Referer'  => 'http://localhost',
+                        'HTTP-Referer'  => 'https://tomai.app',
                     ],
                     'json' => [
                         'model'           => 'openai/gpt-4o',
-                        'temperature'     => 0.3,
+                        'temperature'     => 0.2,
                         'messages'        => [
-                            ['role' => 'system', 'content' => 'Bạn là trader chuyên nghiệp phân tích crypto futures. Chỉ trả về JSON hợp lệ, không markdown, không giải thích.'],
+                            [
+                                'role'    => 'system',
+                                'content' => 'Bạn là senior crypto futures trader với 10 năm kinh nghiệm SMC. Phân tích LUÔN dùng số liệu cụ thể từ dữ liệu được cung cấp. TUYỆT ĐỐI KHÔNG dùng câu generic. Chỉ trả về JSON hợp lệ.',
+                            ],
                             ['role' => 'user', 'content' => $prompt],
                         ],
                         'response_format' => ['type' => 'json_object'],
@@ -920,17 +1020,19 @@ PROMPT;
                 $aiData  = json_decode($content, true);
 
                 if ($aiData) {
-                    $signal['ai_score']          = is_numeric($aiData['score'] ?? null) ? (int) $aiData['score'] : 50;
-                    $signal['ai_analysis']        = is_array($aiData['analysis'] ?? null) ? implode(' ', $aiData['analysis']) : ($aiData['analysis'] ?? '');
-                    $signal['ai_risk']            = is_array($aiData['risk_warning'] ?? null) ? implode(' ', $aiData['risk_warning']) : ($aiData['risk_warning'] ?? '');
-                    $signal['ai_recommendation']  = is_array($aiData['recommendation'] ?? null) ? implode(' ', $aiData['recommendation']) : ($aiData['recommendation'] ?? '');
+                    $signal['ai_score']          = is_numeric($aiData['score'] ?? null) ? min(100, max(0, (int) $aiData['score'])) : 50;
+                    $signal['ai_analysis']        = $this->flattenAiField($aiData['analysis']        ?? '');
+                    $signal['ai_risk']            = $this->flattenAiField($aiData['risk_warning']    ?? '');
+                    $signal['ai_recommendation']  = $this->flattenAiField($aiData['recommendation']  ?? '');
+                    $signal['ai_entry_timing']    = $this->flattenAiField($aiData['entry_timing']    ?? '');
                 }
+
             } catch (\GuzzleHttp\Exception\ConnectException $e) {
                 \Log::warning('AI score: connect timeout');
                 $signal['ai_score'] = 50;
-                $signal['ai_error'] = 'AI timeout — dùng score mặc định';
+                $signal['ai_error'] = 'AI timeout';
             } catch (\GuzzleHttp\Exception\RequestException $e) {
-                \Log::warning('AI score: request error ' . $e->getMessage());
+                \Log::warning('AI score: ' . $e->getMessage());
                 $signal['ai_score'] = 50;
                 $signal['ai_error'] = 'AI unavailable';
             } catch (\Exception $e) {
@@ -941,5 +1043,23 @@ PROMPT;
 
             return $signal;
         });
+    }
+
+    private function adxDesc(float $adx): string
+    {
+        if ($adx >= 30) return 'xu hướng rất mạnh';
+        if ($adx >= 25) return 'xu hướng mạnh';
+        if ($adx >= 20) return 'xu hướng vừa';
+        return 'ranging/yếu';
+    }
+
+    private function boolStr(bool $v): string
+    {
+        return $v ? 'Có' : 'Không';
+    }
+
+    private function flattenAiField(mixed $v): string
+    {
+        return is_array($v) ? implode(' ', $v) : (string) $v;
     }
 }

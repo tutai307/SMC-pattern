@@ -370,6 +370,16 @@
                             </div>
                             <p class="text-[11px] text-white font-medium leading-relaxed">{{ $analysis['signal']['ai_recommendation'] }}</p>
                         </div>
+
+                        @if(!empty($analysis['signal']['ai_entry_timing']))
+                        <div class="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl">
+                            <div class="flex items-center gap-2 mb-1">
+                                <svg class="w-3 h-3 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                <span class="text-[10px] text-amber-400 font-bold uppercase tracking-widest">Entry Timing</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">{{ $analysis['signal']['ai_entry_timing'] }}</p>
+                        </div>
+                        @endif
                     </div>
                     @elseif(isset($analysis['signal']['ai_comment']))
                     <div class="bg-blue-500/10 border border-blue-500/20 p-3 rounded-lg mb-4">
