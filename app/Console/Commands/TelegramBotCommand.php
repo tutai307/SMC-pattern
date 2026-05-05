@@ -117,27 +117,139 @@ class TelegramBotCommand extends Command
         foreach ($this->rejectWords as $w) {
             if ($hasPending && str_contains($lower, $w)) {
                 Cache::forget($pendingKey);
-                $this->telegram->reply("Đã bỏ qua. Nhắn lại bất cứ lúc nào để lấy lệnh mới.");
+                $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
                 return;
             }
         }
 
-        // Parse yêu cầu lấy lệnh
+        // Yêu cầu phân tích coin cụ thể → dùng parser nhanh
         $parsed = $this->parseSignalRequest($text);
         if ($parsed) {
             $this->runAnalysis($parsed);
             return;
         }
 
-        // Fallback
-        $this->telegram->reply(
-            "Tôi chưa hiểu yêu cầu này.\n\n"
-            . "<b>Ví dụ:</b>\n"
-            . "• <code>cho tôi lệnh scalp xagusdt vốn 70u</code>\n"
-            . "• <code>kèo intraday btcusdt 100$</code>\n"
-            . "• <code>swing ethusdt 50u</code>\n\n"
-            . "Gõ /help để xem thêm."
-        );
+        // Mọi thứ còn lại → AI trả lời tự nhiên
+        $this->askAI($text);
+    }
+
+    // ─── AI conversational brain ─────────────────────────────────────────────────
+
+    private function askAI(string $userMessage): void
+    {
+        $apiKey = env('OPENROUTER_API_KEY');
+        if (!$apiKey) {
+            $this->telegram->reply("AI chưa cấu hình (thiếu OPENROUTER_API_KEY).");
+            return;
+        }
+
+        // Lấy context thực tế
+        $pendingSignals = TradingSignal::where('status', 'PENDING')->orderBy('created_at', 'desc')->limit(5)->get();
+        $runningSignals = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
+        $watchlist      = env('SCAN_SYMBOLS', 'XAGUSDT:15m,VVVUSDT:15m');
+        $now            = now()->format('d/m/Y H:i');
+
+        // Tóm tắt lệnh đang mở
+        $runningStr = '';
+        foreach ($runningSignals as $s) {
+            $price  = $this->binance->getPrice($s->symbol) ?? $s->entry_price;
+            $pnlPct = $s->entry_price > 0
+                ? round((($s->type === 'LONG' ? ($price - $s->entry_price) : ($s->entry_price - $price)) / $s->entry_price) * 100, 2)
+                : 0;
+            $sign   = $pnlPct >= 0 ? '+' : '';
+            $runningStr .= "- #{$s->id} {$s->symbol} {$s->type} entry={$s->entry_price} giá_hiện_tại={$price} P&L={$sign}{$pnlPct}% TP={$s->tp_price} SL={$s->sl_price}\n";
+        }
+        if (!$runningStr) $runningStr = "Không có lệnh nào đang chạy.";
+
+        $pendingStr = '';
+        foreach ($pendingSignals as $s) {
+            $pendingStr .= "- #{$s->id} {$s->symbol} {$s->type} entry={$s->entry_price} status=" . ($s->filled_at ? 'RUNNING' : 'PENDING') . "\n";
+        }
+        if (!$pendingStr) $pendingStr = "Không có lệnh PENDING.";
+
+        // Thống kê gần đây
+        $wins   = TradingSignal::where('status', 'WIN')->count();
+        $losses = TradingSignal::where('status', 'LOSS')->count();
+        $total  = $wins + $losses;
+        $wrStr  = $total > 0 ? round($wins / $total * 100) . "% ({$wins}W/{$losses}L)" : "Chưa có dữ liệu";
+
+        $systemPrompt = <<<PROMPT
+Bạn là Felix — AI trading assistant của hệ thống TOM AI. Nhiệm vụ chính:
+1. Theo dõi và cảnh báo tín hiệu SMC cho {$watchlist}
+2. Quản lý lệnh đang mở, báo P&L, cảnh báo SL/TP
+3. Trả lời câu hỏi về thị trường và tín hiệu
+
+TÍNH CÁCH: Thân thiện, ngắn gọn, chuyên nghiệp. Nói chuyện như người thật, không như chatbot.
+Dùng tiếng Việt. Dùng emoji phù hợp nhưng đừng lạm dụng.
+KHÔNG bịa số liệu. Nếu không biết → nói thẳng.
+
+=== TRẠNG THÁI HỆ THỐNG ({$now}) ===
+Watchlist đang scan: {$watchlist}
+Lịch sử thắng/thua: {$wrStr}
+
+LỆNH ĐANG CHẠY:
+{$runningStr}
+LỆNH PENDING:
+{$pendingStr}
+
+=== KHẢ NĂNG ===
+- Phân tích coin: user nhắn "kèo xagusdt scalp" hoặc "phân tích btcusdt"
+- Xem lệnh: /list, /status, /signal <id>
+- Quản lý: /cancel <id>, /filled <id>
+- Bot tự động scan {$watchlist} mỗi 5 phút và sẽ báo ngay khi có setup
+
+Trả lời NGẮN GỌN (tối đa 4-5 câu). Nếu user hỏi về setup cụ thể thì bảo họ nhắn "kèo [coin] [loại]".
+PROMPT;
+
+        // Lịch sử hội thoại (rolling 8 messages)
+        $historyKey = "tg_ai_history_{$this->chatId}";
+        $history    = Cache::get($historyKey, []);
+
+        // Thêm tin nhắn user mới vào history
+        $history[] = ['role' => 'user', 'content' => $userMessage];
+
+        // Giữ tối đa 8 messages gần nhất
+        if (count($history) > 8) {
+            $history = array_slice($history, -8);
+        }
+
+        try {
+            $client   = new \GuzzleHttp\Client(['timeout' => 15, 'connect_timeout' => 5]);
+            $response = $client->post('https://openrouter.ai/api/v1/chat/completions', [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $apiKey,
+                    'Content-Type'  => 'application/json',
+                    'HTTP-Referer'  => 'https://tomai.app',
+                ],
+                'json' => [
+                    'model'       => 'openai/gpt-4o-mini',
+                    'temperature' => 0.7,
+                    'max_tokens'  => 300,
+                    'messages'    => array_merge(
+                        [['role' => 'system', 'content' => $systemPrompt]],
+                        $history
+                    ),
+                ],
+            ]);
+
+            $result  = json_decode($response->getBody(), true);
+            $reply   = trim($result['choices'][0]['message']['content'] ?? '');
+
+            if (!$reply) {
+                $this->telegram->reply("Hmm, tôi không hiểu lắm. Thử nói lại nhé.");
+                return;
+            }
+
+            // Lưu reply của AI vào history
+            $history[] = ['role' => 'assistant', 'content' => $reply];
+            Cache::put($historyKey, array_slice($history, -8), now()->addHours(1));
+
+            $this->telegram->reply($reply);
+
+        } catch (\Exception $e) {
+            \Log::warning('TelegramBot AI: ' . $e->getMessage());
+            $this->telegram->reply("Xin lỗi, AI đang bận. Thử lại sau hoặc dùng /help để xem lệnh.");
+        }
     }
 
     // ─── Natural language parser ─────────────────────────────────────────────────
