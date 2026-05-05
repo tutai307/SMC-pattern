@@ -105,24 +105,13 @@
                 <div class="flex flex-wrap gap-1.5 justify-end">
                     <!-- Method Toggle -->
                     <div class="flex bg-white/5 p-1 rounded-lg">
-                        <a href="{{ request()->fullUrlWithQuery(['method' => 'smc']) }}" class="px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'smc' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">
-                            SMC
-                        </a>
-                        <a href="{{ request()->fullUrlWithQuery(['method' => 'elliot']) }}" class="px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'elliot' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">
-                            ELLIOT
-                        </a>
+                        <button data-method="smc" class="method-btn px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'smc' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">SMC</button>
+                        <button data-method="elliot" class="method-btn px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'elliot' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">ELLIOT</button>
                     </div>
 
-                    @php $m = $method ?? 'smc'; @endphp
-                    <a href="/?symbol={{ $symbol }}&timeframe=15m&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        M15
-                    </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=1h&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '1h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        H1
-                    </a>
-                    <a href="/?symbol={{ $symbol }}&timeframe=4h&method={{ $m }}" class="px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '4h' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">
-                        H4
-                    </a>
+                    <button data-tf="15m" class="tf-btn px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">M15</button>
+                    <button data-tf="1h"  class="tf-btn px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '1h'  ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">H1</button>
+                    <button data-tf="4h"  class="tf-btn px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '4h'  ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">H4</button>
                 </div>
             </div>
             {{-- Skeleton: visible until JS renders the chart --}}
@@ -169,7 +158,7 @@
 
         <!-- Sidebar / Signals -->
         <div class="space-y-4 md:space-y-6">
-            <div class="glass-card p-3 md:p-6">
+            <div class="glass-card p-3 md:p-6" id="analysis-panel">
                 <div class="mb-4">
                     <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Dự đoán Vào lệnh AI</h3>
                     <form action="{{ url()->current() }}" method="GET" class="flex items-center gap-2">
@@ -191,8 +180,9 @@
                     </button>
                 </div>
 
+                <div id="signal-body">
                 @if($analysis['signal'])
-                    @php 
+                    @php
                         $isCounter = $analysis['signal']['is_counter_trend'] ?? false;
                         $signalColor = $isCounter ? 'border-amber-500/50 bg-amber-500/5' : ($analysis['signal']['type'] == 'MUA' ? 'border-green-500/50 bg-green-500/5' : 'border-red-500/50 bg-red-500/5');
                         $badgeColor = $isCounter ? 'bg-amber-500/20 text-amber-400' : ($analysis['signal']['type'] == 'MUA' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400');
@@ -413,6 +403,7 @@
                         </button>
                     </div>
                 @endif
+                </div>{{-- #signal-body --}}
             </div>
 
             <!-- Detailed Explanation Overlay (Hidden by default) -->
@@ -715,9 +706,13 @@
 
 
     <script>
-        // Global — used by price feed, kline stream, and chart
-        const symbolLower = "{{ strtolower($symbol) }}";
-        const wsTimeframe = "{{ $timeframe }}";
+        // Global state — mutable by SPA engine
+        let currentSymbol    = "{{ strtolower($symbol) }}";
+        let currentTimeframe = "{{ $timeframe }}";
+        let currentMethod    = "{{ $method }}";
+        // Legacy aliases (used by chart init code below)
+        let symbolLower  = currentSymbol;
+        let wsTimeframe  = currentTimeframe;
 
         // === PRICE FEED — độc lập, auto-reconnect, không liên quan chart ===
         (function initPriceFeed() {
@@ -781,6 +776,9 @@
                 })).sort((a, b) => a.time - b.time);
 
                 candleSeries.setData(candleData);
+
+                // Expose instances to SPA engine
+                if (window.__setChartInstances) window.__setChartInstances(chart, candleSeries);
 
                 // Show chart after 2 animation frames so skeleton is visible during heavy render
                 requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1002,6 +1000,254 @@
             setTimeout(() => { row.style.background = ''; }, 1200);
         }
 
+        // === SPA ENGINE — đổi TF/symbol/method không reload trang ===
+        (function initSPA() {
+            let priceFeedWs = null;
+            let klineWs     = null;
+            let chartObj    = null;  // LightweightCharts chart instance
+            let candleSeries_ = null;
+
+            // Expose cho chart init code để SPA có thể lấy lại instance
+            window.__setChartInstances = function(chart, series) {
+                chartObj    = chart;
+                candleSeries_ = series;
+            };
+
+            function showChartLoading() {
+                const sk = document.getElementById('chart-skeleton');
+                const ch = document.getElementById('chart');
+                if (sk) { sk.style.display = ''; sk.style.opacity = '1'; }
+                if (ch) ch.style.display = 'none';
+            }
+
+            function hideChartLoading() {
+                const sk = document.getElementById('chart-skeleton');
+                const ch = document.getElementById('chart');
+                if (sk) { sk.style.transition = 'opacity .25s'; sk.style.opacity = '0'; setTimeout(() => sk.style.display = 'none', 260); }
+                if (ch) ch.style.display = '';
+            }
+
+            function updateActiveButtons() {
+                document.querySelectorAll('.tf-btn').forEach(b => {
+                    const active = b.dataset.tf === currentTimeframe;
+                    b.className = b.className
+                        .replace(/bg-blue-600 text-white shadow-lg shadow-blue-500\/20/g, '')
+                        .replace(/bg-white\/5 text-slate-400 hover:bg-white\/10/g, '')
+                        .trim();
+                    b.classList.add(...(active
+                        ? ['bg-blue-600','text-white','shadow-lg','shadow-blue-500/20']
+                        : ['bg-white/5','text-slate-400','hover:bg-white/10']));
+                });
+                document.querySelectorAll('.method-btn').forEach(b => {
+                    const active = b.dataset.method === currentMethod;
+                    b.className = b.className
+                        .replace(/bg-blue-600 text-white shadow-md/g, '')
+                        .replace(/text-slate-500 hover:text-slate-300/g, '')
+                        .trim();
+                    b.classList.add(...(active ? ['bg-blue-600','text-white','shadow-md'] : ['text-slate-500','hover:text-slate-300']));
+                });
+            }
+
+            function reconnectPriceFeed(sym) {
+                if (priceFeedWs) { priceFeedWs.onclose = null; priceFeedWs.close(); }
+                const priceEl = document.getElementById('current-price-display');
+                const symDisplay = document.querySelector('[data-last-price]')?.closest?.('div')?.previousElementSibling;
+                if (!priceEl) return;
+
+                function connect() {
+                    priceFeedWs = new WebSocket(`wss://fstream.binance.com/ws/${sym}@aggTrade`);
+                    priceFeedWs.onmessage = function(e) {
+                        const d     = JSON.parse(e.data);
+                        const price = parseFloat(d.p);
+                        const old   = parseFloat(priceEl.dataset.lastPrice || price);
+                        const dec   = price < 10 ? 4 : 2;
+                        const fmt   = new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(price);
+                        priceEl.style.color = price >= old ? '#22c55e' : '#ef4444';
+                        priceEl.textContent = '$' + fmt;
+                        priceEl.dataset.lastPrice = price;
+                        document.title = `$${fmt} ${sym.toUpperCase()} — TOM AI`;
+                    };
+                    priceFeedWs.onclose = () => setTimeout(connect, 2000);
+                    priceFeedWs.onerror = () => priceFeedWs.close();
+                }
+                connect();
+            }
+
+            function reconnectKlineStream(sym, tf) {
+                if (klineWs) { klineWs.onclose = null; klineWs.close(); klineWs = null; }
+                if (!candleSeries_) return;
+
+                const tfMap = { '1m':'1m','5m':'5m','15m':'15m','1h':'1h','4h':'4h','1d':'1d' };
+                const wsTf  = tfMap[tf] || tf;
+
+                function connect() {
+                    klineWs = new WebSocket(`wss://fstream.binance.com/ws/${sym}@kline_${wsTf}`);
+                    klineWs.onmessage = function(e) {
+                        try {
+                            const msg = JSON.parse(e.data);
+                            if (!msg.k) return;
+                            const k = msg.k;
+                            candleSeries_.update({
+                                time: Math.floor(k.t / 1000),
+                                open: parseFloat(k.o), high: parseFloat(k.h),
+                                low:  parseFloat(k.l), close: parseFloat(k.c),
+                            });
+                        } catch(_) {}
+                    };
+                    klineWs.onclose = () => setTimeout(connect, 2000);
+                    klineWs.onerror = () => klineWs.close();
+                }
+                connect();
+            }
+
+            function renderChart(klines) {
+                if (!chartObj || !candleSeries_) return;
+                const data = klines.map(d => ({
+                    time: Math.floor(d[0] / 1000),
+                    open: parseFloat(d[1]), high: parseFloat(d[2]),
+                    low:  parseFloat(d[3]), close: parseFloat(d[4]),
+                })).sort((a, b) => a.time - b.time);
+                candleSeries_.setData(data);
+                chartObj.timeScale().fitContent();
+            }
+
+            async function navigate(sym, tf, method) {
+                if (sym === currentSymbol && tf === currentTimeframe && method === currentMethod) return;
+
+                currentSymbol    = sym;
+                currentTimeframe = tf;
+                currentMethod    = method;
+                symbolLower      = sym;
+                wsTimeframe      = tf;
+
+                updateActiveButtons();
+                showChartLoading();
+
+                // Update price feed ngay lập tức
+                reconnectPriceFeed(sym);
+
+                // Update URL
+                const url = new URL(window.location);
+                url.searchParams.set('symbol', sym.toUpperCase());
+                url.searchParams.set('timeframe', tf);
+                url.searchParams.set('method', method);
+                history.pushState({ sym, tf, method }, '', url);
+
+                // Fetch data
+                try {
+                    const res  = await fetch(`/analysis.json?symbol=${sym}&timeframe=${tf}&method=${method}`);
+                    const data = await res.json();
+                    if (data.error) { hideChartLoading(); return; }
+
+                    // Update chart
+                    renderChart(data.klines);
+                    hideChartLoading();
+                    reconnectKlineStream(sym, tf);
+
+                    // Update analysis panel
+                    updateAnalysisPanel(data);
+
+                    // Update symbol display in header
+                    const symDisp = document.querySelector('.text-\\[10px\\].text-slate-500.uppercase');
+                    if (symDisp) symDisp.textContent = sym.toUpperCase();
+
+                } catch(err) {
+                    hideChartLoading();
+                    console.error('SPA navigate error:', err);
+                }
+            }
+
+            function updateAnalysisPanel(data) {
+                const panel   = document.getElementById('analysis-panel');
+                if (!panel) return;
+                const sig     = data.analysis?.signal;
+                const verdict = data.verdict;
+                const price   = data.currentPrice;
+                const sym     = data.symbol;
+                const tf      = data.timeframe;
+
+                if (!sig) {
+                    const trend = data.analysis?.structure?.trend ?? 'không rõ';
+                    const adx   = (data.analysis?.indicators?.adx ?? 0).toFixed(1);
+                    panel.querySelector('#signal-body').innerHTML = `
+                        <div class="text-center py-8 text-slate-500">
+                            <div class="text-3xl mb-2">📊</div>
+                            <p class="text-xs font-bold">Chưa có setup</p>
+                            <p class="text-[10px] mt-1">Trend: ${trend} · ADX: ${adx}</p>
+                        </div>`;
+                    return;
+                }
+
+                const isLong   = sig.type?.includes('MUA') || sig.type === 'LONG';
+                const slPct    = sig.entry > 0 ? Math.abs(sig.entry - sig.sl) / sig.entry * 100 : 0;
+                const tpPct    = sig.entry > 0 ? Math.abs(sig.tp  - sig.entry) / sig.entry * 100 : 0;
+                const rr       = slPct > 0 ? (tpPct / slPct).toFixed(1) : '0';
+                const color    = sig.is_counter_trend ? 'amber' : (isLong ? 'green' : 'red');
+                const colorMap = { green: ['border-green-500/50 bg-green-500/5','bg-green-500/20 text-green-400','text-green-400'],
+                                   red:   ['border-red-500/50 bg-red-500/5',    'bg-red-500/20 text-red-400',    'text-red-400'],
+                                   amber: ['border-amber-500/50 bg-amber-500/5','bg-amber-500/20 text-amber-400','text-amber-400'] };
+                const [cardCls, badgeCls, textCls] = colorMap[color];
+
+                const vDecision  = verdict?.decision ?? 'NEUTRAL';
+                const vReasons   = (verdict?.reasons ?? []).join(' · ');
+                const verdictMap = { ENTER: 'bg-green-500/20 text-green-300 border-green-500/30', CAUTION: 'bg-amber-500/20 text-amber-300 border-amber-500/30', SKIP: 'bg-red-500/20 text-red-300 border-red-500/30', NEUTRAL: 'bg-white/5 text-slate-400 border-white/10' };
+                const vCls       = verdictMap[vDecision] ?? verdictMap.NEUTRAL;
+
+                const aiScore = sig.ai_score ?? null;
+                const aiEmoji = aiScore !== null ? (aiScore >= 80 ? '🟢' : aiScore >= 60 ? '🟡' : '🔴') : '';
+                const aiHtml  = aiScore !== null ? `
+                    <div class="space-y-2 mt-3 pt-3 border-t border-white/[0.06]">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] text-slate-500 font-bold uppercase">AI Score</span>
+                            <span class="text-xs font-bold">${aiEmoji} ${aiScore}/100</span>
+                        </div>
+                        ${sig.ai_analysis ? `<p class="text-[11px] text-slate-300 leading-relaxed">${sig.ai_analysis}</p>` : ''}
+                        ${sig.ai_risk     ? `<p class="text-[11px] text-amber-400/80 leading-relaxed">⚠️ ${sig.ai_risk}</p>` : ''}
+                        ${sig.ai_recommendation ? `<p class="text-[11px] text-white font-medium">💡 ${sig.ai_recommendation}</p>` : ''}
+                        ${sig.ai_entry_timing   ? `<p class="text-[11px] text-slate-400">⏱ ${sig.ai_entry_timing}</p>` : ''}
+                    </div>` : '';
+
+                panel.querySelector('#signal-body').innerHTML = `
+                    <div class="border rounded-xl p-3 md:p-4 ${cardCls}">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="${badgeCls} text-[10px] px-2 py-0.5 rounded-full font-bold uppercase">${sig.type}</span>
+                            <span class="${badgeCls} text-[10px] px-2 py-0.5 rounded-full font-bold">${sig.winrate}% Confluence</span>
+                        </div>
+                        <div class="space-y-1.5 text-xs">
+                            <div class="flex justify-between"><span class="text-slate-500">Entry</span><span class="font-mono ${textCls}">$${sig.entry}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">TP</span><span class="font-mono text-green-400">$${sig.tp} <span class="text-[10px]">(+${tpPct.toFixed(2)}%)</span></span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">SL</span><span class="font-mono text-red-400">$${sig.sl} <span class="text-[10px]">(-${slPct.toFixed(2)}%)</span></span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">R:R</span><span class="font-mono text-white">1:${rr}</span></div>
+                        </div>
+                        <div class="mt-3 pt-2 border-t border-white/[0.06]">
+                            <div class="border rounded-lg px-3 py-2 ${vCls} text-[10px] font-bold uppercase text-center">${vDecision}${vReasons ? ' — ' + vReasons : ''}</div>
+                        </div>
+                        ${aiHtml}
+                    </div>`;
+            }
+
+            // ── Intercept TF buttons ──
+            document.querySelectorAll('.tf-btn').forEach(btn => {
+                btn.addEventListener('click', () => navigate(currentSymbol, btn.dataset.tf, currentMethod));
+            });
+
+            // ── Intercept method buttons ──
+            document.querySelectorAll('.method-btn').forEach(btn => {
+                btn.addEventListener('click', () => navigate(currentSymbol, currentTimeframe, btn.dataset.method));
+            });
+
+            // ── Intercept symbol autocomplete ──
+            document.addEventListener('spa:navigate', e => {
+                navigate(e.detail.symbol.toLowerCase(), currentTimeframe, currentMethod);
+                document.querySelectorAll('input[name="symbol"]').forEach(i => i.value = e.detail.symbol);
+            });
+
+            // ── Browser back/forward ──
+            window.addEventListener('popstate', e => {
+                if (e.state) navigate(e.state.sym, e.state.tf, e.state.method);
+            });
+        })();
+
         // --- SYMBOL AUTOCOMPLETE ---
         (function() {
             const SYMBOLS = [
@@ -1046,9 +1292,10 @@
                     dropdown.querySelectorAll('li').forEach(li => {
                         li.addEventListener('mousedown', function(e) {
                             e.preventDefault();
-                            input.value = this.dataset.symbol;
+                            const sym = this.dataset.symbol;
+                            input.value = sym;
                             dropdown.classList.add('hidden');
-                            form.submit();
+                            document.dispatchEvent(new CustomEvent('spa:navigate', { detail: { symbol: sym } }));
                         });
                     });
 
@@ -1071,9 +1318,10 @@
                         activeIdx = Math.max(activeIdx - 1, 0);
                     } else if (e.key === 'Enter' && activeIdx >= 0) {
                         e.preventDefault();
-                        input.value = items[activeIdx].dataset.symbol;
+                        const sym = items[activeIdx].dataset.symbol;
+                        input.value = sym;
                         dropdown.classList.add('hidden');
-                        form.submit();
+                        document.dispatchEvent(new CustomEvent('spa:navigate', { detail: { symbol: sym } }));
                         return;
                     } else { return; }
                     items.forEach((li, i) => li.classList.toggle('bg-white/10', i === activeIdx));

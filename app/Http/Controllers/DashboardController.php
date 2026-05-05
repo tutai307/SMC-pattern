@@ -257,6 +257,38 @@ class DashboardController extends Controller
         return back()->with('success', "Lệnh #{$id} {$signal->symbol} đã được đánh dấu KHỚP — bot bắt đầu theo dõi.");
     }
 
+    public function analysisJson()
+    {
+        $symbol    = strtoupper(preg_replace('/[^A-Z0-9]/i', '', request('symbol', 'XAGUSDT')));
+        $symbol    = substr($symbol, 0, 20) ?: 'XAGUSDT';
+        $timeframe = in_array(request('timeframe'), ['1m','5m','15m','1h','4h','1d']) ? request('timeframe') : '15m';
+        $method    = in_array(request('method'), ['smc','elliot']) ? request('method') : 'smc';
+
+        $klines       = $this->binanceService->getKlines($symbol, $timeframe, 500);
+        $currentPrice = $this->binanceService->getPrice($symbol);
+
+        if (empty($klines) || $currentPrice === null) {
+            return response()->json(['error' => 'Không lấy được dữ liệu'], 502);
+        }
+
+        $htf = match ($timeframe) { '15m' => '1h', '1h' => '4h', default => '1d' };
+        $klinesHTF   = $this->binanceService->getKlines($symbol, $htf, 50);
+        $analysis    = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe);
+        $coinQuality = $this->binanceService->getCoinQuality($symbol);
+        $verdict     = $this->computeVerdict($analysis['signal'] ?? null, $coinQuality);
+
+        return response()->json([
+            'symbol'       => $symbol,
+            'timeframe'    => $timeframe,
+            'method'       => $method,
+            'currentPrice' => $currentPrice,
+            'klines'       => $klines,
+            'analysis'     => $analysis,
+            'coinQuality'  => $coinQuality,
+            'verdict'      => $verdict,
+        ]);
+    }
+
     public function advisor(Request $request)
     {
         $symbol    = strtoupper(preg_replace('/[^A-Z0-9]/i', '', $request->input('symbol', 'BTCUSDT')));
