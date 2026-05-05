@@ -8,5 +8,4 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// Kiểm tra lệnh đang mở mỗi phút, gửi cảnh báo Telegram nếu cần
-Schedule::command('signals:monitor')->everyMinute()->withoutOverlapping();
+// signals:monitor chạy như daemon qua supervisord (không dùng scheduler)
