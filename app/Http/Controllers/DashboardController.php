@@ -30,6 +30,10 @@ class DashboardController extends Controller
         $klines = $this->binanceService->getKlines($symbol, $timeframe, 500);
         $currentPrice = $this->binanceService->getPrice($symbol);
 
+        if (empty($klines) || $currentPrice === null) {
+            abort(404);
+        }
+
         $htf = '1h';
         if ($timeframe == '15m') $htf = '1h';
         if ($timeframe == '1h') $htf = '4h';

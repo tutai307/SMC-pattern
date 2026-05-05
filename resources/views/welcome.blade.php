@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <style>
+        #page-loader { position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,#3b82f6,#06b6d4);z-index:9999;width:0;opacity:0;transition:width 2s ease-out,opacity .15s; }
+    </style>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tom AI - Price Action Terminal</title>
@@ -10,6 +13,7 @@
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body class="bg-[#0a0e17] text-white">
+    <div id="page-loader"></div>
     <!-- Header -->
     <header class="px-4 py-3 md:px-6 md:py-4 border-b border-white/10 bg-[#0a0e17]/80 sticky top-0 z-50 backdrop-blur-md">
         <!-- Row 1: Logo + Price -->
@@ -110,7 +114,46 @@
                     </a>
                 </div>
             </div>
-            <div id="chart" class="chart-container"></div>
+            {{-- Skeleton: visible until JS renders the chart --}}
+            <div id="chart-skeleton" class="chart-container relative overflow-hidden rounded-lg bg-[#0a0e17] border border-white/[0.06]">
+                {{-- Horizontal grid lines --}}
+                <div class="absolute inset-0 flex flex-col justify-between py-6 pl-3 pr-16 pointer-events-none">
+                    @for ($i = 0; $i < 6; $i++)
+                        <div class="w-full h-px bg-white/[0.04]"></div>
+                    @endfor
+                </div>
+                {{-- Fake candle bars --}}
+                @php $bars = [28,42,58,35,52,70,44,62,80,48,33,60,72,46,55,84,38,65,50,74,36,53,67,43,61,77,34,55,47,63,79,41,57,49,68,30,58,45,72,38]; @endphp
+                <div class="absolute left-3 right-16 flex items-end gap-[3px]" style="bottom:32px;top:24px">
+                    @foreach($bars as $i => $h)
+                        <div class="flex-1 rounded-sm animate-pulse"
+                             style="height:{{ $h }}%;background:{{ $i % 3 === 1 ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)' }};animation-delay:{{ round($i * 0.04, 2) }}s"></div>
+                    @endforeach
+                </div>
+                {{-- Time axis --}}
+                <div class="absolute bottom-2 left-4 right-16 flex justify-between px-2">
+                    @for ($i = 0; $i < 4; $i++)
+                        <div class="h-2 w-14 bg-white/[0.05] rounded animate-pulse"></div>
+                    @endfor
+                </div>
+                {{-- Price axis --}}
+                <div class="absolute top-3 right-2 bottom-8 flex flex-col justify-between items-end pr-1">
+                    @for ($i = 0; $i < 6; $i++)
+                        <div class="h-2 w-10 bg-white/[0.05] rounded animate-pulse"></div>
+                    @endfor
+                </div>
+                {{-- Loading pill --}}
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="flex items-center gap-2.5 bg-[#0a0e17]/90 px-4 py-2 rounded-lg border border-white/10 shadow-xl">
+                        <svg class="w-4 h-4 animate-spin text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                        </svg>
+                        <span class="text-[11px] text-slate-400 font-medium tracking-wide">Đang tải chart...</span>
+                    </div>
+                </div>
+            </div>
+            <div id="chart" class="chart-container" style="display:none"></div>
         </div>
 
         <!-- Sidebar / Signals -->
@@ -711,6 +754,10 @@
 
                 candleSeries.setData(candleData);
 
+                // Reveal chart, hide skeleton
+                document.getElementById('chart-skeleton').style.display = 'none';
+                document.getElementById('chart').style.display = '';
+
                 // Draw Order Blocks as Price Lines or Rectangles
                 analysis.orderBlocks.forEach(ob => {
                     const priceLine = {
@@ -830,6 +877,9 @@
 
             } catch (err) {
                 console.error("Chart Error:", err);
+                // Show error state in skeleton instead of blank
+                const sk = document.getElementById('chart-skeleton');
+                if (sk) sk.innerHTML = `<div class="h-full flex items-center justify-center"><div class="text-center space-y-3"><div class="text-red-400/60 text-sm">⚠ Không tải được chart</div><a href="/" class="text-blue-400 text-xs underline">← Về trang chủ</a></div></div>`;
             }
 
             // === KLINE STREAM — outside try-catch, always starts if chart series is ready ===
@@ -861,6 +911,29 @@
                 el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
         }
+
+        // --- TOP LOADING BAR — shows on navigation/form submit ---
+        (function() {
+            const bar = document.getElementById('page-loader');
+            function startLoad() {
+                bar.style.opacity = '1';
+                bar.style.width = '75%';
+                bar.style.transition = 'width 2.5s ease-out, opacity .15s';
+            }
+            document.querySelectorAll('form').forEach(f => f.addEventListener('submit', startLoad));
+            document.querySelectorAll('a[href]').forEach(a => {
+                a.addEventListener('click', function(e) {
+                    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+                    const href = this.getAttribute('href');
+                    if (!href || href.startsWith('#') || href.startsWith('javascript')) return;
+                    startLoad();
+                });
+            });
+            window.addEventListener('beforeunload', function() {
+                bar.style.transition = 'width .2s';
+                bar.style.width = '100%';
+            });
+        })();
 
         // --- WEBSOCKET: Live signal status updates ---
         document.addEventListener('DOMContentLoaded', function() {
