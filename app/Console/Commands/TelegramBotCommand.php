@@ -260,18 +260,18 @@ PROMPT;
     {
         $lower = mb_strtolower($text);
 
-        // Phải có từ khóa liên quan đến giao dịch
-        $keywords = ['lệnh', 'lenh', 'kèo', 'keo', 'cho tôi', 'cho toi', 'phân tích', 'phan tich', 'xem', 'scalp', 'intraday', 'swing'];
+        // Detect timeframe trực tiếp từ text (ưu tiên nhất)
+        $tfKeywords = ['swing', '4h', 'h4', '1d', 'd1', 'intraday', '1h', 'h1', 'day', 'scalp', '15m', 'm15', '5m', 'm5', '1m', 'm1'];
         $hasKeyword = false;
-        foreach ($keywords as $kw) {
+        foreach (array_merge($tfKeywords, ['lệnh', 'lenh', 'kèo', 'keo', 'cho tôi', 'cho toi', 'phân tích', 'phan tich', 'xem']) as $kw) {
             if (str_contains($lower, $kw)) { $hasKeyword = true; break; }
         }
 
-        // Detect loại giao dịch → timeframe
-        $tradeType = 'scalp';
-        if (str_contains($lower, 'swing') || str_contains($lower, '4h')) {
+        // Detect loại giao dịch → timeframe (regex ưu tiên hơn keyword check)
+        $tradeType = 'scalp'; // default 15m
+        if (preg_match('/\b(4h|h4|swing|1d|d1)\b/i', $lower)) {
             $tradeType = 'swing';
-        } elseif (str_contains($lower, 'intraday') || str_contains($lower, 'day') || str_contains($lower, '1h')) {
+        } elseif (preg_match('/\b(1h|h1|intraday|day)\b/i', $lower)) {
             $tradeType = 'intraday';
         }
 
