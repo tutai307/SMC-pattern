@@ -1126,6 +1126,11 @@
                 // Update price feed ngay lập tức
                 reconnectPriceFeed(sym);
 
+                // Sync tất cả hidden inputs trong forms (propose, capital, v.v.)
+                document.querySelectorAll('input[name="symbol"]').forEach(i => i.value = sym.toUpperCase());
+                document.querySelectorAll('input[name="timeframe"]').forEach(i => i.value = tf);
+                document.querySelectorAll('input[name="method"]').forEach(i => i.value = method);
+
                 // Update URL
                 const url = new URL(window.location);
                 url.searchParams.set('symbol', sym.toUpperCase());
