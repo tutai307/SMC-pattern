@@ -53,7 +53,7 @@ class DashboardController extends Controller
                 $signal = \App\Models\TradingSignal::create([
                     'symbol'       => $symbol,
                     'timeframe'    => $timeframe,
-                    'type'         => $analysis['signal']['type'] == 'MUA' ? 'LONG' : 'SHORT',
+                    'type'         => str_starts_with($analysis['signal']['type'], 'MUA') ? 'LONG' : 'SHORT',
                     'entry_price'  => $analysis['signal']['entry'],
                     'tp_price'     => $analysis['signal']['tp'],
                     'sl_price'     => $analysis['signal']['sl'],
