@@ -274,6 +274,56 @@ class TelegramService
         $this->send($text);
     }
 
+    public function sendRaw(string $text): void
+    {
+        $this->send($text);
+    }
+
+    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice): void
+    {
+        $type     = $signal['type'] ?? 'N/A';
+        $entry    = $signal['entry'] ?? 0;
+        $tp       = $signal['tp']    ?? 0;
+        $sl       = $signal['sl']    ?? 0;
+        $conf     = $signal['winrate'] ?? 0;
+        $reason   = $signal['reason'] ?? '';
+        $pattern  = $signal['pattern'] ?? 'SMC';
+        $isSniper = str_contains($reason, '🎯 SNIPER');
+
+        $slPct = $entry > 0 ? round(abs($entry - $sl) / $entry * 100, 2) : 0;
+        $tpPct = $entry > 0 ? round(abs($tp - $entry) / $entry * 100, 2) : 0;
+        $rr    = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
+
+        $dir    = str_contains(strtolower($type), 'mua') ? '📈 LONG' : '📉 SHORT';
+        $header = $isSniper ? '⚡ <b>SNIPER SETUP DETECTED</b> ⚡' : '🔍 <b>SETUP MỚI — AUTO SCAN</b>';
+
+        $priceDiff = $entry > 0 ? round(abs($currentPrice - $entry) / $entry * 100, 2) : 0;
+        $proximity = $currentPrice <= $entry
+            ? "Giá đang <b>tại/dưới entry</b> ({$priceDiff}% cách entry)"
+            : "Giá cách entry <b>{$priceDiff}%</b> — chờ retest";
+
+        $appUrl = rtrim(env('APP_URL', 'http://localhost'), '/');
+        $link   = "{$appUrl}/?symbol={$symbol}&timeframe={$timeframe}";
+
+        $this->send(
+            $header . "\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "💎 <b>{$symbol}</b> · {$timeframe} · {$dir}\n"
+            . "🏷 Pattern: <code>{$pattern}</code>\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "📌 Entry : <code>{$entry}</code>\n"
+            . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%)\n"
+            . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
+            . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
+            . "📍 {$proximity}\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "🔍 <i>{$reason}</i>\n\n"
+            . "🖥 <a href=\"{$link}\">Xem chart →</a>"
+        );
+    }
+
     // --- Internal ---
 
     private function send(string $text): void

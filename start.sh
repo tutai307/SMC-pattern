@@ -21,6 +21,7 @@ respawn "queue"   php artisan queue:listen --sleep=3 --tries=3 &
 respawn "scheduler" php artisan schedule:work &
 respawn "monitor" php artisan signals:monitor &
 respawn "telegram" php artisan telegram:bot &
+respawn "scanner"  php artisan signals:scan --interval=${SCAN_INTERVAL:-300} &
 
 echo "[start] Starting web server on port ${PORT:-8000}..."
 exec php artisan serve --host=0.0.0.0 --port=${PORT:-8000}
