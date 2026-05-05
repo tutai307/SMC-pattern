@@ -117,6 +117,22 @@ class ScanSignalsCommand extends Command
         Cache::put($dedupKey, true, now()->addHours(2));
 
         $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice);
+
+        // Lưu vào cache để TelegramBot nhận "ok/có" và theo dõi
+        $isLong  = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
+        $chatId  = config('services.telegram.chat_id');
+        Cache::put("scan_pending_{$chatId}", [
+            'symbol'    => $symbol,
+            'timeframe' => $timeframe,
+            'type'      => $isLong ? 'LONG' : 'SHORT',
+            'entry'     => $signal['entry'],
+            'tp'        => $signal['tp'],
+            'sl'        => $signal['sl'],
+            'winrate'   => $signal['winrate'] ?? 0,
+            'reason'    => $signal['reason'] ?? '',
+            'capital'   => 0,
+        ], now()->addMinutes(30));
+
         $this->info('[' . now()->format('H:i:s') . "] ✅ Gửi alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
     }
 }

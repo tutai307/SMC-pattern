@@ -101,9 +101,10 @@ class TelegramBotCommand extends Command
 
     private function handleFreeText(string $text): void
     {
-        $lower      = mb_strtolower($text);
-        $pendingKey = "tg_pending_{$this->chatId}";
-        $hasPending = Cache::has($pendingKey);
+        $lower          = mb_strtolower($text);
+        $pendingKey     = "tg_pending_{$this->chatId}";
+        $scanPendingKey = "scan_pending_{$this->chatId}";
+        $hasPending     = Cache::has($pendingKey) || Cache::has($scanPendingKey);
 
         // Xác nhận vào lệnh
         foreach ($this->confirmWords as $w) {
@@ -117,6 +118,7 @@ class TelegramBotCommand extends Command
         foreach ($this->rejectWords as $w) {
             if ($hasPending && str_contains($lower, $w)) {
                 Cache::forget($pendingKey);
+                Cache::forget($scanPendingKey);
                 $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
                 return;
             }
@@ -421,8 +423,12 @@ PROMPT;
 
     private function confirmPendingSignal(): void
     {
-        $pendingKey = "tg_pending_{$this->chatId}";
-        $p          = Cache::get($pendingKey);
+        $pendingKey     = "tg_pending_{$this->chatId}";
+        $scanPendingKey = "scan_pending_{$this->chatId}";
+
+        // Ưu tiên pending từ bot analysis; fallback về scan alert
+        $p         = Cache::get($pendingKey) ?? Cache::get($scanPendingKey);
+        $isScanSig = !Cache::has($pendingKey) && Cache::has($scanPendingKey);
 
         if (!$p) {
             $this->telegram->reply("Không có lệnh nào đang chờ xác nhận. Nhắn tôi tên coin và loại lệnh để phân tích mới.");
@@ -437,6 +443,7 @@ PROMPT;
         $slHit = $isLong ? ($currentPrice <= (float) $p['sl']) : ($currentPrice >= (float) $p['sl']);
         if ($slHit) {
             Cache::forget($pendingKey);
+            Cache::forget($scanPendingKey);
             $this->telegram->reply(
                 "⚠️ <b>Setup đã vô hiệu!</b>\n\n"
                 . "Giá hiện tại <code>{$currentPrice}</code> đã vượt qua SL <code>{$p['sl']}</code>.\n"
@@ -454,6 +461,7 @@ PROMPT;
 
         if ($broken) {
             Cache::forget($pendingKey);
+            Cache::forget($scanPendingKey);
             $this->telegram->reply(
                 "🚨 <b>Cấu trúc đã đảo chiều!</b>\n\n"
                 . "Xu hướng mới: <b>{$structure['trend']}</b> — ngược chiều lệnh {$p['type']}.\n"
@@ -473,6 +481,7 @@ PROMPT;
         }
 
         Cache::forget($pendingKey);
+        Cache::forget($scanPendingKey);
 
         $signal = TradingSignal::create([
             'symbol'      => $p['symbol'],

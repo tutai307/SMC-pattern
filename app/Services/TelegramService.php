@@ -353,7 +353,9 @@ class TelegramService
             . $aiBlock
             . "━━━━━━━━━━━━━━━\n"
             . "🔍 <i>{$reason}</i>\n\n"
-            . "🖥 <a href=\"{$link}\">Xem chart →</a>"
+            . "🖥 <a href=\"{$link}\">Xem chart →</a>\n\n"
+            . "✅ Gõ <b>ok</b> để vào lệnh &amp; theo dõi tự động\n"
+            . "❌ Gõ <b>không</b> để bỏ qua"
         );
     }
 
