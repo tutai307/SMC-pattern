@@ -257,6 +257,35 @@ class DashboardController extends Controller
         return back()->with('success', "Lệnh #{$id} {$signal->symbol} đã được đánh dấu KHỚP — bot bắt đầu theo dõi.");
     }
 
+    public function advisor(Request $request)
+    {
+        $symbol    = strtoupper(preg_replace('/[^A-Z0-9]/i', '', $request->input('symbol', 'BTCUSDT')));
+        $timeframe = in_array($request->input('timeframe'), ['1m','5m','15m','1h','4h','1d']) ? $request->input('timeframe') : '15m';
+        $type      = in_array(strtoupper($request->input('type')), ['LONG','SHORT']) ? strtoupper($request->input('type')) : 'LONG';
+        $entry     = (float) $request->input('entry');
+        $sl        = $request->input('sl') ? (float) $request->input('sl') : null;
+        $tp        = $request->input('tp') ? (float) $request->input('tp') : null;
+
+        if ($entry <= 0) {
+            return response()->json(['error' => 'Giá entry không hợp lệ'], 422);
+        }
+
+        $currentPrice = $this->binanceService->getPrice($symbol);
+        if ($currentPrice === null) {
+            return response()->json(['error' => 'Không lấy được giá ' . $symbol], 502);
+        }
+
+        $klines    = $this->binanceService->getKlines($symbol, $timeframe, 100);
+        $htf       = match($timeframe) { '15m' => '1h', '1h' => '4h', default => '1d' };
+        $klinesHTF = $this->binanceService->getKlines($symbol, $htf, 50);
+
+        $advice = $this->priceActionService->adviseOpenPosition(
+            $klines, $klinesHTF, $symbol, $timeframe, $type, $entry, $sl, $tp, (float) $currentPrice
+        );
+
+        return response()->json(array_merge($advice, ['current_price' => $currentPrice]));
+    }
+
     public function academy()
     {
         return view('academy');

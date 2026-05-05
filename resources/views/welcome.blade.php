@@ -185,8 +185,13 @@
                             ĐỀ XUẤT LỆNH
                         </button>
                     </form>
+                    <button id="open-advisor-btn"
+                        class="mt-2 w-full text-[10px] bg-purple-500/10 text-purple-400 px-3 py-1.5 rounded border border-purple-500/20 hover:bg-purple-500/20 transition-all font-bold uppercase tracking-wider flex items-center justify-center gap-1.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347A3.75 3.75 0 0112 18.75a3.75 3.75 0 01-2.652-1.1l-.347-.347z"/></svg>
+                        Tư vấn lệnh đang mở
+                    </button>
                 </div>
-                
+
                 @if($analysis['signal'])
                     @php 
                         $isCounter = $analysis['signal']['is_counter_trend'] ?? false;
@@ -1107,6 +1112,163 @@
                 }
             }
         });
+
+        // --- TRADE ADVISOR MODAL ---
+        (function() {
+            const btn     = document.getElementById('open-advisor-btn');
+            const modal   = document.getElementById('advisor-modal');
+            const overlay = document.getElementById('advisor-overlay');
+            const form    = document.getElementById('advisor-form');
+            const result  = document.getElementById('advisor-result');
+            const spinner = document.getElementById('advisor-spinner');
+
+            function openModal() {
+                modal.classList.remove('hidden');
+                overlay.classList.remove('hidden');
+                document.getElementById('advisor-entry').focus();
+            }
+            function closeModal() {
+                modal.classList.add('hidden');
+                overlay.classList.add('hidden');
+                result.innerHTML = '';
+                form.reset();
+            }
+
+            btn?.addEventListener('click', openModal);
+            overlay?.addEventListener('click', closeModal);
+            document.getElementById('advisor-close')?.addEventListener('click', closeModal);
+            document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+            form?.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                result.innerHTML = '';
+                spinner.classList.remove('hidden');
+
+                const data = {
+                    symbol   : "{{ $symbol }}",
+                    timeframe: "{{ $timeframe }}",
+                    entry    : document.getElementById('advisor-entry').value,
+                    type     : document.getElementById('advisor-type').value,
+                    sl       : document.getElementById('advisor-sl').value || null,
+                    tp       : document.getElementById('advisor-tp').value || null,
+                };
+
+                try {
+                    const res  = await fetch('/advisor', {
+                        method : 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': '{{ csrf_token() }}' },
+                        body   : JSON.stringify(data),
+                    });
+                    const json = await res.json();
+                    spinner.classList.add('hidden');
+
+                    if (!res.ok) { result.innerHTML = `<p class="text-red-400 text-xs">${json.error || 'Lỗi không xác định'}</p>`; return; }
+
+                    const verdictColor = {
+                        'GIỮ LỆNH': 'green', 'CHỐT LỜI': 'blue',
+                        'CẮT LỖ': 'red', 'DI CHUYỂN SL': 'amber', 'ĐIỀU CHỈNH': 'amber',
+                    };
+                    const c = Object.entries(verdictColor).find(([k]) => json.verdict?.toUpperCase().includes(k))?.[1] ?? 'slate';
+                    const colorMap = {
+                        green: 'bg-green-500/10 border-green-500/30 text-green-400',
+                        blue : 'bg-blue-500/10 border-blue-500/30 text-blue-400',
+                        red  : 'bg-red-500/10 border-red-500/30 text-red-400',
+                        amber: 'bg-amber-500/10 border-amber-500/30 text-amber-400',
+                        slate: 'bg-white/5 border-white/10 text-slate-300',
+                    };
+
+                    result.innerHTML = `
+                        <div class="space-y-3 mt-4">
+                            <div class="border rounded-xl p-3 ${colorMap[c]}">
+                                <div class="text-[10px] font-bold uppercase tracking-widest mb-1">Phán quyết</div>
+                                <div class="text-sm font-bold">${json.verdict ?? '—'}</div>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-xl p-3">
+                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Phân tích</div>
+                                <p class="text-[11px] text-slate-200 leading-relaxed">${json.analysis ?? '—'}</p>
+                            </div>
+                            ${json.sl_advice ? `<div class="bg-red-500/5 border border-red-500/20 rounded-xl p-3">
+                                <div class="text-[10px] text-red-400 font-bold uppercase tracking-widest mb-1">Khuyến nghị SL</div>
+                                <p class="text-[11px] text-slate-200">${json.sl_advice}</p>
+                            </div>` : ''}
+                            ${json.tp_advice ? `<div class="bg-green-500/5 border border-green-500/20 rounded-xl p-3">
+                                <div class="text-[10px] text-green-400 font-bold uppercase tracking-widest mb-1">Khuyến nghị TP</div>
+                                <p class="text-[11px] text-slate-200">${json.tp_advice}</p>
+                            </div>` : ''}
+                            <div class="text-[10px] text-slate-500 text-right">Giá hiện tại: $${json.current_price ?? '—'}</div>
+                        </div>`;
+                } catch (err) {
+                    spinner.classList.add('hidden');
+                    result.innerHTML = `<p class="text-red-400 text-xs">Lỗi kết nối: ${err.message}</p>`;
+                }
+            });
+        })();
     </script>
+
+    {{-- Trade Advisor Modal --}}
+    <div id="advisor-overlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"></div>
+    <div id="advisor-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="bg-[#111827] border border-white/10 rounded-2xl shadow-2xl w-full max-w-md">
+            <div class="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.06]">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347A3.75 3.75 0 0112 18.75a3.75 3.75 0 01-2.652-1.1l-.347-.347z"/></svg>
+                    </div>
+                    <div>
+                        <div class="text-sm font-bold text-white">Tư vấn lệnh đang mở</div>
+                        <div class="text-[10px] text-slate-500">{{ $symbol }} · {{ strtoupper($timeframe) }}</div>
+                    </div>
+                </div>
+                <button id="advisor-close" class="text-slate-500 hover:text-white transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            <form id="advisor-form" class="px-5 py-4 space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Loại lệnh *</label>
+                        <select id="advisor-type" required
+                            class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500/50">
+                            <option value="LONG">LONG (Mua)</option>
+                            <option value="SHORT">SHORT (Bán)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Giá vào lệnh *</label>
+                        <input id="advisor-entry" type="number" step="any" required placeholder="0.00"
+                            class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-purple-500/50 placeholder:text-slate-600">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Stop Loss</label>
+                        <input id="advisor-sl" type="number" step="any" placeholder="tuỳ chọn"
+                            class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-red-500/30 placeholder:text-slate-600">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Take Profit</label>
+                        <input id="advisor-tp" type="number" step="any" placeholder="tuỳ chọn"
+                            class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-green-500/30 placeholder:text-slate-600">
+                    </div>
+                </div>
+
+                <button type="submit"
+                    class="w-full bg-purple-600 hover:bg-purple-500 text-white text-sm font-bold py-2.5 rounded-xl transition-all mt-1">
+                    Phân tích lệnh
+                </button>
+            </form>
+
+            <div id="advisor-spinner" class="hidden px-5 pb-4 flex items-center justify-center gap-2 text-slate-400 text-xs">
+                <svg class="w-4 h-4 animate-spin text-purple-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                </svg>
+                AI đang phân tích lệnh của bạn...
+            </div>
+
+            <div id="advisor-result" class="px-5 pb-5"></div>
+        </div>
+    </div>
 </body>
 </html>

@@ -18,6 +18,8 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::post('/signals/{id}/reset', [DashboardController::class, 'resetSignal'])->name('signals.reset');
 });
 
+Route::post('/advisor', [DashboardController::class, 'advisor'])->middleware('throttle:20,1')->name('advisor');
+
 Route::get('/health', fn() => response()->json([
     'status' => 'ok',
     'time'   => now()->toIso8601String(),

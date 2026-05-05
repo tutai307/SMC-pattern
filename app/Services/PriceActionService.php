@@ -1045,6 +1045,151 @@ PROMPT;
         });
     }
 
+    public function adviseOpenPosition(
+        array $klines,
+        array $klinesHTF,
+        string $symbol,
+        string $timeframe,
+        string $type,
+        float $entry,
+        ?float $sl,
+        ?float $tp,
+        float $currentPrice
+    ): array {
+        $apiKey = env('OPENROUTER_API_KEY');
+        if (!$apiKey) {
+            return ['verdict' => 'AI chưa cấu hình', 'analysis' => 'Thiếu OPENROUTER_API_KEY', 'sl_advice' => null, 'tp_advice' => null];
+        }
+
+        $candles    = $this->formatCandles($klines);
+        $htfCandles = $this->formatCandles($klinesHTF);
+
+        if (count($candles) < 10) {
+            return ['verdict' => 'Không đủ dữ liệu', 'analysis' => 'Không lấy được klines', 'sl_advice' => null, 'tp_advice' => null];
+        }
+
+        $structure    = $this->detectSMCStructure($candles);
+        $htfStructure = $this->detectSMCStructure($htfCandles);
+        $fvgs         = $this->detectFVG($candles);
+        $orderBlocks  = $this->findHighQualityOB($candles, $fvgs);
+
+        $last50  = array_slice($candles, -50);
+        $highs   = array_column($last50, 'high');
+        $lows    = array_column($last50, 'low');
+        $swingH  = $highs ? round(max($highs), 6) : 0;
+        $swingL  = $lows  ? round(min($lows),  6) : 0;
+
+        $adxArr  = $this->calculateADX($candles, 14);
+        $atrArr  = $this->calculateATR($candles, 14);
+        $adx     = round((float)(end($adxArr) ?: 0), 1);
+        $atr     = round((float)(end($atrArr) ?: 0), 6);
+
+        // P&L hiện tại
+        $pnlPct = $entry > 0 ? round(($type === 'LONG'
+            ? ($currentPrice - $entry) / $entry
+            : ($entry - $currentPrice) / $entry) * 100, 2) : 0;
+        $pnlSign = $pnlPct >= 0 ? "+{$pnlPct}%" : "{$pnlPct}%";
+
+        // SL/TP phân tích
+        $slPct   = ($sl && $entry > 0) ? round(abs($entry - $sl) / $entry * 100, 2) : null;
+        $tpPct   = ($tp && $entry > 0) ? round(abs($tp - $entry) / $entry * 100, 2) : null;
+        $rr      = ($slPct && $tpPct && $slPct > 0) ? round($tpPct / $slPct, 2) : null;
+        $slStr   = $sl ? "{$sl} (-{$slPct}%)" : 'chưa đặt';
+        $tpStr   = $tp ? "{$tp} (+{$tpPct}%)" : 'chưa đặt';
+        $rrStr   = $rr ? "1:{$rr}" : 'N/A';
+
+        // Khoảng cách tới swing
+        $distToSwingH = $swingH > 0 ? round(abs($currentPrice - $swingH) / $currentPrice * 100, 2) : 0;
+        $distToSwingL = $swingL > 0 ? round(abs($currentPrice - $swingL) / $currentPrice * 100, 2) : 0;
+
+        // OB gần nhất
+        $obLines = [];
+        foreach (array_slice($orderBlocks, -3) as $ob) {
+            $obLines[] = strtoupper($ob['type']) . ' OB @' . $ob['price'] . ' (' . $ob['strength'] . ')';
+        }
+        $obStr = $obLines ? implode(', ', $obLines) : 'không có';
+
+        // FVG gần nhất
+        $fvgLines = [];
+        foreach (array_slice($fvgs, -2) as $fvg) {
+            $fvgLines[] = strtoupper($fvg['type']) . ' FVG ' . $fvg['low'] . '–' . $fvg['high'];
+        }
+        $fvgStr = $fvgLines ? implode(', ', $fvgLines) : 'không có';
+
+        // Momentum 5 nến
+        $last5     = array_slice($candles, -5);
+        $bullCount = count(array_filter($last5, fn($c) => $c['close'] > $c['open']));
+        $momentumStr = "{$bullCount} xanh / " . (5 - $bullCount) . " đỏ";
+
+        $prompt = <<<PROMPT
+SYMBOL: {$symbol} | TF: {$timeframe}
+
+=== LỆNH ĐANG MỞ ===
+Loại   : {$type}
+Entry  : {$entry}
+Giá hiện tại: {$currentPrice} (P&L: {$pnlSign})
+SL     : {$slStr}
+TP     : {$tpStr}
+R:R    : {$rrStr}
+
+=== THỊ TRƯỜNG HIỆN TẠI ===
+Trend LTF: {$structure['trend']} | BOS: {$this->boolStr($structure['bos'] ?? false)} | CHoCH: {$this->boolStr($structure['choch'] ?? false)}
+Trend HTF: {$htfStructure['trend']}
+ADX: {$adx} ({$this->adxDesc($adx)})
+ATR: {$atr}
+Momentum 5 nến: {$momentumStr}
+Swing High 50 nến: {$swingH} (cách {$distToSwingH}%)
+Swing Low  50 nến: {$swingL} (cách {$distToSwingL}%)
+Order Blocks: {$obStr}
+FVG: {$fvgStr}
+
+Với tư cách senior trader, hãy tư vấn trader này nên làm gì với lệnh đang mở.
+YÊU CẦU: cite giá thực, không dùng câu chung chung. Phán quyết phải là 1 trong: GIỮ LỆNH / DI CHUYỂN SL / ĐIỀU CHỈNH TP / CHỐT LỜI NGAY / CẮT LỖ NGAY / CHỐT 50% + GIỮ 50%.
+
+Trả về JSON:
+{
+  "verdict": "GIỮ LỆNH | DI CHUYỂN SL | ĐIỀU CHỈNH TP | CHỐT LỜI NGAY | CẮT LỖ NGAY | CHỐT 50% + GIỮ 50%",
+  "analysis": "2-3 câu phân tích cụ thể với giá thực tế, lý do rõ ràng",
+  "sl_advice": "null hoặc khuyến nghị SL mới cụ thể với giá (vd: di chuyển SL lên {giá} để breakeven)",
+  "tp_advice": "null hoặc khuyến nghị TP mới cụ thể với giá"
+}
+PROMPT;
+
+        try {
+            $client   = new \GuzzleHttp\Client(['timeout' => 12, 'connect_timeout' => 4]);
+            $response = $client->post('https://openrouter.ai/api/v1/chat/completions', [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $apiKey,
+                    'Content-Type'  => 'application/json',
+                    'HTTP-Referer'  => 'https://tomai.app',
+                ],
+                'json' => [
+                    'model'           => 'openai/gpt-4o',
+                    'temperature'     => 0.2,
+                    'messages'        => [
+                        ['role' => 'system', 'content' => 'Bạn là senior crypto futures trader. Tư vấn cụ thể, cite giá thực, không nói chung chung. Chỉ trả về JSON hợp lệ.'],
+                        ['role' => 'user', 'content' => $prompt],
+                    ],
+                    'response_format' => ['type' => 'json_object'],
+                ],
+            ]);
+
+            $result  = json_decode($response->getBody(), true);
+            $content = $result['choices'][0]['message']['content'] ?? '{}';
+            $data    = json_decode($content, true);
+
+            return [
+                'verdict'   => $this->flattenAiField($data['verdict']   ?? 'Không rõ'),
+                'analysis'  => $this->flattenAiField($data['analysis']  ?? ''),
+                'sl_advice' => $this->flattenAiField($data['sl_advice'] ?? '') ?: null,
+                'tp_advice' => $this->flattenAiField($data['tp_advice'] ?? '') ?: null,
+            ];
+        } catch (\Exception $e) {
+            \Log::warning('Advisor AI error: ' . $e->getMessage());
+            return ['verdict' => 'AI lỗi', 'analysis' => 'Không kết nối được AI: ' . $e->getMessage(), 'sl_advice' => null, 'tp_advice' => null];
+        }
+    }
+
     private function adxDesc(float $adx): string
     {
         if ($adx >= 30) return 'xu hướng rất mạnh';
