@@ -18,7 +18,7 @@ class PriceActionService
             'volumeProfile' => ['bins' => [], 'poc' => 0],
             'signal' => null,
             'htf_trend' => 'không rõ',
-            'indicators' => []
+            'indicators' => ['adx' => 0, 'atr' => 0, 'ema200' => 0]
         ];
 
         if (empty($klines) || count($klines) < 100) return $default;
