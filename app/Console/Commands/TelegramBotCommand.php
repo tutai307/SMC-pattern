@@ -495,6 +495,12 @@ PROMPT;
         Cache::forget($pendingKey);
         Cache::forget($scanPendingKey);
 
+        // Chỉ set filled_at nếu giá đã vượt qua entry (lệnh đã thực sự vào)
+        // LONG: giá <= entry (đã chạm vùng mua) | SHORT: giá >= entry (đã chạm vùng bán)
+        $alreadyFilled = $isLong
+            ? ($currentPrice <= (float) $p['entry'])
+            : ($currentPrice >= (float) $p['entry']);
+
         $signal = TradingSignal::create([
             'symbol'      => $p['symbol'],
             'timeframe'   => $p['timeframe'],
@@ -506,10 +512,14 @@ PROMPT;
             'reason'      => $p['reason'],
             'capital'     => $p['capital'] ?: null,
             'status'      => 'PENDING',
-            'filled_at'   => now(), // lệnh thật, theo dõi ngay
+            'filled_at'   => $alreadyFilled ? now() : null,
         ]);
 
-        $dir  = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        $dir        = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        $statusNote = $alreadyFilled
+            ? "🟢 Giá đã tại vùng entry — bot theo dõi TP/SL ngay."
+            : "⏳ Chờ giá chạm entry <code>{$p['entry']}</code> — bot tự nhận khi khớp.";
+
         $this->telegram->reply(
             "✅ <b>Đã ghi vào hệ thống!</b>\n\n"
             . "{$dir} <b>{$signal->symbol}</b> | {$signal->timeframe}\n"
@@ -519,10 +529,11 @@ PROMPT;
             . "🛑 SL: <code>{$signal->sl_price}</code>\n"
             . "━━━━━━━━━━━━━━━\n"
             . "🆔 ID: <b>#{$signal->id}</b>\n"
-            . "🔔 Bot sẽ cảnh báo khi giá tiến gần TP/SL hoặc cấu trúc phá vỡ."
+            . $statusNote
         );
 
-        $this->info("  [{$signal->symbol}] Lệnh #{$signal->id} được tạo + fill từ Telegram.");
+        $fillStr = $alreadyFilled ? 'filled ngay' : 'chờ fill';
+        $this->info("  [{$signal->symbol}] Lệnh #{$signal->id} tạo từ Telegram — {$fillStr}.");
     }
 
     // ─── Slash command handlers ──────────────────────────────────────────────────
