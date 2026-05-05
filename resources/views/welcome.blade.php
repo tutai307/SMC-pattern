@@ -1251,6 +1251,16 @@
             window.addEventListener('popstate', e => {
                 if (e.state) navigate(e.state.sym, e.state.tf, e.state.method);
             });
+
+            // ── Auto-refresh analysis panel mỗi 2 phút ──
+            async function refreshAnalysis() {
+                try {
+                    const res  = await fetch(`/analysis.json?symbol=${currentSymbol}&timeframe=${currentTimeframe}&method=${currentMethod}`);
+                    const data = await res.json();
+                    if (!data.error) updateAnalysisPanel(data);
+                } catch(_) {}
+            }
+            setInterval(refreshAnalysis, 120000);
         })();
 
         // --- SYMBOL AUTOCOMPLETE ---

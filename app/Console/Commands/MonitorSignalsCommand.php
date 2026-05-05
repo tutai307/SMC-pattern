@@ -52,10 +52,15 @@ class MonitorSignalsCommand extends Command
     {
         $ts = now()->format('H:i:s');
 
-        // Bước 1: Tự động phát hiện lệnh khớp (filled_at IS NULL)
+        // Bước 1: Tự động phát hiện lệnh khớp + check cấu trúc cho unfilled
         $unfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
         foreach ($unfilled as $signal) {
             $this->autoDetectFill($signal);
+        }
+        // Re-fetch vì autoDetectFill có thể đã update filled_at
+        $stillUnfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
+        foreach ($stillUnfilled as $signal) {
+            $this->checkUnfilledStructure($signal);
         }
 
         // Bước 2: Theo dõi TP/SL/cấu trúc cho lệnh đã khớp (filled_at IS NOT NULL)
@@ -70,6 +75,27 @@ class MonitorSignalsCommand extends Command
         foreach ($pending as $signal) {
             $this->checkSignal($signal);
         }
+    }
+
+    private function checkUnfilledStructure(TradingSignal $signal): void
+    {
+        if ($signal->notified_structure_break) return;
+
+        $recentKlines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
+        if (empty($recentKlines)) return;
+
+        $structure       = $this->priceActionService->getStructure($recentKlines);
+        $isLong          = $signal->type === 'LONG';
+        $structureBroken = $isLong
+            ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
+            : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+
+        if (!$structureBroken) return;
+
+        $signal->update(['notified_structure_break' => true, 'status' => 'CANCELLED']);
+        $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+        $this->telegramService->sendPreEntryStructureBreak($signal, $currentPrice, $structure['trend']);
+        $this->info("  [{$signal->symbol}] 🚨 Cấu trúc phá vỡ (unfilled #{$signal->id}) → CANCELLED");
     }
 
     private function autoDetectFill(TradingSignal $signal): void
@@ -168,18 +194,18 @@ class MonitorSignalsCommand extends Command
             }
         }
 
-        // 4. Near TP (≤ 1.5% away by current price)
+        // 4. Near TP (≤ 2% away by current price)
         if (!$signal->notified_near_tp && $signal->tp_price > 0) {
-            if (abs($currentPrice - $signal->tp_price) / $signal->tp_price <= 0.015) {
+            if (abs($currentPrice - $signal->tp_price) / $signal->tp_price <= 0.02) {
                 $signal->update(['notified_near_tp' => true]);
                 $this->telegramService->sendNearTp($signal, $currentPrice);
                 $this->info("  [{$signal->symbol}] 🎯 Tiến gần TP ({$currentPrice} → {$signal->tp_price})");
             }
         }
 
-        // 5. Near SL (≤ 0.5% away by current price)
+        // 5. Near SL (≤ 1.5% away by current price)
         if (!$signal->notified_near_sl && $signal->sl_price > 0) {
-            if (abs($currentPrice - $signal->sl_price) / $signal->sl_price <= 0.005) {
+            if (abs($currentPrice - $signal->sl_price) / $signal->sl_price <= 0.015) {
                 $signal->update(['notified_near_sl' => true]);
                 $this->telegramService->sendNearSl($signal, $currentPrice);
                 $this->info("  [{$signal->symbol}] ⚠️ Tiến gần SL");

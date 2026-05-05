@@ -6,7 +6,13 @@
       "Bash(php artisan *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(php -l /Users/as-mi07/Projects/SMC-pattern/app/Console/Commands/MonitorSignalsCommand.php)",
+      "Bash(php -l /Users/as-mi07/Projects/SMC-pattern/app/Console/Commands/TelegramBotCommand.php)",
+      "Bash(php -l /Users/as-mi07/Projects/SMC-pattern/app/Services/TelegramService.php)",
+      "Bash(rtk --version)",
+      "Bash(brew search *)",
+      "Bash(brew install *)"
     ]
   }
 }

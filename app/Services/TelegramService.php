@@ -151,6 +151,23 @@ class TelegramService
         $this->send($text);
     }
 
+    public function sendPreEntryStructureBreak(TradingSignal $signal, float $currentPrice, string $newTrend): void
+    {
+        $dir = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
+
+        $text = "🚨 <b>SETUP VÔ HIỆU — CHƯA KHỚP</b>\n\n"
+              . "📊 <b>{$signal->symbol}</b> | {$signal->timeframe} | {$dir}\n"
+              . "━━━━━━━━━━━━━━━\n"
+              . "📌 Entry: <code>{$signal->entry_price}</code>\n"
+              . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
+              . "━━━━━━━━━━━━━━━\n"
+              . "🔍 Xu hướng mới: <b>{$newTrend}</b> — ngược chiều\n\n"
+              . "⚡ <b>Cấu trúc phá vỡ trước khi vào lệnh — đã huỷ tự động.</b>\n"
+              . "Dùng /cancel {$signal->id} nếu cần xác nhận thủ công.";
+
+        $this->send($text);
+    }
+
     public function sendStructureBreak(TradingSignal $signal, float $currentPrice, string $newTrend): void
     {
         $dir    = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';

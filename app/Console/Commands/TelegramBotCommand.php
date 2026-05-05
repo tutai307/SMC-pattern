@@ -429,6 +429,49 @@ PROMPT;
             return;
         }
 
+        // Validate setup vẫn còn hợp lệ trước khi lưu
+        $currentPrice = (float) $this->binance->getPrice($p['symbol']);
+        $isLong       = $p['type'] === 'LONG';
+
+        // Kiểm tra SL chưa bị chạm
+        $slHit = $isLong ? ($currentPrice <= (float) $p['sl']) : ($currentPrice >= (float) $p['sl']);
+        if ($slHit) {
+            Cache::forget($pendingKey);
+            $this->telegram->reply(
+                "⚠️ <b>Setup đã vô hiệu!</b>\n\n"
+                . "Giá hiện tại <code>{$currentPrice}</code> đã vượt qua SL <code>{$p['sl']}</code>.\n"
+                . "Lệnh bị huỷ tự động — không nên vào. Phân tích lại."
+            );
+            return;
+        }
+
+        // Kiểm tra cấu trúc thị trường
+        $klines    = $this->binance->getKlines($p['symbol'], $p['timeframe'], 100);
+        $structure = $this->priceAction->getStructure($klines);
+        $broken    = $isLong
+            ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
+            : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+
+        if ($broken) {
+            Cache::forget($pendingKey);
+            $this->telegram->reply(
+                "🚨 <b>Cấu trúc đã đảo chiều!</b>\n\n"
+                . "Xu hướng mới: <b>{$structure['trend']}</b> — ngược chiều lệnh {$p['type']}.\n"
+                . "Setup không còn hợp lệ. Không vào lệnh."
+            );
+            return;
+        }
+
+        // Cảnh báo nếu giá đã di chuyển xa entry (> 1%)
+        $distPct = $p['entry'] > 0 ? round(abs($currentPrice - $p['entry']) / $p['entry'] * 100, 2) : 0;
+        if ($distPct > 1) {
+            $this->telegram->reply(
+                "⚠️ Giá đã cách entry <b>{$distPct}%</b> kể từ khi phân tích.\n"
+                . "Entry: <code>{$p['entry']}</code> | Giá hiện tại: <code>{$currentPrice}</code>\n"
+                . "Vẫn tiếp tục ghi lệnh..."
+            );
+        }
+
         Cache::forget($pendingKey);
 
         $signal = TradingSignal::create([
