@@ -107,11 +107,17 @@ class TelegramBotCommand extends Command
         $hasPending     = Cache::has($pendingKey) || Cache::has($scanPendingKey);
 
         // Xác nhận vào lệnh
+        $isConfirmWord = false;
         foreach ($this->confirmWords as $w) {
-            if ($hasPending && str_contains($lower, $w)) {
+            if (str_contains($lower, $w)) { $isConfirmWord = true; break; }
+        }
+        if ($isConfirmWord) {
+            if ($hasPending) {
                 $this->confirmPendingSignal();
-                return;
+            } else {
+                $this->telegram->reply("Không có lệnh nào đang chờ xác nhận.\n\nNhắn tên coin để phân tích, ví dụ: <code>xagusdt h1</code>");
             }
+            return;
         }
 
         // Từ chối lệnh

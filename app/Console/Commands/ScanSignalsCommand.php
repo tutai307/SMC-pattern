@@ -131,7 +131,7 @@ class ScanSignalsCommand extends Command
             'winrate'   => $signal['winrate'] ?? 0,
             'reason'    => $signal['reason'] ?? '',
             'capital'   => 0,
-        ], now()->addMinutes(30));
+        ], now()->addHours(8));
 
         $this->info('[' . now()->format('H:i:s') . "] ✅ Gửi alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
     }
