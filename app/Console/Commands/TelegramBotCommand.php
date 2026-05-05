@@ -25,8 +25,9 @@ class TelegramBotCommand extends Command
     ];
 
     // Từ đồng nghĩa xác nhận / từ chối
-    private array $confirmWords = ['có', 'co', 'ok', 'yes', 'ừ', 'u', 'vào', 'vao', 'theo dõi', 'ghi', 'xác nhận', 'xac nhan', 'đồng ý', 'dong y'];
-    private array $rejectWords  = ['không', 'khong', 'no', 'thôi', 'thoi', 'bỏ', 'bo', 'hủy', 'huy', 'cancel', 'skip', 'bỏ qua'];
+    // Dùng word boundary (\b) khi match, và chỉ áp dụng khi message ≤ 3 từ
+    private array $confirmWords = ['có', 'ok', 'yes', 'ừ', 'vào', 'vao', 'theo dõi', 'ghi', 'xác nhận', 'xac nhan', 'đồng ý', 'dong y'];
+    private array $rejectWords  = ['không', 'khong', 'no', 'thôi', 'thoi', 'hủy', 'huy', 'cancel', 'skip', 'bỏ qua'];
 
     public function __construct(
         private TelegramService    $telegram,
@@ -106,27 +107,32 @@ class TelegramBotCommand extends Command
         $scanPendingKey = "scan_pending_{$this->chatId}";
         $hasPending     = Cache::has($pendingKey) || Cache::has($scanPendingKey);
 
-        // Xác nhận vào lệnh
-        $isConfirmWord = false;
-        foreach ($this->confirmWords as $w) {
-            if (str_contains($lower, $w)) { $isConfirmWord = true; break; }
-        }
-        if ($isConfirmWord) {
-            if ($hasPending) {
-                $this->confirmPendingSignal();
-            } else {
-                $this->telegram->reply("Không có lệnh nào đang chờ xác nhận.\n\nNhắn tên coin để phân tích, ví dụ: <code>xagusdt h1</code>");
+        // Xác nhận / từ chối — chỉ áp dụng khi message ngắn (≤ 3 từ)
+        $wordCount = count(array_filter(preg_split('/\s+/u', trim($text))));
+        if ($wordCount <= 3) {
+            $isConfirmWord = false;
+            foreach ($this->confirmWords as $w) {
+                if (preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
+                    $isConfirmWord = true;
+                    break;
+                }
             }
-            return;
-        }
-
-        // Từ chối lệnh
-        foreach ($this->rejectWords as $w) {
-            if ($hasPending && str_contains($lower, $w)) {
-                Cache::forget($pendingKey);
-                Cache::forget($scanPendingKey);
-                $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
+            if ($isConfirmWord) {
+                if ($hasPending) {
+                    $this->confirmPendingSignal();
+                } else {
+                    $this->telegram->reply("Không có lệnh nào đang chờ xác nhận.\n\nNhắn tên coin để phân tích, ví dụ: <code>xagusdt h1</code>");
+                }
                 return;
+            }
+
+            foreach ($this->rejectWords as $w) {
+                if ($hasPending && preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
+                    Cache::forget($pendingKey);
+                    Cache::forget($scanPendingKey);
+                    $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
+                    return;
+                }
             }
         }
 
