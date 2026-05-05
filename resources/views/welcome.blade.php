@@ -6,7 +6,9 @@
     </style>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tom AI - Price Action Terminal</title>
+    <title>${{ number_format($currentPrice, $currentPrice < 10 ? 4 : 2) }} {{ $symbol }} — TOM AI</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="shortcut icon" href="/favicon.ico">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="{{ asset('css/dashboard.css') }}?v=3">
     @vite(['resources/js/app.js'])
@@ -37,13 +39,18 @@
 
             <div class="flex items-center gap-2 md:gap-6">
                 <!-- Search: desktop only -->
-                <form action="/" method="GET" class="relative group hidden md:block">
-                    <input type="text" name="symbol" value="{{ $symbol }}"
-                        class="bg-white/5 border border-white/10 rounded-lg px-4 py-1.5 text-sm focus:outline-none focus:border-blue-500/50 w-32 transition-all group-hover:w-48 font-mono uppercase"
-                        placeholder="Search Symbol...">
-                    <button type="submit" class="absolute right-3 top-2 text-slate-500 hover:text-blue-400">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                    </button>
+                <form action="/" method="GET" class="relative hidden md:block" id="symbol-form-desktop">
+                    <input type="hidden" name="timeframe" value="{{ $timeframe }}">
+                    <input type="hidden" name="method" value="{{ $method }}">
+                    <div class="symbol-autocomplete" data-form="symbol-form-desktop">
+                        <input type="text" name="symbol" value="{{ $symbol }}" autocomplete="off"
+                            class="bg-white/5 border border-white/10 rounded-lg px-4 py-1.5 pr-9 text-sm focus:outline-none focus:border-blue-500/50 w-36 transition-all focus:w-52 font-mono uppercase placeholder:normal-case"
+                            placeholder="Search symbol...">
+                        <button type="submit" class="absolute right-3 top-2 text-slate-500 hover:text-blue-400">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </button>
+                        <ul class="symbol-dropdown hidden absolute z-50 top-full mt-1 left-0 w-64 bg-[#141923] border border-white/10 rounded-xl shadow-2xl overflow-hidden max-h-72 overflow-y-auto"></ul>
+                    </div>
                 </form>
 
                 <div class="text-right">
@@ -71,13 +78,18 @@
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
                 <span>PLAN</span>
             </a>
-            <form action="/" method="GET" class="relative flex-1">
-                <input type="text" name="symbol" value="{{ $symbol }}"
-                    class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500/50 w-full font-mono uppercase"
-                    placeholder="Tìm coin...">
-                <button type="submit" class="absolute right-2.5 top-2 text-slate-500 hover:text-blue-400">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                </button>
+            <form action="/" method="GET" class="relative flex-1" id="symbol-form-mobile">
+                <input type="hidden" name="timeframe" value="{{ $timeframe }}">
+                <input type="hidden" name="method" value="{{ $method }}">
+                <div class="symbol-autocomplete" data-form="symbol-form-mobile">
+                    <input type="text" name="symbol" value="{{ $symbol }}" autocomplete="off"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 pr-9 text-sm focus:outline-none focus:border-blue-500/50 w-full font-mono uppercase placeholder:normal-case"
+                        placeholder="Tìm symbol...">
+                    <button type="submit" class="absolute right-2.5 top-2 text-slate-500 hover:text-blue-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    </button>
+                    <ul class="symbol-dropdown hidden absolute z-50 top-full mt-1 left-0 right-0 bg-[#141923] border border-white/10 rounded-xl shadow-2xl overflow-hidden max-h-64 overflow-y-auto"></ul>
+                </div>
             </form>
         </div>
     </header>
@@ -714,6 +726,8 @@
                     priceEl.style.color = price >= old ? '#22c55e' : '#ef4444';
                     priceEl.textContent = '$' + fmt;
                     priceEl.dataset.lastPrice = price;
+                    const sym = "{{ strtoupper($symbol) }}";
+                    document.title = `$${fmt} ${sym} — TOM AI`;
                 };
 
                 ws.onclose = () => setTimeout(connect, 2000);
@@ -754,9 +768,13 @@
 
                 candleSeries.setData(candleData);
 
-                // Reveal chart, hide skeleton
-                document.getElementById('chart-skeleton').style.display = 'none';
-                document.getElementById('chart').style.display = '';
+                // Show chart after 2 animation frames so skeleton is visible during heavy render
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    document.getElementById('chart-skeleton').style.transition = 'opacity 0.3s';
+                    document.getElementById('chart-skeleton').style.opacity = '0';
+                    document.getElementById('chart').style.display = '';
+                    setTimeout(() => { document.getElementById('chart-skeleton').style.display = 'none'; }, 320);
+                }));
 
                 // Draw Order Blocks as Price Lines or Rectangles
                 analysis.orderBlocks.forEach(ob => {
@@ -969,6 +987,86 @@
             row.style.background = 'rgba(59, 130, 246, 0.12)';
             setTimeout(() => { row.style.background = ''; }, 1200);
         }
+
+        // --- SYMBOL AUTOCOMPLETE ---
+        (function() {
+            const SYMBOLS = [
+                // Majors
+                'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','ADAUSDT','AVAXUSDT','DOGEUSDT','TRXUSDT','DOTUSDT',
+                'MATICUSDT','LINKUSDT','LTCUSDT','UNIUSDT','ATOMUSDT','ETCUSDT','XLMUSDT','NEARUSDT','APTUSDT','ARBUSDT',
+                // Mid caps
+                'OPUSDT','INJUSDT','SUIUSDT','SEIUSDT','TIAUSDT','WLDUSDT','ORDIUSDT','STXUSDT','MINAUSDT','KASUSDT',
+                'RUNEUSDT','FETUSDT','RENDERUSDT','IMXUSDT','SANDUSDT','MANAUSDT','AXSUSDT','GALAUSDT','FTMUSDT','ALGOUSDT',
+                'VETUSDT','ICPUSDT','AAVEUSDT','SNXUSDT','MKRUSDT','COMPUSDT','CRVUSDT','1INCHUSDT','LDOUSDT','RPLSUSDT',
+                // Metals & others
+                'XAGUSDT','XAUUSDT',
+                // More futures
+                'GMXUSDT','DYDXUSDT','PERPUSDT','BLURUSDT','JOEUSDT','PENDLEUSDT','WIFUSDT','BONKUSDT','PEPEUSDT',
+                'FLOKIUSDT','SHIBUSDT','BOMEUSDT','JUPUSDT','PYTHUSDT','WUSDT','ENAUSDT','EIGENUSDT','REZUSDT',
+            ];
+
+            document.querySelectorAll('.symbol-autocomplete').forEach(function(wrapper) {
+                const input = wrapper.querySelector('input[name="symbol"]');
+                const dropdown = wrapper.querySelector('.symbol-dropdown');
+                const formId = wrapper.dataset.form;
+                const form = document.getElementById(formId);
+                let activeIdx = -1;
+
+                function renderDropdown(q) {
+                    const filtered = q
+                        ? SYMBOLS.filter(s => s.includes(q.toUpperCase())).slice(0, 20)
+                        : SYMBOLS.slice(0, 20);
+
+                    if (!filtered.length) { dropdown.classList.add('hidden'); return; }
+
+                    dropdown.innerHTML = filtered.map((s, i) => {
+                        const base = s.replace('USDT','');
+                        const isActive = s === input.value.toUpperCase();
+                        return `<li data-symbol="${s}" data-idx="${i}"
+                            class="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-white/5 transition-colors ${isActive ? 'bg-blue-600/20 text-blue-300' : 'text-slate-200'} text-sm font-mono">
+                            <span class="w-6 h-6 rounded-md bg-white/5 flex items-center justify-center text-[9px] font-bold text-slate-400">${base.slice(0,3)}</span>
+                            <span class="font-semibold tracking-wide">${s.replace('USDT','')}<span class="text-slate-500 font-normal">/USDT</span></span>
+                        </li>`;
+                    }).join('');
+
+                    dropdown.querySelectorAll('li').forEach(li => {
+                        li.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            input.value = this.dataset.symbol;
+                            dropdown.classList.add('hidden');
+                            form.submit();
+                        });
+                    });
+
+                    activeIdx = -1;
+                    dropdown.classList.remove('hidden');
+                }
+
+                input.addEventListener('focus', function() { renderDropdown(this.value); });
+                input.addEventListener('input', function() { renderDropdown(this.value); activeIdx = -1; });
+                input.addEventListener('blur', function() { setTimeout(() => dropdown.classList.add('hidden'), 150); });
+
+                input.addEventListener('keydown', function(e) {
+                    const items = dropdown.querySelectorAll('li');
+                    if (!items.length) return;
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        activeIdx = Math.min(activeIdx + 1, items.length - 1);
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        activeIdx = Math.max(activeIdx - 1, 0);
+                    } else if (e.key === 'Enter' && activeIdx >= 0) {
+                        e.preventDefault();
+                        input.value = items[activeIdx].dataset.symbol;
+                        dropdown.classList.add('hidden');
+                        form.submit();
+                        return;
+                    } else { return; }
+                    items.forEach((li, i) => li.classList.toggle('bg-white/10', i === activeIdx));
+                    items[activeIdx]?.scrollIntoView({ block: 'nearest' });
+                });
+            });
+        })();
 
         // --- CHECKBOX & BULK DELETE LOGIC ---
         document.addEventListener('DOMContentLoaded', function() {
