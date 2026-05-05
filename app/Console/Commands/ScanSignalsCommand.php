@@ -85,6 +85,26 @@ class ScanSignalsCommand extends Command
             return;
         }
 
+        // ── Bộ lọc AI: bắt buộc phải qua đánh giá trước khi gửi Telegram ──
+        $aiScore = (int) ($signal['ai_score'] ?? 0);
+        $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
+        $aiError = $signal['ai_error'] ?? null;
+
+        if ($aiError) {
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI lỗi ({$aiError}), bỏ qua để tránh sai lầm");
+            return;
+        }
+
+        if ($aiScore < 60) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI score {$aiScore}/100 < 60, bỏ qua");
+            return;
+        }
+
+        if (str_starts_with($aiRec, 'BỎ QUA')) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI recommend BỎ QUA, bỏ qua");
+            return;
+        }
+
         // Dedup: cùng entry (round 4 chữ số) + type = cùng setup, bỏ qua
         $entryKey = round((float) $signal['entry'], 4);
         $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$signal['type']}_{$entryKey}";
@@ -97,6 +117,6 @@ class ScanSignalsCommand extends Command
         Cache::put($dedupKey, true, now()->addHours(2));
 
         $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice);
-        $this->info('[' . now()->format('H:i:s') . "] ✅ Gửi alert: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        $this->info('[' . now()->format('H:i:s') . "] ✅ Gửi alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
     }
 }

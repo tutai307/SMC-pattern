@@ -319,6 +319,21 @@ class TelegramService
             ? "Giá đang <b>tại/dưới entry</b> ({$priceDiff}% cách entry)"
             : "Giá cách entry <b>{$priceDiff}%</b> — chờ retest";
 
+        // AI verdict block
+        $aiScore   = (int) ($signal['ai_score']          ?? 0);
+        $aiAnalysis = $signal['ai_analysis']              ?? '';
+        $aiRisk     = $signal['ai_risk']                  ?? '';
+        $aiRec      = $signal['ai_recommendation']        ?? '';
+        $aiTiming   = $signal['ai_entry_timing']          ?? '';
+
+        $aiEmoji  = $aiScore >= 75 ? '🟢' : ($aiScore >= 60 ? '🟡' : '🔴');
+        $aiBlock  = "━━━━━━━━━━━━━━━\n"
+                  . "🤖 <b>AI Verdict: {$aiEmoji} {$aiScore}/100</b>\n";
+        if ($aiAnalysis) $aiBlock .= "🔍 {$aiAnalysis}\n";
+        if ($aiRisk)     $aiBlock .= "⚠️ {$aiRisk}\n";
+        if ($aiRec)      $aiBlock .= "💡 <b>{$aiRec}</b>\n";
+        if ($aiTiming)   $aiBlock .= "⏱ {$aiTiming}\n";
+
         $appUrl = rtrim(env('APP_URL', 'http://localhost'), '/');
         $link   = "{$appUrl}/?symbol={$symbol}&timeframe={$timeframe}";
 
@@ -335,6 +350,7 @@ class TelegramService
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
             . "📍 {$proximity}\n"
+            . $aiBlock
             . "━━━━━━━━━━━━━━━\n"
             . "🔍 <i>{$reason}</i>\n\n"
             . "🖥 <a href=\"{$link}\">Xem chart →</a>"
