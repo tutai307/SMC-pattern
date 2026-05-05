@@ -860,7 +860,7 @@ class PriceActionService
 
         return \Illuminate\Support\Facades\Cache::remember($cacheKey, 600, function() use ($apiKey, $signal, $recentCandles, $structure, $htfStructure, $method, $symbol, $timeframe, $indicators) {
             try {
-                $client = new \GuzzleHttp\Client();
+                $client = new \GuzzleHttp\Client(['timeout' => 8, 'connect_timeout' => 4]);
 
                 // Chỉ gửi 20 giá đóng cửa gần nhất — đủ để AI đánh giá momentum, tiết kiệm token
                 $closes = array_map(fn($c) => round($c['close'], 4), array_slice($recentCandles, -20));
@@ -925,8 +925,18 @@ PROMPT;
                     $signal['ai_risk']            = is_array($aiData['risk_warning'] ?? null) ? implode(' ', $aiData['risk_warning']) : ($aiData['risk_warning'] ?? '');
                     $signal['ai_recommendation']  = is_array($aiData['recommendation'] ?? null) ? implode(' ', $aiData['recommendation']) : ($aiData['recommendation'] ?? '');
                 }
+            } catch (\GuzzleHttp\Exception\ConnectException $e) {
+                \Log::warning('AI score: connect timeout');
+                $signal['ai_score'] = 50;
+                $signal['ai_error'] = 'AI timeout — dùng score mặc định';
+            } catch (\GuzzleHttp\Exception\RequestException $e) {
+                \Log::warning('AI score: request error ' . $e->getMessage());
+                $signal['ai_score'] = 50;
+                $signal['ai_error'] = 'AI unavailable';
             } catch (\Exception $e) {
-                $signal['ai_error'] = 'OpenRouter Error: ' . $e->getMessage();
+                \Log::warning('AI score: ' . $e->getMessage());
+                $signal['ai_score'] = 50;
+                $signal['ai_error'] = 'AI error';
             }
 
             return $signal;

@@ -24,9 +24,11 @@ class DashboardController extends Controller
 
     public function index()
     {
-        $symbol = request('symbol', 'XAGUSDT');
-        $timeframe = request('timeframe', '15m');
-        $method = request('method', 'smc');
+        $symbol    = strtoupper(preg_replace('/[^A-Z0-9]/i', '', request('symbol', 'XAGUSDT')));
+        $symbol    = substr($symbol, 0, 20) ?: 'XAGUSDT';
+        $timeframe = in_array(request('timeframe'), ['1m','5m','15m','1h','4h','1d']) ? request('timeframe') : '15m';
+        $method    = in_array(request('method'), ['smc','elliot']) ? request('method') : 'smc';
+        $capital   = request('capital') ? max(0, (float) request('capital')) : null;
         
         $klines = $this->binanceService->getKlines($symbol, $timeframe, 500);
         $currentPrice = $this->binanceService->getPrice($symbol);
@@ -57,7 +59,7 @@ class DashboardController extends Controller
                     'sl_price'     => $analysis['signal']['sl'],
                     'winrate'      => $analysis['signal']['winrate'],
                     'reason'       => $analysis['signal']['reason'],
-                    'capital'      => request('capital') ?: null,
+                    'capital'      => $capital,
                     'status'       => 'PENDING',
                 ]);
 
