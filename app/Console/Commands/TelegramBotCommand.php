@@ -740,16 +740,91 @@ PROMPT;
             return;
         }
 
-        $lines = ["📋 <b>Lệnh đang theo dõi:</b>\n"];
+        $lines   = ["📋 <b>Lệnh đang theo dõi:</b>\n"];
+        $running = [];
         foreach ($signals as $s) {
             $filled  = $s->filled_at ? '🟢 ĐANG CHẠY' : '⏳ CHỜ KHỚP';
             $dir     = $s->type === 'LONG' ? '📈' : '📉';
             $lines[] = "{$dir} <b>#{$s->id} {$s->symbol}</b> {$s->timeframe} — {$filled}";
             $lines[] = "   Entry: <code>{$s->entry_price}</code> | TP: <code>{$s->tp_price}</code> | SL: <code>{$s->sl_price}</code>";
             $lines[] = "";
+            if ($s->filled_at) $running[] = $s;
         }
 
         $this->telegram->reply(implode("\n", $lines));
+
+        if (empty($running)) return;
+
+        $this->telegram->reply("🤖 Đang đánh giá <b>" . count($running) . " lệnh đang chạy</b>... (~15s/lệnh)");
+
+        foreach ($running as $s) {
+            $this->reviewRunningSignal($s);
+        }
+    }
+
+    private function reviewRunningSignal(\App\Models\TradingSignal $signal): void
+    {
+        $htfMap = ['1m' => '5m', '5m' => '15m', '15m' => '1h', '1h' => '4h', '4h' => '1d', '1d' => '1w'];
+        $htf    = $htfMap[$signal->timeframe] ?? '4h';
+
+        try {
+            $klines       = $this->binance->getKlines($signal->symbol, $signal->timeframe, 200);
+            $klinesHTF    = $this->binance->getKlines($signal->symbol, $htf, 100);
+            $currentPrice = (float) $this->binance->getPrice($signal->symbol);
+
+            if (empty($klines)) {
+                $this->telegram->reply("❌ Không lấy được klines cho #{$signal->id} {$signal->symbol}.");
+                return;
+            }
+
+            $advice = $this->priceAction->adviseOpenPosition(
+                $klines, $klinesHTF,
+                $signal->symbol, $signal->timeframe, $signal->type,
+                (float) $signal->entry_price,
+                (float) $signal->sl_price,
+                (float) $signal->tp_price,
+                $currentPrice
+            );
+
+            $isLong  = $signal->type === 'LONG';
+            $pnlPct  = $signal->entry_price > 0
+                ? round((($isLong ? ($currentPrice - $signal->entry_price) : ($signal->entry_price - $currentPrice)) / $signal->entry_price) * 100, 2)
+                : 0;
+            $pnlSign = $pnlPct >= 0 ? "+{$pnlPct}%" : "{$pnlPct}%";
+            $pnlEmoji = $pnlPct >= 0 ? '🟢' : '🔴';
+
+            $verdict = strtoupper($advice['verdict'] ?? '');
+            $verdictEmoji = match (true) {
+                str_contains($verdict, 'GIỮ')       => '✋',
+                str_contains($verdict, 'CHỐT LỜI')  => '💰',
+                str_contains($verdict, 'CẮT LỖ')    => '🔴',
+                str_contains($verdict, 'DI CHUYỂN')  => '🔧',
+                str_contains($verdict, 'ĐIỀU CHỈNH') => '🔧',
+                str_contains($verdict, '50%')        => '⚖️',
+                default                              => '💡',
+            };
+
+            $msg = "🔍 <b>Đánh giá #{$signal->id} — {$signal->symbol} {$signal->type}</b>\n"
+                 . "━━━━━━━━━━━━━━━\n"
+                 . "💰 Giá: <code>{$currentPrice}</code> | P&L: {$pnlEmoji} <b>{$pnlSign}</b>\n"
+                 . "📌 Entry: <code>{$signal->entry_price}</code> | TP: <code>{$signal->tp_price}</code> | SL: <code>{$signal->sl_price}</code>\n"
+                 . "━━━━━━━━━━━━━━━\n"
+                 . "{$verdictEmoji} <b>Phán quyết: {$advice['verdict']}</b>\n"
+                 . "🔍 {$advice['analysis']}";
+
+            if (!empty($advice['sl_advice'])) {
+                $msg .= "\n🛑 SL: {$advice['sl_advice']}";
+            }
+            if (!empty($advice['tp_advice'])) {
+                $msg .= "\n🎯 TP: {$advice['tp_advice']}";
+            }
+
+            $this->telegram->reply($msg);
+
+        } catch (\Exception $e) {
+            $this->telegram->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
+            \Log::error('reviewRunningSignal: ' . $e->getMessage());
+        }
     }
 
     private function cmdSignal(array $args): void
