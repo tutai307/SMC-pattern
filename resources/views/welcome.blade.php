@@ -161,15 +161,17 @@
             <div class="glass-card p-3 md:p-6" id="analysis-panel">
                 <div class="mb-4">
                     <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Dự đoán Vào lệnh AI</h3>
-                    <form action="{{ url()->current() }}" method="GET" class="flex items-center gap-2">
+                    <form id="propose-form" action="{{ url()->current() }}" method="GET" class="flex items-center gap-2"
+                          data-sl="{{ $analysis['signal']['sl'] ?? '' }}"
+                          data-rr="{{ isset($analysis['signal']['entry'], $analysis['signal']['sl'], $analysis['signal']['tp']) ? round(abs($analysis['signal']['tp'] - $analysis['signal']['entry']) / max(abs($analysis['signal']['entry'] - $analysis['signal']['sl']), 0.000001), 1) : '0' }}">
                         <input type="hidden" name="symbol" value="{{ request('symbol', $symbol) }}">
                         <input type="hidden" name="timeframe" value="{{ request('timeframe', $timeframe) }}">
                         <input type="hidden" name="method" value="{{ request('method', $method ?? 'smc') }}">
                         <input type="hidden" name="propose" value="1">
 
-                        <input type="number" name="capital" value="{{ request('capital', 100) }}" placeholder="Vốn ($)" class="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[10px] flex-1 min-w-0 text-white focus:outline-none focus:border-blue-500/50" min="1" step="any" required>
+                        <input type="number" name="capital" id="capital-input" value="{{ request('capital', 100) }}" placeholder="Vốn ($)" class="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[10px] flex-1 min-w-0 text-white focus:outline-none focus:border-blue-500/50" min="1" step="any" required>
 
-                        <button type="submit" class="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1.5 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all font-bold whitespace-nowrap flex-shrink-0">
+                        <button type="submit" id="propose-btn" class="text-[10px] bg-blue-500/20 text-blue-400 px-3 py-1.5 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-all font-bold whitespace-nowrap flex-shrink-0">
                             ĐỀ XUẤT LỆNH
                         </button>
                     </form>
@@ -740,6 +742,58 @@
         </div>
     </div>
 
+    <!-- ════ PRE-FLIGHT MODAL ════ -->
+    <div id="preflight-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-[#141923] border border-blue-500/20 rounded-2xl p-5 max-w-sm w-full shadow-2xl shadow-blue-500/10">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h3 class="text-white font-bold text-sm">📋 Pre-flight Check</h3>
+                    <p class="text-slate-500 text-[10px] mt-0.5">Kiểm tra tâm lý trước khi vào lệnh</p>
+                </div>
+                <button onclick="closePreflight()" class="text-slate-600 hover:text-slate-400 text-lg leading-none">✕</button>
+            </div>
+
+            <!-- 3 câu hỏi -->
+            <div class="space-y-3 mb-4">
+                <label id="pf-label-1" class="flex items-start gap-3 cursor-pointer group p-2.5 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
+                    <input type="checkbox" id="pf-q1" class="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-0 focus:ring-offset-0 cursor-pointer shrink-0">
+                    <span class="text-[11px] text-slate-400 leading-relaxed group-hover:text-slate-300 transition-colors">
+                        SL tại <code id="pf-sl-price" class="text-red-400 font-mono">—</code> — nếu chạm đây, kịch bản của tôi <strong class="text-white">hoàn toàn bị bác bỏ</strong>?
+                    </span>
+                </label>
+                <label id="pf-label-2" class="flex items-start gap-3 cursor-pointer group p-2.5 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
+                    <input type="checkbox" id="pf-q2" class="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-0 focus:ring-offset-0 cursor-pointer shrink-0">
+                    <span class="text-[11px] text-slate-400 leading-relaxed group-hover:text-slate-300 transition-colors">
+                        Tôi vào lệnh này vì <strong class="text-white">CẤU TRÚC THỊ TRƯỜNG</strong>, không phải vì "hy vọng"?
+                    </span>
+                </label>
+                <label id="pf-label-3" class="flex items-start gap-3 cursor-pointer group p-2.5 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
+                    <input type="checkbox" id="pf-q3" class="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-0 focus:ring-offset-0 cursor-pointer shrink-0">
+                    <span class="text-[11px] text-slate-400 leading-relaxed group-hover:text-slate-300 transition-colors">
+                        Nếu giá đi ngược và tôi thua <strong id="pf-risk-amt" class="text-red-400">2% vốn</strong>, tôi chấp nhận như <strong class="text-white">chi phí vận hành</strong> — không hối tiếc?
+                    </span>
+                </label>
+            </div>
+
+            <!-- Inverse Rule reminder -->
+            <div class="bg-slate-900/60 border border-white/[0.06] rounded-xl p-3 mb-4 text-[10px] space-y-1">
+                <p class="text-slate-500 font-bold uppercase tracking-wider mb-1.5">💡 Inverse Rule</p>
+                <p class="text-green-400/80">↗ <strong>Lệnh lời</strong> → <em>Hy vọng</em> xu hướng đi xa. Chỉ đóng khi cấu trúc đảo chiều.</p>
+                <p class="text-red-400/80">↘ <strong>Lệnh lỗ</strong> → <em>Sợ hãi</em>, cắt tại SL. Không nới SL, không trung bình giá xuống.</p>
+            </div>
+
+            <!-- Actions -->
+            <div class="flex gap-2.5">
+                <button onclick="closePreflight()" class="flex-1 text-[11px] text-slate-400 hover:text-white py-2.5 border border-white/10 rounded-xl hover:bg-white/5 transition-all font-semibold">
+                    Huỷ
+                </button>
+                <button id="pf-submit" disabled onclick="submitAfterPreflight()"
+                    class="flex-1 text-[11px] font-bold py-2.5 rounded-xl transition-all disabled:opacity-25 disabled:cursor-not-allowed bg-blue-600 text-white hover:bg-blue-500">
+                    ✅ Xác nhận vào lệnh
+                </button>
+            </div>
+        </div>
+    </div>
 
     <script>
         // Global state — mutable by SPA engine
@@ -1674,5 +1728,94 @@
             <div id="advisor-result" class="px-5 pb-5"></div>
         </div>
     </div>
+
+    <script>
+    // ════ PRE-FLIGHT MODAL ════
+    (function() {
+        const modal      = document.getElementById('preflight-modal');
+        const submitBtn  = document.getElementById('pf-submit');
+        const checkboxes = ['pf-q1','pf-q2','pf-q3'].map(id => document.getElementById(id));
+        let   pendingForm = null;
+
+        function updateSubmitState() {
+            const allChecked = checkboxes.every(cb => cb && cb.checked);
+            submitBtn.disabled = !allChecked;
+            if (allChecked) {
+                submitBtn.classList.remove('opacity-25','cursor-not-allowed');
+            } else {
+                submitBtn.classList.add('opacity-25','cursor-not-allowed');
+            }
+            // Visual feedback per label
+            checkboxes.forEach((cb, i) => {
+                const label = document.getElementById('pf-label-' + (i + 1));
+                if (!label) return;
+                if (cb && cb.checked) {
+                    label.classList.add('border-blue-500/30','bg-blue-500/5');
+                    label.classList.remove('border-white/5');
+                } else {
+                    label.classList.remove('border-blue-500/30','bg-blue-500/5');
+                    label.classList.add('border-white/5');
+                }
+            });
+        }
+
+        checkboxes.forEach(cb => cb && cb.addEventListener('change', updateSubmitState));
+
+        window.openPreflight = function(form) {
+            pendingForm = form;
+
+            // Lấy SL price và risk amount từ form data-attributes
+            const slPrice = form.dataset.sl || '—';
+            const capital = parseFloat(document.getElementById('capital-input')?.value || 0);
+            const riskAmt = capital > 0 ? '$' + (capital * 0.02).toFixed(2) : '2% vốn';
+
+            document.getElementById('pf-sl-price').textContent = slPrice;
+            document.getElementById('pf-risk-amt').textContent = riskAmt;
+
+            // Reset checkboxes
+            checkboxes.forEach(cb => { if (cb) cb.checked = false; });
+            checkboxes.forEach((cb, i) => {
+                const label = document.getElementById('pf-label-' + (i + 1));
+                if (label) { label.classList.remove('border-blue-500/30','bg-blue-500/5'); label.classList.add('border-white/5'); }
+            });
+            updateSubmitState();
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        };
+
+        window.closePreflight = function() {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            pendingForm = null;
+        };
+
+        window.submitAfterPreflight = function() {
+            if (pendingForm) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                pendingForm.submit();
+            }
+        };
+
+        // Đóng khi click overlay
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) closePreflight();
+        });
+
+        // Intercept propose form
+        const proposeForm = document.getElementById('propose-form');
+        if (proposeForm) {
+            proposeForm.addEventListener('submit', function(e) {
+                // Chỉ intercept nếu có tín hiệu (sl > 0)
+                if (this.dataset.sl && parseFloat(this.dataset.sl) > 0) {
+                    e.preventDefault();
+                    openPreflight(this);
+                }
+                // Nếu không có signal (sl = ''), cho submit bình thường
+            });
+        }
+    })();
+    </script>
 </body>
 </html>

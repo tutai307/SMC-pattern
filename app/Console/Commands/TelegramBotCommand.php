@@ -105,9 +105,31 @@ class TelegramBotCommand extends Command
         $lower          = mb_strtolower($text);
         $pendingKey     = "tg_pending_{$this->chatId}";
         $scanPendingKey = "scan_pending_{$this->chatId}";
+        $preflightKey   = "tg_preflight_{$this->chatId}";
         $hasPending     = Cache::has($pendingKey) || Cache::has($scanPendingKey);
+        $hasPreflight   = Cache::has($preflightKey);
 
-        // Xác nhận / từ chối — chỉ áp dụng khi message ngắn (≤ 3 từ)
+        // ── Bước 2 (Pre-flight đang chờ): confirm hoặc hủy ──
+        if ($hasPreflight) {
+            foreach ($this->rejectWords as $w) {
+                if (preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
+                    Cache::forget($preflightKey);
+                    Cache::forget($pendingKey);
+                    Cache::forget($scanPendingKey);
+                    $this->telegram->reply("Đã huỷ lệnh. Nhắn lại bất cứ lúc nào.");
+                    return;
+                }
+            }
+            foreach ($this->confirmWords as $w) {
+                if (preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
+                    $this->completePreflight($text);
+                    return;
+                }
+            }
+            // Không phải confirm/reject → rơi xuống AI
+        }
+
+        // ── Bước 1: Confirm ngắn → gửi pre-flight check ──
         $wordCount = count(array_filter(preg_split('/\s+/u', trim($text))));
         if ($wordCount <= 3) {
             $isConfirmWord = false;
@@ -119,7 +141,7 @@ class TelegramBotCommand extends Command
             }
             if ($isConfirmWord) {
                 if ($hasPending) {
-                    $this->confirmPendingSignal();
+                    $this->sendPreflightCheck();
                 } else {
                     $this->telegram->reply("Không có lệnh nào đang chờ xác nhận.\n\nNhắn tên coin để phân tích, ví dụ: <code>xagusdt h1</code>");
                 }
@@ -127,9 +149,10 @@ class TelegramBotCommand extends Command
             }
 
             foreach ($this->rejectWords as $w) {
-                if ($hasPending && preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
+                if (($hasPending || $hasPreflight) && preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
                     Cache::forget($pendingKey);
                     Cache::forget($scanPendingKey);
+                    Cache::forget($preflightKey);
                     $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
                     return;
                 }
@@ -145,6 +168,84 @@ class TelegramBotCommand extends Command
 
         // Mọi thứ còn lại → AI trả lời tự nhiên
         $this->askAI($text);
+    }
+
+    // ─── Pre-flight check ────────────────────────────────────────────────────────
+
+    private function sendPreflightCheck(): void
+    {
+        $pendingKey     = "tg_pending_{$this->chatId}";
+        $scanPendingKey = "scan_pending_{$this->chatId}";
+        $preflightKey   = "tg_preflight_{$this->chatId}";
+
+        $p = Cache::get($pendingKey) ?? Cache::get($scanPendingKey);
+        if (!$p) {
+            $this->telegram->reply("Không còn lệnh nào chờ xác nhận.");
+            return;
+        }
+
+        Cache::put($preflightKey, $p, now()->addMinutes(10));
+
+        $type    = ($p['type'] ?? 'LONG') === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        $symbol  = $p['symbol'] ?? '';
+        $entry   = $p['entry'] ?? 0;
+        $tp      = $p['tp'] ?? 0;
+        $sl      = $p['sl'] ?? 0;
+        $capital = (float) ($p['capital'] ?? 0);
+        $riskAmt = $capital > 0 ? '$' . number_format($capital * 0.02, 2) : '2% vốn';
+
+        $this->telegram->sendRaw(
+            "📋 <b>PRE-FLIGHT CHECK — {$symbol} {$type}</b>\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "Entry <code>{$entry}</code>  TP <code>{$tp}</code>  SL <code>{$sl}</code>\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "Tự kiểm tra 3 câu hỏi:\n\n"
+            . "☐ 1️⃣  SL tại <code>{$sl}</code> — nếu chạm đây, kịch bản của tôi <b>hoàn toàn bị bác bỏ</b>?\n"
+            . "☐ 2️⃣  Tôi vào lệnh này vì <b>CẤU TRÚC THỊ TRƯỜNG</b>, không phải vì \"hy vọng\"?\n"
+            . "☐ 3️⃣  Nếu thua <b>{$riskAmt}</b>, tôi chấp nhận như chi phí vận hành — không hối tiếc?\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "💡 <b>Inverse Rule — nhắc nhở:</b>\n"
+            . "↗ Lệnh <b>lời</b> → <i>Hy vọng</i> xu hướng đi xa. Chỉ đóng khi cấu trúc đảo chiều.\n"
+            . "↘ Lệnh <b>lỗ</b> → <i>Sợ hãi</i> thị trường tiếp tục ngược. Cắt tại SL. Không nới, không trung bình giá.\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "💰 <b>Vốn hiện tại của bạn là bao nhiêu?</b> (để tính risk 2%)\n\n"
+            . "→ Gõ: <code>[vốn] xác nhận</code>   vd: <code>500 xác nhận</code>\n"
+            . "→ Bỏ qua vốn: <code>0 xác nhận</code>\n"
+            . "→ Huỷ: <code>không</code>"
+        );
+    }
+
+    private function completePreflight(string $text): void
+    {
+        $preflightKey   = "tg_preflight_{$this->chatId}";
+        $pendingKey     = "tg_pending_{$this->chatId}";
+        $scanPendingKey = "scan_pending_{$this->chatId}";
+
+        $p = Cache::get($preflightKey);
+        if (!$p) {
+            $this->telegram->reply("Pre-flight đã hết hạn (10 phút). Phân tích lại lệnh.");
+            return;
+        }
+
+        // Trích xuất vốn từ tin nhắn (vd: "500 xác nhận" → 500)
+        $capital = 0.0;
+        if (preg_match('/\b(\d+(?:[.,]\d+)?)\b/u', $text, $m)) {
+            $candidate = (float) str_replace(',', '.', $m[1]);
+            // Bỏ qua nếu chỉ là "0" xác nhận hoặc không có nghĩa là vốn
+            if ($candidate > 0) $capital = $candidate;
+        }
+        if ($capital <= 0 && !empty($p['capital'])) {
+            $capital = (float) $p['capital'];
+        }
+
+        $p['capital'] = $capital;
+
+        // Đưa vào tg_pending để confirmPendingSignal() đọc
+        Cache::put($pendingKey, $p, now()->addMinutes(5));
+        Cache::forget($preflightKey);
+        Cache::forget($scanPendingKey);
+
+        $this->confirmPendingSignal();
     }
 
     // ─── AI conversational brain ─────────────────────────────────────────────────
@@ -404,13 +505,13 @@ PROMPT;
                  . $aiBlock . "\n"
                  . "━━━━━━━━━━━━━━━\n"
                  . "📝 <i>{$sig['reason']}</i>\n\n"
-                 . "❓ <b>Bạn muốn theo dõi lệnh này không?</b>\n"
-                 . "✅ Gõ <b>có</b> → ghi vào hệ thống, bot tự động theo dõi\n"
+                 . "❓ <b>Bạn muốn vào lệnh này không?</b>\n"
+                 . "✅ Gõ <b>ok</b> → kiểm tra tâm lý pre-flight trước khi ghi\n"
                  . "❌ Gõ <b>không</b> → bỏ qua";
 
             $this->telegram->reply($msg);
 
-            // Lưu pending vào cache 5 phút để chờ xác nhận
+            // Lưu pending vào cache 10 phút (pre-flight thêm 1 bước)
             Cache::put("tg_pending_{$this->chatId}", [
                 'symbol'    => $symbol,
                 'timeframe' => $tf,
@@ -421,7 +522,7 @@ PROMPT;
                 'winrate'   => $sig['winrate'],
                 'reason'    => $sig['reason'],
                 'capital'   => $capital,
-            ], 300);
+            ], now()->addMinutes(10));
 
             $this->info("  [{$symbol}] Phân tích xong → {$type}, chờ xác nhận từ user.");
 

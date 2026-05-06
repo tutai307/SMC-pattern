@@ -358,7 +358,7 @@ class TelegramService
             . "━━━━━━━━━━━━━━━\n"
             . "🔍 <i>{$reason}</i>\n\n"
             . "🖥 <a href=\"{$link}\">Xem chart →</a>\n\n"
-            . "✅ Gõ <b>ok</b> để vào lệnh &amp; theo dõi tự động\n"
+            . "✅ Gõ <b>ok</b> → kiểm tra tâm lý pre-flight &amp; vào lệnh\n"
             . "❌ Gõ <b>không</b> để bỏ qua"
         );
     }
