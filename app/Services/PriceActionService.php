@@ -80,6 +80,7 @@ class PriceActionService
             'orderBlocks' => $orderBlocks,
             'fvgs' => array_slice($fvgs, -5),
             'waves' => $waves,
+            'fibonacci' => ($method === 'elliot' && !empty($waves)) ? $this->calculateElliotFibonacci($waves) : [],
             'volumeProfile' => $volumeProfile,
             'signal' => $signal,
             'indicators' => [
@@ -741,6 +742,46 @@ class PriceActionService
         }
 
         return $waves;
+    }
+
+    private function calculateElliotFibonacci(array $waves): array
+    {
+        if (count($waves) < 3) return [];
+
+        $prices    = array_column($waves, 'price');
+        $swingHigh = max($prices);
+        $swingLow  = min($prices);
+        $range     = $swingHigh - $swingLow;
+
+        if ($range <= 0) return [];
+
+        $lastWave  = end($waves);
+        $firstWave = $waves[0];
+        $isBullish = $lastWave['price'] > $firstWave['price'];
+
+        $retracementLevels = [];
+        foreach ([0.236, 0.382, 0.5, 0.618, 0.786] as $r) {
+            $price = $isBullish
+                ? $swingHigh - $range * $r
+                : $swingLow  + $range * $r;
+            $retracementLevels[] = ['price' => round($price, 8), 'ratio' => round($r * 100, 1) . '%'];
+        }
+
+        $extensionLevels = [];
+        foreach ([1.0, 1.272, 1.618, 2.618] as $r) {
+            $price = $isBullish
+                ? $swingLow  + $range * $r
+                : $swingHigh - $range * $r;
+            $extensionLevels[] = ['price' => round($price, 8), 'ratio' => $r . 'x'];
+        }
+
+        return [
+            'swing_high'         => $swingHigh,
+            'swing_low'          => $swingLow,
+            'is_bullish'         => $isBullish,
+            'retracement_levels' => $retracementLevels,
+            'extension_levels'   => $extensionLevels,
+        ];
     }
 
     private function generateElliotSignal(array $waves, float $currentPrice, float $atr, float $adx = 0, array $structure = [], array $htfStructure = []): ?array

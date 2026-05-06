@@ -247,11 +247,12 @@ class ScanSignalsCommand extends Command
     {
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
-            $this->scanPair($symbol, $timeframe);
+            $this->scanPair($symbol, $timeframe, 'smc');
+            $this->scanPair($symbol, $timeframe, 'elliot');
         }
     }
 
-    private function scanPair(string $symbol, string $timeframe): void
+    private function scanPair(string $symbol, string $timeframe, string $method = 'smc'): void
     {
         $klines       = $this->binanceService->getKlines($symbol, $timeframe, 500);
         $currentPrice = $this->binanceService->getPrice($symbol);
@@ -268,11 +269,11 @@ class ScanSignalsCommand extends Command
         };
         $klinesHTF = $this->binanceService->getKlines($symbol, $htf, 50);
 
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, 'smc', $symbol, $timeframe);
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — không có setup");
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — không có setup");
             return;
         }
 
@@ -281,28 +282,28 @@ class ScanSignalsCommand extends Command
         $aiError = $signal['ai_error'] ?? null;
 
         if ($aiError) {
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI lỗi ({$aiError}), bỏ qua");
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), bỏ qua");
             return;
         }
         if ($aiScore < 60) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI score {$aiScore}/100 < 60, bỏ qua");
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 60, bỏ qua");
             return;
         }
         if (str_starts_with($aiRec, 'BỎ QUA')) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI: {$aiRec}, bỏ qua");
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI: {$aiRec}, bỏ qua");
             return;
         }
 
         $entryKey = round((float) $signal['entry'], 4);
-        $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$signal['type']}_{$entryKey}";
+        $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$method}_{$signal['type']}_{$entryKey}";
 
         if (Cache::has($dedupKey)) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — setup đã thông báo, chờ hết hạn");
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — setup đã thông báo, chờ hết hạn");
             return;
         }
 
         Cache::put($dedupKey, true, now()->addHours(6));
-        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice);
+        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method);
 
         $isLong = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
         $chatId = config('services.telegram.chat_id');
@@ -316,8 +317,10 @@ class ScanSignalsCommand extends Command
             'winrate'   => $signal['winrate'] ?? 0,
             'reason'    => $signal['reason'] ?? '',
             'capital'   => 0,
+            'method'    => $method,
         ], now()->addHours(8));
 
-        $this->info('[' . now()->format('H:i:s') . "] ✅ Alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        $methodLabel = strtoupper($method);
+        $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
     }
 }

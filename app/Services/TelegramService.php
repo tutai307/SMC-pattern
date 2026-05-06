@@ -296,7 +296,7 @@ class TelegramService
         $this->send($text);
     }
 
-    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice): void
+    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc'): void
     {
         $type     = $signal['type'] ?? 'N/A';
         $entry    = $signal['entry'] ?? 0;
@@ -311,8 +311,11 @@ class TelegramService
         $tpPct = $entry > 0 ? round(abs($tp - $entry) / $entry * 100, 2) : 0;
         $rr    = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
 
-        $dir    = str_contains(strtolower($type), 'mua') ? '📈 LONG' : '📉 SHORT';
-        $header = $isSniper ? '⚡ <b>SNIPER SETUP DETECTED</b> ⚡' : '🔍 <b>SETUP MỚI — AUTO SCAN</b>';
+        $dir      = str_contains(strtolower($type), 'mua') ? '📈 LONG' : '📉 SHORT';
+        $isElliot = $method === 'elliot';
+        $header   = $isElliot
+            ? '🌊 <b>SÓNG ELLIOTT — AUTO SCAN</b>'
+            : ($isSniper ? '⚡ <b>SNIPER SETUP DETECTED</b> ⚡' : '🔍 <b>SETUP MỚI — AUTO SCAN</b>');
 
         $priceDiff = $entry > 0 ? round(abs($currentPrice - $entry) / $entry * 100, 2) : 0;
         $proximity = $currentPrice <= $entry
@@ -339,6 +342,7 @@ class TelegramService
 
         $this->send(
             $header . "\n"
+            . "📊 Method: <b>" . ($isElliot ? '🌊 Elliott Wave' : '📐 SMC Smart Money') . "</b>\n"
             . "━━━━━━━━━━━━━━━\n"
             . "💎 <b>{$symbol}</b> · {$timeframe} · {$dir}\n"
             . "🏷 Pattern: <code>{$pattern}</code>\n"

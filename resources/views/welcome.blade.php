@@ -455,6 +455,42 @@
                 </div>
             </div>
 
+            @if($method === 'elliot' && !empty($analysis['waves']) && !empty($analysis['fibonacci']))
+            @php $fib = $analysis['fibonacci']; @endphp
+            <div class="glass-card p-3 md:p-4 border border-purple-500/20">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider">🌊 Fibonacci Elliott</h3>
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-bold {{ $fib['is_bullish'] ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400' }}">
+                        {{ $fib['is_bullish'] ? '▲ TĂNG' : '▼ GIẢM' }}
+                    </span>
+                </div>
+                <div class="grid grid-cols-2 gap-1 text-[10px] mb-3">
+                    <div class="text-slate-500">Swing High</div>
+                    <div class="text-right font-mono text-red-400">${{ number_format($fib['swing_high'], 4) }}</div>
+                    <div class="text-slate-500">Swing Low</div>
+                    <div class="text-right font-mono text-green-400">${{ number_format($fib['swing_low'], 4) }}</div>
+                </div>
+                <div class="text-[9px] text-slate-600 font-bold uppercase mb-1">Retracement</div>
+                <div class="space-y-1 mb-3">
+                    @foreach($fib['retracement_levels'] as $lvl)
+                    <div class="flex justify-between text-[10px]">
+                        <span class="text-slate-500">{{ $lvl['ratio'] }}</span>
+                        <span class="font-mono {{ $fib['is_bullish'] ? 'text-green-400/80' : 'text-red-400/80' }}">${{ number_format($lvl['price'], 4) }}</span>
+                    </div>
+                    @endforeach
+                </div>
+                <div class="text-[9px] text-slate-600 font-bold uppercase mb-1">Extension (Target)</div>
+                <div class="space-y-1">
+                    @foreach(array_slice($fib['extension_levels'], 0, 3) as $lvl)
+                    <div class="flex justify-between text-[10px]">
+                        <span class="text-slate-500">{{ $lvl['ratio'] }}</span>
+                        <span class="font-mono text-blue-400/80">${{ number_format($lvl['price'], 4) }}</span>
+                    </div>
+                    @endforeach
+                </div>
+            </div>
+            @endif
+
             <div class="glass-card p-3 md:p-6">
                 <h3 class="text-slate-400 text-xs font-bold uppercase mb-3 md:mb-4 tracking-wider">Phân tích Thị trường</h3>
                 <div class="space-y-3 md:space-y-4">
@@ -940,6 +976,47 @@
                     }
                     // Delay nhỏ để chờ candles render xong
                     setTimeout(animateWave, 200);
+
+                    // Draw Fibonacci levels
+                    const fib = analysis.fibonacci;
+                    if (fib && fib.swing_high) {
+                        const isUp = fib.is_bullish;
+
+                        (fib.retracement_levels || []).forEach(level => {
+                            candleSeries.createPriceLine({
+                                price: level.price,
+                                color: isUp ? 'rgba(34, 197, 94, 0.55)' : 'rgba(239, 68, 68, 0.55)',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: 'Fib ' + level.ratio,
+                            });
+                        });
+
+                        (fib.extension_levels || []).forEach(level => {
+                            candleSeries.createPriceLine({
+                                price: level.price,
+                                color: 'rgba(59, 130, 246, 0.45)',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dotted,
+                                axisLabelVisible: true,
+                                title: 'Ext ' + level.ratio,
+                            });
+                        });
+
+                        // Projected direction arrow at the last wave point
+                        const lastWd = waveData[waveData.length - 1];
+                        if (lastWd) {
+                            allMarkers.push({
+                                time: lastWd.time,
+                                position: isUp ? 'belowBar' : 'aboveBar',
+                                color: isUp ? '#22c55e' : '#ef4444',
+                                shape: isUp ? 'arrowUp' : 'arrowDown',
+                                text: isUp ? '▲ Kỳ vọng tăng' : '▼ Kỳ vọng giảm',
+                                size: 2,
+                            });
+                        }
+                    }
                 }
 
                 chart.timeScale().fitContent();
