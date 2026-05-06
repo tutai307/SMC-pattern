@@ -410,7 +410,7 @@ class PriceActionService
         $lastAdx   = end($adx);
         $lastAtr   = end($atr);
 
-        if ($lastAdx < 22) return null;
+        if ($lastAdx < 25) return null;
 
         // Kiểm tra giá có đang trong vùng HTF POI không
         $inHtfPoi = false;
@@ -430,6 +430,9 @@ class PriceActionService
 
             // ─── LONG SETUP ───────────────────────────────────────────────
             if ($zone['type'] === 'demand') {
+                // Hard-block: không LONG khi HTF đang bearish
+                if ($htfStructure['trend'] === 'GIẢM GIÁ') continue;
+
                 $entry = ($zone['top'] + $zone['bottom']) / 2;
 
                 if ($entry >= $lastPrice) continue;
@@ -500,6 +503,9 @@ class PriceActionService
 
             // ─── SHORT SETUP ──────────────────────────────────────────────
             if ($zone['type'] === 'supply') {
+                // Hard-block: không SHORT khi HTF đang bullish
+                if ($htfStructure['trend'] === 'TĂNG GIÁ') continue;
+
                 $entry = ($zone['top'] + $zone['bottom']) / 2;
 
                 if ($entry <= $lastPrice) continue;
