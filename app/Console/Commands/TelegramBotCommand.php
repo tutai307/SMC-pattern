@@ -401,7 +401,7 @@ PROMPT;
         }
 
         // Detect loại giao dịch → timeframe (regex ưu tiên hơn keyword check)
-        $tradeType = 'scalp'; // default 15m
+        $tradeType = 'intraday'; // default 1h
         if (preg_match('/\b(4h|h4|swing|1d|d1)\b/i', $lower)) {
             $tradeType = 'swing';
         } elseif (preg_match('/\b(1h|h1|intraday|day)\b/i', $lower)) {
@@ -712,8 +712,8 @@ PROMPT;
         $this->telegram->reply(
             "🤖 <b>Felix — Felix Bot</b>\n\n"
             . "<b>Chat tự nhiên:</b>\n"
-            . "• <code>cho tôi lệnh scalp xagusdt vốn 70u</code>\n"
-            . "• <code>kèo intraday btcusdt 100$</code>\n"
+            . "• <code>cho tôi lệnh xagusdt vốn 70u</code>\n"
+            . "• <code>kèo h1 btcusdt 100$</code>\n"
             . "• <code>swing ethusdt 50u</code>\n"
             . "Sau đó gõ <b>có</b> để ghi vào hệ thống, <b>không</b> để bỏ qua.\n\n"
             . "🤖 Bot tự động theo dõi từng lệnh — sẽ báo ngay khi:\n"
