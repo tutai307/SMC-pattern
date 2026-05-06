@@ -288,6 +288,26 @@ class TelegramBotCommand extends Command
         $total  = $wins + $losses;
         $wrStr  = $total > 0 ? round($wins / $total * 100) . "% ({$wins}W/{$losses}L)" : "Chưa có dữ liệu";
 
+        // Inject metals news nếu query liên quan vàng/bạc hoặc có lệnh metals đang chạy
+        $metalsKeywords = ['xauusdt', 'xagusdt', 'gold', 'silver', 'vàng', 'bạc', 'xau', 'xag', 'vang', 'bac'];
+        $isMetalsQuery  = false;
+        $lowerMsg       = mb_strtolower($userMessage);
+        foreach ($metalsKeywords as $kw) {
+            if (str_contains($lowerMsg, $kw)) { $isMetalsQuery = true; break; }
+        }
+        if (!$isMetalsQuery) {
+            foreach ($runningSignals as $s) {
+                if (in_array($s->symbol, ['XAUUSDT', 'XAGUSDT'])) { $isMetalsQuery = true; break; }
+            }
+        }
+        $newsBlock = '';
+        if ($isMetalsQuery) {
+            $news = $this->fetchMetalsNews();
+            if ($news) {
+                $newsBlock = "\n\n=== TIN TỨC VÀNG/BẠC GẦN ĐÂY ===\n{$news}\n(Nguồn: Yahoo Finance — cập nhật 15 phút/lần)\nDùng thông tin này để giải thích tại sao giá đang di chuyển như vậy.";
+            }
+        }
+
         $systemPrompt = <<<PROMPT
 Bạn là Felix — AI trading assistant của hệ thống TOM AI. Nhiệm vụ chính:
 1. Theo dõi và cảnh báo tín hiệu SMC cho {$watchlist}
@@ -313,7 +333,7 @@ LỆNH PENDING:
 - Quản lý: /cancel <id>, /filled <id>
 - Bot tự động scan {$watchlist} mỗi 5 phút và sẽ báo ngay khi có setup
 
-Trả lời NGẮN GỌN (tối đa 4-5 câu). Nếu user hỏi về setup cụ thể thì bảo họ nhắn "kèo [coin] [loại]".
+Trả lời NGẮN GỌN (tối đa 4-5 câu). Nếu user hỏi về setup cụ thể thì bảo họ nhắn "kèo [coin] [loại]".{$newsBlock}
 PROMPT;
 
         // Lịch sử hội thoại (rolling 8 messages)
@@ -494,6 +514,17 @@ PROMPT;
 
             $dirEmoji = $isLong ? '📈' : '📉';
 
+            // News block cho vàng/bạc
+            $newsBlock = '';
+            if (in_array($symbol, ['XAUUSDT', 'XAGUSDT'])) {
+                $news = $this->fetchMetalsNews();
+                if ($news) {
+                    $newsBlock = "\n━━━━━━━━━━━━━━━\n"
+                               . "📰 <b>Tin tức vàng/bạc gần đây:</b>\n"
+                               . $news;
+                }
+            }
+
             $msg = "{$dirEmoji} <b>{$type} — {$symbol} {$label}</b>\n"
                  . "━━━━━━━━━━━━━━━\n"
                  . "💰 Giá: <code>{$currentPrice}</code>\n"
@@ -504,7 +535,8 @@ PROMPT;
                  . $posBlock
                  . $aiBlock . "\n"
                  . "━━━━━━━━━━━━━━━\n"
-                 . "📝 <i>{$sig['reason']}</i>\n\n"
+                 . "📝 <i>{$sig['reason']}</i>"
+                 . $newsBlock . "\n\n"
                  . "❓ <b>Bạn muốn vào lệnh này không?</b>\n"
                  . "✅ Gõ <b>ok</b> → kiểm tra tâm lý pre-flight trước khi ghi\n"
                  . "❌ Gõ <b>không</b> → bỏ qua";
@@ -635,6 +667,42 @@ PROMPT;
 
         $fillStr = $alreadyFilled ? 'filled ngay' : 'chờ fill';
         $this->info("  [{$signal->symbol}] Lệnh #{$signal->id} tạo từ Telegram — {$fillStr}.");
+    }
+
+    // ─── Metals news ─────────────────────────────────────────────────────────────
+
+    private function fetchMetalsNews(): string
+    {
+        $cacheKey = 'metals_news_feed';
+        $cached   = Cache::get($cacheKey);
+        if ($cached !== null) return $cached;
+
+        try {
+            $client   = new \GuzzleHttp\Client(['timeout' => 8, 'connect_timeout' => 4]);
+            $response = $client->get('https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC%3DF%2CSI%3DF');
+            $xml      = simplexml_load_string((string) $response->getBody());
+
+            if (!$xml || empty($xml->channel->item)) return '';
+
+            $lines = [];
+            $count = 0;
+            foreach ($xml->channel->item as $item) {
+                if ($count >= 6) break;
+                $title = trim((string) $item->title);
+                if ($title) {
+                    $lines[] = "• {$title}";
+                    $count++;
+                }
+            }
+
+            $result = implode("\n", $lines);
+            Cache::put($cacheKey, $result, now()->addMinutes(15));
+            return $result;
+        } catch (\Exception $e) {
+            \Log::warning('fetchMetalsNews: ' . $e->getMessage());
+            Cache::put($cacheKey, '', now()->addMinutes(5));
+            return '';
+        }
     }
 
     // ─── Slash command handlers ──────────────────────────────────────────────────
