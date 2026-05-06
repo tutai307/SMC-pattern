@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Events\SignalStatusChanged;
+use App\Models\TradingSignal;
 use App\Services\BinanceService;
 use App\Services\PriceActionService;
 use App\Services\TelegramService;
@@ -10,10 +12,12 @@ use Illuminate\Support\Facades\Cache;
 
 class ScanSignalsCommand extends Command
 {
-    protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét (mặc định 5 phút)}';
-    protected $description = 'Tự động quét setup SMC và gửi Telegram khi có kèo mới';
+    protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)}';
+    protected $description = 'Quét setup SMC mới + theo dõi lệnh đang mở trong cùng 1 vòng lặp';
 
-    private array $watchlist = [];
+    private array $watchlist    = [];
+    private int   $lastScanAt   = 0;
+    private int   $lastMonitorAt = 0;
 
     public function __construct(
         private BinanceService     $binanceService,
@@ -22,7 +26,6 @@ class ScanSignalsCommand extends Command
     ) {
         parent::__construct();
 
-        // Đọc từ .env, fallback về 2 coin mặc định
         $raw = env('SCAN_SYMBOLS', 'XAGUSDT:15m,XAGUSDT:1h,XAGUSDT:4h,VVVUSDT:15m,VVVUSDT:1h,VVVUSDT:4h');
         foreach (explode(',', $raw) as $item) {
             [$sym, $tf] = array_pad(explode(':', trim($item)), 2, '15m');
@@ -39,22 +42,210 @@ class ScanSignalsCommand extends Command
 
         $interval = (int) $this->option('interval');
         $symbols  = implode(', ', array_map(fn($w) => "{$w['symbol']}({$w['timeframe']})", $this->watchlist));
-        $this->info("Scanner bắt đầu — watchlist: {$symbols} — mỗi {$interval}s");
-        $this->telegramService->sendRaw("🔍 <b>Scanner khởi động</b>\nWatchlist: <code>{$symbols}</code>\nQuét mỗi <b>{$interval}s</b>");
+        $this->info("Scanner + Monitor bắt đầu — watchlist: {$symbols} — scan mỗi {$interval}s, monitor mỗi 30s");
+        $this->telegramService->sendRaw(
+            "🔍 <b>Felix Scanner khởi động</b>\n"
+            . "Watchlist: <code>{$symbols}</code>\n"
+            . "⏱ Scan setup: mỗi <b>{$interval}s</b> | Theo dõi lệnh: mỗi <b>30s</b>"
+        );
 
         while (true) {
-            try {
-                $this->scan();
-            } catch (\Exception $e) {
-                $this->warn('[' . now()->format('H:i:s') . '] Lỗi: ' . $e->getMessage());
-                \Log::error('ScanSignals: ' . $e->getMessage());
+            $now = time();
+
+            // ── Monitor lệnh đang mở mỗi 30 giây ──
+            if ($now - $this->lastMonitorAt >= 30) {
+                try {
+                    $this->monitorActiveSignals();
+                } catch (\Exception $e) {
+                    $this->warn('[' . now()->format('H:i:s') . '] Monitor lỗi: ' . $e->getMessage());
+                    \Log::error('ScanSignals monitor: ' . $e->getMessage());
+                }
+                $this->lastMonitorAt = $now;
             }
-            sleep($interval);
+
+            // ── Scan setup mới theo interval ──
+            if ($now - $this->lastScanAt >= $interval) {
+                try {
+                    $this->scan();
+                } catch (\Exception $e) {
+                    $this->warn('[' . now()->format('H:i:s') . '] Scan lỗi: ' . $e->getMessage());
+                    \Log::error('ScanSignals scan: ' . $e->getMessage());
+                }
+                $this->lastScanAt = $now;
+            }
+
+            sleep(10);
         }
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // PHẦN 1: MONITOR LỆNH ĐANG MỞ
+    // ══════════════════════════════════════════════════════════════
+
+    private function monitorActiveSignals(): void
+    {
+        $ts = now()->format('H:i:s');
+
+        // Lệnh chưa khớp: auto-detect fill + check cấu trúc
+        $unfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
+        foreach ($unfilled as $signal) {
+            $this->autoDetectFill($signal);
+        }
+        $stillUnfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
+        foreach ($stillUnfilled as $signal) {
+            $this->checkUnfilledStructure($signal);
+        }
+
+        // Lệnh đã khớp: theo dõi TP/SL/cấu trúc
+        $running = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
+        if ($running->isEmpty()) {
+            if (!$unfilled->isEmpty()) {
+                $this->line("[{$ts}] Monitor: {$unfilled->count()} chờ khớp, 0 đang chạy");
+            }
+            return;
+        }
+
+        $this->line("[{$ts}] Monitor: {$running->count()} lệnh đang chạy");
+        foreach ($running as $signal) {
+            $this->checkSignal($signal);
+        }
+    }
+
+    private function autoDetectFill(TradingSignal $signal): void
+    {
+        if (!$signal->entry_price) return;
+
+        $klines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500);
+        if (empty($klines)) return;
+
+        $createdAtMs = $signal->created_at->timestamp * 1000;
+        $isLong      = $signal->type === 'LONG';
+
+        foreach ($klines as $k) {
+            if ((int) $k[0] < $createdAtMs) continue;
+            $high   = (float) $k[2];
+            $low    = (float) $k[3];
+            $filled = $isLong ? ($low <= (float) $signal->entry_price) : ($high >= (float) $signal->entry_price);
+
+            if ($filled) {
+                $signal->update(['filled_at' => now()]);
+                broadcast(new SignalStatusChanged($signal->fresh()));
+                $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+                $this->telegramService->sendEntryFilled($signal, $currentPrice);
+                $this->info("  [{$signal->symbol}] 🟢 #{$signal->id} khớp tự động @ {$signal->entry_price}");
+                return;
+            }
+        }
+    }
+
+    private function checkUnfilledStructure(TradingSignal $signal): void
+    {
+        if ($signal->notified_structure_break) return;
+
+        $recentKlines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
+        if (empty($recentKlines)) return;
+
+        $structure       = $this->priceActionService->getStructure($recentKlines);
+        $isLong          = $signal->type === 'LONG';
+        $structureBroken = $isLong
+            ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
+            : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+
+        if (!$structureBroken) return;
+
+        $signal->update(['notified_structure_break' => true, 'status' => 'CANCELLED']);
+        broadcast(new SignalStatusChanged($signal->fresh()));
+        $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+        $this->telegramService->sendPreEntryStructureBreak($signal, $currentPrice, $structure['trend']);
+        $this->info("  [{$signal->symbol}] 🚨 #{$signal->id} cấu trúc phá vỡ trước entry → CANCELLED");
+    }
+
+    private function checkSignal(TradingSignal $signal): void
+    {
+        $klines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 500);
+        if (empty($klines)) return;
+
+        $filledAtMs   = $signal->filled_at->timestamp * 1000;
+        $klines       = array_values(array_filter($klines, fn($k) => (int) $k[0] >= $filledAtMs));
+        $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+        $isLong       = $signal->type === 'LONG';
+
+        foreach ($klines as $k) {
+            $high = (float) $k[2];
+            $low  = (float) $k[3];
+
+            // TP hit
+            if (!$signal->notified_tp) {
+                $tpHit = $isLong ? ($high >= $signal->tp_price) : ($low <= $signal->tp_price);
+                if ($tpHit) {
+                    $signal->update(['status' => 'WIN', 'notified_tp' => true]);
+                    broadcast(new SignalStatusChanged($signal->fresh()));
+                    $this->telegramService->sendTpHit($signal, $currentPrice);
+                    $this->info("  [{$signal->symbol}] ✅ #{$signal->id} TP hit → WIN");
+                    return;
+                }
+            }
+
+            // SL hit
+            if (!$signal->notified_sl) {
+                $slHit = $isLong ? ($low <= $signal->sl_price) : ($high >= $signal->sl_price);
+                if ($slHit) {
+                    $signal->update(['status' => 'LOSS', 'notified_sl' => true]);
+                    broadcast(new SignalStatusChanged($signal->fresh()));
+                    $this->telegramService->sendSlHit($signal, $currentPrice);
+                    $this->info("  [{$signal->symbol}] 🔴 #{$signal->id} SL hit → LOSS");
+                    return;
+                }
+            }
+        }
+
+        // Cấu trúc phá vỡ
+        if (!$signal->notified_structure_break) {
+            $recentKlines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
+            $structure       = $this->priceActionService->getStructure($recentKlines);
+            $structureBroken = $isLong
+                ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
+                : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+
+            if ($structureBroken) {
+                $signal->update(['notified_structure_break' => true, 'status' => 'CANCELLED']);
+                broadcast(new SignalStatusChanged($signal->fresh()));
+                $this->telegramService->sendStructureBreak($signal, $currentPrice, $structure['trend']);
+                $this->info("  [{$signal->symbol}] 🚨 #{$signal->id} cấu trúc phá vỡ → CANCELLED");
+                return;
+            }
+        }
+
+        // Tiến gần TP (≤ 2%)
+        if (!$signal->notified_near_tp && $signal->tp_price > 0) {
+            if (abs($currentPrice - $signal->tp_price) / $signal->tp_price <= 0.02) {
+                $signal->update(['notified_near_tp' => true]);
+                $this->telegramService->sendNearTp($signal, $currentPrice);
+                $this->info("  [{$signal->symbol}] 🎯 #{$signal->id} tiến gần TP");
+            }
+        }
+
+        // Tiến gần SL (≤ 1.5%)
+        if (!$signal->notified_near_sl && $signal->sl_price > 0) {
+            if (abs($currentPrice - $signal->sl_price) / $signal->sl_price <= 0.015) {
+                $signal->update(['notified_near_sl' => true]);
+                $this->telegramService->sendNearSl($signal, $currentPrice);
+                $this->info("  [{$signal->symbol}] ⚠️ #{$signal->id} tiến gần SL");
+            }
+        }
+
+        $tpDist = $signal->tp_price > 0 ? round(abs($currentPrice - $signal->tp_price) / $signal->tp_price * 100, 2) : 0;
+        $slDist = $signal->sl_price > 0 ? round(abs($currentPrice - $signal->sl_price) / $signal->sl_price * 100, 2) : 0;
+        $this->line("  [{$signal->symbol}] {$signal->type} #{$signal->id} giá={$currentPrice} | TP còn {$tpDist}% | SL còn {$slDist}%");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // PHẦN 2: SCAN SETUP MỚI
+    // ══════════════════════════════════════════════════════════════
+
     private function scan(): void
     {
+        $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
             $this->scanPair($symbol, $timeframe);
         }
@@ -85,27 +276,23 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        // ── Bộ lọc AI: bắt buộc phải qua đánh giá trước khi gửi Telegram ──
         $aiScore = (int) ($signal['ai_score'] ?? 0);
         $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
         $aiError = $signal['ai_error'] ?? null;
 
         if ($aiError) {
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI lỗi ({$aiError}), bỏ qua để tránh sai lầm");
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI lỗi ({$aiError}), bỏ qua");
             return;
         }
-
         if ($aiScore < 60) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI score {$aiScore}/100 < 60, bỏ qua");
             return;
         }
-
         if (str_starts_with($aiRec, 'BỎ QUA')) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI recommend {$aiRec}, bỏ qua");
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI: {$aiRec}, bỏ qua");
             return;
         }
 
-        // Dedup: cùng entry (round 4 chữ số) + type = cùng setup, bỏ qua
         $entryKey = round((float) $signal['entry'], 4);
         $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$signal['type']}_{$entryKey}";
 
@@ -115,12 +302,10 @@ class ScanSignalsCommand extends Command
         }
 
         Cache::put($dedupKey, true, now()->addHours(6));
-
         $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice);
 
-        // Lưu vào cache để TelegramBot nhận "ok/có" và theo dõi
-        $isLong  = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
-        $chatId  = config('services.telegram.chat_id');
+        $isLong = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
+        $chatId = config('services.telegram.chat_id');
         Cache::put("scan_pending_{$chatId}", [
             'symbol'    => $symbol,
             'timeframe' => $timeframe,
@@ -133,6 +318,6 @@ class ScanSignalsCommand extends Command
             'capital'   => 0,
         ], now()->addHours(8));
 
-        $this->info('[' . now()->format('H:i:s') . "] ✅ Gửi alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        $this->info('[' . now()->format('H:i:s') . "] ✅ Alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
     }
 }
