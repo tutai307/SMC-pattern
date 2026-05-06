@@ -1252,6 +1252,30 @@
                         ${sig.ai_entry_timing   ? `<p class="text-[11px] text-slate-400">⏱ ${sig.ai_entry_timing}</p>` : ''}
                     </div>` : '';
 
+                // Kiểm tra AI có cho vào lệnh không
+                const aiRec    = (sig.ai_recommendation ?? '').toUpperCase();
+                const canEnter = aiRec.startsWith('VÀO LỆNH') || aiRec === '';
+                const proposeBtn = document.querySelector('button[type="submit"].text-blue-400, form [name="propose"] ~ button') ||
+                                   document.querySelector('form input[name="propose"]')?.closest('form')?.querySelector('button[type="submit"]');
+                if (proposeBtn) {
+                    if (canEnter) {
+                        proposeBtn.disabled = false;
+                        proposeBtn.classList.remove('opacity-40','cursor-not-allowed','bg-red-500/20','text-red-400','border-red-500/30','bg-amber-500/20','text-amber-400','border-amber-500/30');
+                        proposeBtn.classList.add('bg-blue-500/20','text-blue-400','border-blue-500/30');
+                        proposeBtn.title = '';
+                    } else {
+                        proposeBtn.disabled = true;
+                        proposeBtn.classList.add('opacity-40','cursor-not-allowed');
+                        proposeBtn.classList.remove('bg-blue-500/20','text-blue-400','border-blue-500/30');
+                        if (aiRec.startsWith('CHỜ RETEST')) {
+                            proposeBtn.classList.add('bg-amber-500/20','text-amber-400','border-amber-500/30');
+                        } else {
+                            proposeBtn.classList.add('bg-red-500/20','text-red-400','border-red-500/30');
+                        }
+                        proposeBtn.title = `AI: ${sig.ai_recommendation}`;
+                    }
+                }
+
                 panel.querySelector('#signal-body').innerHTML = `
                     <div class="border rounded-xl p-3 md:p-4 ${cardCls}">
                         <div class="flex items-center justify-between mb-3">
@@ -1267,6 +1291,7 @@
                         <div class="mt-3 pt-2 border-t border-white/[0.06]">
                             <div class="border rounded-lg px-3 py-2 ${vCls} text-[10px] font-bold uppercase text-center">${vDecision}${vReasons ? ' — ' + vReasons : ''}</div>
                         </div>
+                        ${!canEnter ? `<div class="mt-2 rounded-lg px-3 py-2 ${aiRec.startsWith('CHỜ RETEST') ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30'} text-[10px] font-bold text-center">🚫 ĐỀ XUẤT BỊ KHOÁ — AI: ${sig.ai_recommendation}</div>` : ''}
                         ${aiHtml}
                     </div>`;
             }
