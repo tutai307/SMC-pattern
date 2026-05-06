@@ -248,7 +248,6 @@ class ScanSignalsCommand extends Command
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
             $this->scanPair($symbol, $timeframe, 'smc');
-            $this->scanPair($symbol, $timeframe, 'elliot');
         }
     }
 
