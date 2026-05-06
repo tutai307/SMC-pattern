@@ -1164,7 +1164,7 @@ PROMPT;
         // FVG gần nhất
         $fvgLines = [];
         foreach (array_slice($fvgs, -2) as $fvg) {
-            $fvgLines[] = strtoupper($fvg['type']) . ' FVG ' . $fvg['low'] . '–' . $fvg['high'];
+            $fvgLines[] = strtoupper($fvg['type']) . ' FVG ' . ($fvg['bottom'] ?? $fvg['low'] ?? '?') . '–' . ($fvg['top'] ?? $fvg['high'] ?? '?');
         }
         $fvgStr = $fvgLines ? implode(', ', $fvgLines) : 'không có';
 
