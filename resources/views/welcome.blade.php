@@ -714,36 +714,75 @@
         let symbolLower  = currentSymbol;
         let wsTimeframe  = currentTimeframe;
 
-        // === PRICE FEED — độc lập, auto-reconnect, không liên quan chart ===
+        // === PRICE FEED — WS primary, HTTP polling fallback ===
         (function initPriceFeed() {
             const priceEl = document.getElementById('current-price-display');
             if (!priceEl) return;
 
-            function connect() {
-                const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@aggTrade`);
+            let ws            = null;
+            let lastMsgAt     = 0;
+            let pollTimer     = null;
+            let wsActive      = false;
 
-                ws.onmessage = function(e) {
-                    const d = JSON.parse(e.data);
-                    const price = parseFloat(d.p);
-                    const old   = parseFloat(priceEl.dataset.lastPrice || price);
-                    // Số thập phân: coin nhỏ giữ 4 chữ số, coin lớn giữ 2
-                    const decimals = price < 10 ? 4 : price < 1000 ? 2 : 2;
-                    const fmt = new Intl.NumberFormat('en-US', {
-                        minimumFractionDigits: decimals,
-                        maximumFractionDigits: decimals,
-                    }).format(price);
-                    priceEl.style.color = price >= old ? '#22c55e' : '#ef4444';
-                    priceEl.textContent = '$' + fmt;
-                    priceEl.dataset.lastPrice = price;
-                    const sym = "{{ strtoupper($symbol) }}";
-                    document.title = `$${fmt} ${sym} — Felix`;
-                };
-
-                ws.onclose = () => setTimeout(connect, 2000);
-                ws.onerror  = () => ws.close();
+            function formatPrice(price) {
+                const dec = price < 10 ? 4 : 2;
+                return new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(price);
             }
 
-            connect();
+            function applyPrice(price) {
+                const old = parseFloat(priceEl.dataset.lastPrice || price);
+                priceEl.style.color     = price >= old ? '#22c55e' : '#ef4444';
+                priceEl.textContent     = '$' + formatPrice(price);
+                priceEl.dataset.lastPrice = price;
+                document.title = `$${formatPrice(price)} ${symbolLower.toUpperCase()} — Felix`;
+                lastMsgAt = Date.now();
+            }
+
+            // HTTP polling fallback — gọi server khi WS im lặng
+            function startPolling() {
+                if (pollTimer) return;
+                pollTimer = setInterval(async () => {
+                    if (wsActive) { stopPolling(); return; }
+                    try {
+                        const r = await fetch(`/price.json?symbol=${symbolLower}`);
+                        if (r.ok) { const d = await r.json(); applyPrice(d.price); }
+                    } catch(_) {}
+                }, 3000);
+            }
+
+            function stopPolling() {
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            }
+
+            function connectWs() {
+                if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch(_) {} }
+                wsActive = false;
+                ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolLower}@aggTrade`);
+
+                ws.onopen = () => { wsActive = true; stopPolling(); };
+
+                ws.onmessage = function(e) {
+                    wsActive = true;
+                    const d = JSON.parse(e.data);
+                    applyPrice(parseFloat(d.p));
+                };
+
+                ws.onclose = () => { wsActive = false; startPolling(); setTimeout(connectWs, 3000); };
+                ws.onerror = () => { wsActive = false; startPolling(); ws.close(); };
+            }
+
+            // Watchdog: nếu WS không báo gì trong 8s thì bật polling
+            setInterval(() => {
+                if (lastMsgAt && Date.now() - lastMsgAt > 8000) { wsActive = false; startPolling(); }
+            }, 5000);
+
+            connectWs();
+
+            // Expose để SPA engine gọi khi đổi symbol
+            window.__reconnectPriceFeed = function(sym) {
+                symbolLower = sym;
+                connectWs();
+            };
         })();
 
         // === CHART ===
@@ -1124,7 +1163,8 @@
                 showChartLoading();
 
                 // Update price feed ngay lập tức
-                reconnectPriceFeed(sym);
+                if (window.__reconnectPriceFeed) window.__reconnectPriceFeed(sym);
+                else reconnectPriceFeed(sym);
 
                 // Sync tất cả hidden inputs trong forms (propose, capital, v.v.)
                 document.querySelectorAll('input[name="symbol"]').forEach(i => i.value = sym.toUpperCase());

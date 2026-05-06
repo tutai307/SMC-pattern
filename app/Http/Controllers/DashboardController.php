@@ -257,6 +257,20 @@ class DashboardController extends Controller
         return back()->with('success', "Lệnh #{$id} {$signal->symbol} đã được đánh dấu KHỚP — bot bắt đầu theo dõi.");
     }
 
+    public function priceJson()
+    {
+        $symbol = strtoupper(preg_replace('/[^A-Z0-9]/i', '', request('symbol', 'XAGUSDT')));
+        $symbol = substr($symbol, 0, 20) ?: 'XAGUSDT';
+        $price  = $this->binanceService->getPrice($symbol);
+
+        if ($price === null) {
+            return response()->json(['error' => 'symbol not found'], 404);
+        }
+
+        return response()->json(['symbol' => $symbol, 'price' => (float) $price])
+            ->header('Cache-Control', 'no-store');
+    }
+
     public function analysisJson()
     {
         $symbol    = strtoupper(preg_replace('/[^A-Z0-9]/i', '', request('symbol', 'XAGUSDT')));

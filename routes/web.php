@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
 
 Route::get('/analysis.json', [DashboardController::class, 'analysisJson'])->middleware('throttle:60,1')->name('analysis.json');
+Route::get('/price.json', [DashboardController::class, 'priceJson'])->middleware('throttle:120,1')->name('price.json');
 
 Route::middleware('throttle:30,1')->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
