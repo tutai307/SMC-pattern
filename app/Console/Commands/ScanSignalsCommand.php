@@ -100,7 +100,7 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        if (str_starts_with($aiRec, 'BỎ QUA') || str_starts_with($aiRec, 'CHỜ RETEST')) {
+        if (str_starts_with($aiRec, 'BỎ QUA')) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe} — AI recommend {$aiRec}, bỏ qua");
             return;
         }

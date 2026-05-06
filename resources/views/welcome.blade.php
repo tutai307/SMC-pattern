@@ -1254,7 +1254,7 @@
 
                 // Kiểm tra AI có cho vào lệnh không
                 const aiRec    = (sig.ai_recommendation ?? '').toUpperCase();
-                const canEnter = aiRec.startsWith('VÀO LỆNH') || aiRec === '';
+                const canEnter = !aiRec.startsWith('BỎ QUA');
                 const proposeBtn = document.querySelector('button[type="submit"].text-blue-400, form [name="propose"] ~ button') ||
                                    document.querySelector('form input[name="propose"]')?.closest('form')?.querySelector('button[type="submit"]');
                 if (proposeBtn) {
@@ -1291,7 +1291,7 @@
                         <div class="mt-3 pt-2 border-t border-white/[0.06]">
                             <div class="border rounded-lg px-3 py-2 ${vCls} text-[10px] font-bold uppercase text-center">${vDecision}${vReasons ? ' — ' + vReasons : ''}</div>
                         </div>
-                        ${!canEnter ? `<div class="mt-2 rounded-lg px-3 py-2 ${aiRec.startsWith('CHỜ RETEST') ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30'} text-[10px] font-bold text-center">🚫 ĐỀ XUẤT BỊ KHOÁ — AI: ${sig.ai_recommendation}</div>` : ''}
+                        ${!canEnter ? `<div class="mt-2 rounded-lg px-3 py-2 bg-red-500/10 text-red-400 border border-red-500/30 text-[10px] font-bold text-center">🚫 AI khuyến nghị BỎ QUA — không đề xuất</div>` : ''}
                         ${aiHtml}
                     </div>`;
             }

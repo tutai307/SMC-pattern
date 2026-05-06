@@ -50,7 +50,7 @@ class DashboardController extends Controller
         // Lưu tín hiệu nếu có và người dùng yêu cầu (qua click reload)
         if ($analysis['signal'] && request('propose')) {
             $aiRec = strtoupper($analysis['signal']['ai_recommendation'] ?? '');
-            $blocked = str_starts_with($aiRec, 'BỎ QUA') || str_starts_with($aiRec, 'CHỜ RETEST');
+            $blocked = str_starts_with($aiRec, 'BỎ QUA');
             if ($blocked) {
                 return redirect()->route('dashboard', [
                     'symbol' => $symbol, 'timeframe' => $timeframe,
