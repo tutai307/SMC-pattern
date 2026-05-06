@@ -246,19 +246,48 @@ class ScanSignalsCommand extends Command
     private function scan(): void
     {
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
+        $anySignalSent = false;
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
-            $this->scanPair($symbol, $timeframe, 'smc');
+            if ($this->scanPair($symbol, $timeframe, 'smc')) {
+                $anySignalSent = true;
+            }
+        }
+
+        if (!$anySignalSent) {
+            $this->sendNoSetupReminder();
         }
     }
 
-    private function scanPair(string $symbol, string $timeframe, string $method = 'smc'): void
+    private function sendNoSetupReminder(): void
+    {
+        $dedupKey = 'scan_no_setup_reminder';
+        if (Cache::has($dedupKey)) return;
+
+        Cache::put($dedupKey, true, now()->addMinutes(30));
+
+        $messages = [
+            "🧘 <b>Không có setup nào đủ điều kiện lúc này.</b>\n\nThị trường chưa cho bạn cơ hội — đây <b>không phải lúc để vào lệnh</b>.\n\nNgồi chờ là một quyết định giao dịch. Trader giỏi nhất thế giới bỏ qua 90% ngày không có setup rõ ràng.",
+            "⏳ <b>Chưa có kèo A+ nào.</b>\n\nThị trường ranging hoặc ADX quá thấp. Vào lúc này = đánh bạc, không phải giao dịch.\n\n💡 Nhắc nhở: <i>Tiền bạn giữ được khi không vào lệnh cũng là tiền kiếm được.</i>",
+            "🚫 <b>Không có tín hiệu hợp lệ.</b>\n\nHTF chưa align, không có OB/FVG đủ mạnh, hoặc ADX chưa đủ trend.\n\nHãy làm việc khác. Bot sẽ báo ngay khi có setup thật.",
+            "🔕 <b>Thị trường im lặng — bạn cũng nên im lặng.</b>\n\nKhông có setup = không có lệnh. Đơn giản vậy thôi.\n\n<i>\"The goal is not to trade every day. The goal is to be profitable.\"</i>",
+            "📵 <b>Scan xong — trắng tay.</b>\n\nĐây là tín hiệu tốt nhất hôm nay: <b>ở ngoài thị trường.</b>\n\nBot đang theo dõi 24/7. Khi có kèo thật, bạn sẽ biết ngay.",
+        ];
+
+        $idx = Cache::get('scan_no_setup_idx', 0);
+        Cache::put('scan_no_setup_idx', ($idx + 1) % count($messages), now()->addDays(7));
+
+        $this->telegramService->sendRaw($messages[$idx]);
+        $this->info('[' . now()->format('H:i:s') . '] Nhắc nhở không có setup → đã gửi Telegram.');
+    }
+
+    private function scanPair(string $symbol, string $timeframe, string $method = 'smc'): bool
     {
         $klines       = $this->binanceService->getKlines($symbol, $timeframe, 500);
         $currentPrice = $this->binanceService->getPrice($symbol);
 
         if (empty($klines) || $currentPrice === null) {
             $this->warn("[{$symbol}] Không lấy được dữ liệu");
-            return;
+            return false;
         }
 
         $htf = match ($timeframe) {
@@ -273,7 +302,7 @@ class ScanSignalsCommand extends Command
 
         if (!$signal) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — không có setup");
-            return;
+            return false;
         }
 
         $aiScore = (int) ($signal['ai_score'] ?? 0);
@@ -282,15 +311,15 @@ class ScanSignalsCommand extends Command
 
         if ($aiError) {
             $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), bỏ qua");
-            return;
+            return false;
         }
         if ($aiScore < 60) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 60, bỏ qua");
-            return;
+            return false;
         }
         if (str_starts_with($aiRec, 'BỎ QUA')) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI: {$aiRec}, bỏ qua");
-            return;
+            return false;
         }
 
         $entryKey = round((float) $signal['entry'], 4);
@@ -298,7 +327,7 @@ class ScanSignalsCommand extends Command
 
         if (Cache::has($dedupKey)) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — setup đã thông báo, chờ hết hạn");
-            return;
+            return true; // đã gửi trước đó → vẫn tính là "có setup"
         }
 
         Cache::put($dedupKey, true, now()->addHours(6));
@@ -321,5 +350,6 @@ class ScanSignalsCommand extends Command
 
         $methodLabel = strtoupper($method);
         $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        return true;
     }
 }
