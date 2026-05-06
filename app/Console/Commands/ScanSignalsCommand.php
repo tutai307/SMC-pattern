@@ -114,7 +114,7 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        Cache::put($dedupKey, true, now()->addHours(2));
+        Cache::put($dedupKey, true, now()->addHours(6));
 
         $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice);
 

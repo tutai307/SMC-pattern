@@ -468,6 +468,8 @@ class PriceActionService
                 if ($confidence < 40) continue;
 
                 $sl = $zone['bottom'] - ($lastAtr * 0.8);
+                // SL tối thiểu 1.5% dưới entry — tránh bị quét bởi noise
+                $sl = min($sl, $entry * 0.985);
                 $tp = $entry + ($entry - $sl) * 3.0;
 
                 if ($isSniper && $choch) {
@@ -536,6 +538,8 @@ class PriceActionService
                 if ($confidence < 60) continue;
 
                 $sl = $zone['top'] + ($lastAtr * 0.8);
+                // SL tối thiểu 1.5% trên entry — tránh bị quét bởi noise
+                $sl = max($sl, $entry * 1.015);
                 $tp = $entry - ($sl - $entry) * 3.0;
 
                 if ($isSniper && $choch) {
