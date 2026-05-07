@@ -98,7 +98,11 @@ class AuthController extends Controller
                 'timestamp'     => now()->toIso8601String(),
             ]);
 
-            return back()->withErrors(['otp' => 'Không gửi được email. Kiểm tra cấu hình MAIL_* trong .env']);
+            $displayError = config('app.debug')
+                ? '[DEBUG] ' . get_class($e) . ': ' . $e->getMessage()
+                : 'Không gửi được email. Kiểm tra cấu hình MAIL_* trong .env';
+
+            return back()->withErrors(['otp' => $displayError]);
         }
 
         return back()->with('otp_sent', true);
