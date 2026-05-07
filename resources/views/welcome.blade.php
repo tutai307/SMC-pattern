@@ -94,6 +94,44 @@
         </div>
     </header>
 
+    <!-- SMC Watchlist Bar -->
+    <div class="border-b border-white/[0.06] bg-[#0d1117]/80 backdrop-blur-sm sticky top-[57px] z-30">
+        <div class="max-w-screen-2xl mx-auto px-3 md:px-6">
+            <div class="flex items-center gap-1 overflow-x-auto py-2 scrollbar-none" id="watchlist-bar">
+                <span class="text-[9px] text-slate-600 uppercase font-bold tracking-widest shrink-0 pr-2 border-r border-white/10 mr-1">SMC</span>
+                @php
+                $watchlistCoins = [
+                    ['sym' => 'XAUUSDT', 'label' => 'XAU',  'name' => 'Gold',    'tier' => 1],
+                    ['sym' => 'XAGUSDT', 'label' => 'XAG',  'name' => 'Silver',  'tier' => 1],
+                    ['sym' => 'BTCUSDT', 'label' => 'BTC',  'name' => 'Bitcoin', 'tier' => 1],
+                    ['sym' => 'ETHUSDT', 'label' => 'ETH',  'name' => 'Ethereum','tier' => 1],
+                    ['sym' => 'SOLUSDT', 'label' => 'SOL',  'name' => 'Solana',  'tier' => 2],
+                    ['sym' => 'BNBUSDT', 'label' => 'BNB',  'name' => 'BNB',     'tier' => 2],
+                    ['sym' => 'LINKUSDT','label' => 'LINK', 'name' => 'Chainlink','tier' => 2],
+                ];
+                @endphp
+                @foreach($watchlistCoins as $coin)
+                @php $isActive = strtoupper($symbol) === $coin['sym']; @endphp
+                <button
+                    onclick="navigate('{{ strtolower($coin['sym']) }}', currentTimeframe, currentMethod)"
+                    title="{{ $coin['name'] }}"
+                    class="watchlist-coin shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all
+                        {{ $isActive
+                            ? 'bg-blue-600/20 text-blue-300 border border-blue-500/40'
+                            : 'text-slate-500 hover:text-slate-200 hover:bg-white/5 border border-transparent' }}"
+                    data-sym="{{ strtolower($coin['sym']) }}">
+                    @if($coin['tier'] === 1)
+                    <span class="w-1.5 h-1.5 rounded-full shrink-0 {{ $isActive ? 'bg-blue-400' : 'bg-slate-600' }}"></span>
+                    @else
+                    <span class="w-1.5 h-1.5 rounded-full shrink-0 {{ $isActive ? 'bg-blue-400' : 'bg-slate-700' }}"></span>
+                    @endif
+                    {{ $coin['label'] }}
+                </button>
+                @endforeach
+            </div>
+        </div>
+    </div>
+
     <main class="trading-container">
         <!-- Chart Section -->
         <div class="glass-card p-4">
@@ -1208,6 +1246,20 @@
                         ? ['bg-blue-600','text-white','shadow-lg','shadow-blue-500/20']
                         : ['bg-white/5','text-slate-400','hover:bg-white/10']));
                 });
+                // Update watchlist bar active state
+                document.querySelectorAll('.watchlist-coin').forEach(b => {
+                    const active = b.dataset.sym === currentSymbol;
+                    b.className = b.className
+                        .replace(/bg-blue-600\/20 text-blue-300 border border-blue-500\/40/g, '')
+                        .replace(/text-slate-500 hover:text-slate-200 hover:bg-white\/5 border border-transparent/g, '')
+                        .trim();
+                    b.classList.add(...(active
+                        ? ['bg-blue-600/20','text-blue-300','border','border-blue-500/40']
+                        : ['text-slate-500','hover:text-slate-200','hover:bg-white/5','border','border-transparent']));
+                    const dot = b.querySelector('span');
+                    if (dot) { dot.className = dot.className.replace(/bg-blue-400|bg-slate-600|bg-slate-700/g,'').trim() + (active ? ' bg-blue-400' : ' bg-slate-600'); }
+                });
+
                 document.querySelectorAll('.method-btn').forEach(b => {
                     const active = b.dataset.method === currentMethod;
                     b.className = b.className
