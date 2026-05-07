@@ -61,9 +61,12 @@
                 </div>
                 <div class="hidden md:flex items-center gap-4">
                     <div class="h-10 w-px bg-white/10"></div>
-                    <button class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg font-semibold transition-all text-sm">
-                        Connect API
-                    </button>
+                    <form method="POST" action="{{ route('logout') }}">
+                        @csrf
+                        <button type="submit" class="text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-white/10 hover:border-white/20">
+                            Đăng xuất
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
