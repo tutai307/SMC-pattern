@@ -6,6 +6,8 @@ use App\Http\Controllers\AccessController;
 use App\Models\AccessRequest;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class RequireAuth
 {
