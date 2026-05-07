@@ -929,14 +929,13 @@ class PriceActionService
         $apiKey = env('OPENROUTER_API_KEY');
         if (!$apiKey) return $signal;
 
-        $timeBucket = floor(time() / 600);
         $cacheKey = 'ai_v3_' . md5(
             $symbol . $timeframe . $signal['type'] .
             round($signal['entry'], 4) . round($signal['tp'], 4) . round($signal['sl'], 4) .
-            $method . $timeBucket
+            $method
         );
 
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 600, function () use (
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 14400, function () use (
             $apiKey, $signal, $recentCandles, $structure, $htfStructure,
             $method, $symbol, $timeframe, $indicators, $orderBlocks, $fvgs, $poc
         ) {
@@ -1060,7 +1059,7 @@ PROMPT;
                         'HTTP-Referer'  => 'https://tomai.app',
                     ],
                     'json' => [
-                        'model'           => 'openai/gpt-4o',
+                        'model'           => 'openai/gpt-4o-mini',
                         'temperature'     => 0.2,
                         'messages'        => [
                             [
@@ -1118,6 +1117,12 @@ PROMPT;
         if (!$apiKey) {
             return ['verdict' => 'AI chưa cấu hình', 'analysis' => 'Thiếu OPENROUTER_API_KEY', 'sl_advice' => null, 'tp_advice' => null];
         }
+
+        // Cache theo signal params + price bucket 30 phút
+        $priceBucket = floor($currentPrice / max($currentPrice * 0.005, 0.0001));
+        $adviseCacheKey = 'advise_' . md5($symbol . $timeframe . $type . $entry . $sl . $tp . $priceBucket);
+        $cached = \Illuminate\Support\Facades\Cache::get($adviseCacheKey);
+        if ($cached) return $cached;
 
         $candles    = $this->formatCandles($klines);
         $htfCandles = $this->formatCandles($klinesHTF);
@@ -1222,7 +1227,7 @@ PROMPT;
                     'HTTP-Referer'  => 'https://tomai.app',
                 ],
                 'json' => [
-                    'model'           => 'openai/gpt-4o',
+                    'model'           => 'openai/gpt-4o-mini',
                     'temperature'     => 0.2,
                     'messages'        => [
                         ['role' => 'system', 'content' => "Bạn là senior crypto futures trader vận hành theo Inverse Rule:\n- Khi THUA (P&L âm): Sợ hãi rằng thị trường tiếp tục ngược chiều. Khuyên cắt lỗ dứt khoát tại SL, không nới SL, không trung bình giá xuống.\n- Khi THẮNG (P&L dương): Hy vọng xu hướng còn đi xa. Chỉ đóng khi có tín hiệu đảo chiều cấu trúc thực sự (CHoCH/BOS ngược chiều).\n- Discomfort Protocol: Nếu phán quyết cảm thấy 'an toàn, nhẹ nhõm' (chốt lãi sớm khi chưa đến TP) → thường là sai lầm. Nếu phán quyết cảm thấy 'đau đớn' (giữ lệnh lời, cắt lỗ dứt khoát) → thường là đúng.\nTư vấn cụ thể, cite giá thực, không nói chung chung. Chỉ trả về JSON hợp lệ."],
@@ -1236,12 +1241,14 @@ PROMPT;
             $content = $result['choices'][0]['message']['content'] ?? '{}';
             $data    = json_decode($content, true);
 
-            return [
+            $result = [
                 'verdict'   => $this->flattenAiField($data['verdict']   ?? 'Không rõ'),
                 'analysis'  => $this->flattenAiField($data['analysis']  ?? ''),
                 'sl_advice' => $this->flattenAiField($data['sl_advice'] ?? '') ?: null,
                 'tp_advice' => $this->flattenAiField($data['tp_advice'] ?? '') ?: null,
             ];
+            \Illuminate\Support\Facades\Cache::put($adviseCacheKey, $result, 1800);
+            return $result;
         } catch (\Exception $e) {
             \Log::warning('Advisor AI error: ' . $e->getMessage());
             return ['verdict' => 'AI lỗi', 'analysis' => 'Không kết nối được AI: ' . $e->getMessage(), 'sl_advice' => null, 'tp_advice' => null];
