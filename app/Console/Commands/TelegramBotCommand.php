@@ -796,6 +796,19 @@ PROMPT;
         $lines   = ["📋 <b>Lệnh đang theo dõi:</b>\n"];
         $running = [];
         foreach ($signals as $s) {
+            // Inline fill check: nếu giá đã vượt entry mà monitor chưa kịp cập nhật
+            if (!$s->filled_at) {
+                $livePrice = (float) $this->binance->getPrice($s->symbol);
+                if ($livePrice > 0) {
+                    $crossed = $s->type === 'LONG'
+                        ? ($livePrice <= (float) $s->entry_price)
+                        : ($livePrice >= (float) $s->entry_price);
+                    if ($crossed) {
+                        $s->update(['filled_at' => now()]);
+                    }
+                }
+            }
+
             $filled  = $s->filled_at ? '🟢 ĐANG CHẠY' : '⏳ CHỜ KHỚP';
             $dir     = $s->type === 'LONG' ? '📈' : '📉';
             $lines[] = "{$dir} <b>#{$s->id} {$s->symbol}</b> {$s->timeframe} — {$filled}";
@@ -806,7 +819,10 @@ PROMPT;
 
         $this->telegram->reply(implode("\n", $lines));
 
-        if (empty($running)) return;
+        if (empty($running)) {
+            $this->telegram->reply("💡 Chưa có lệnh nào khớp entry.\nGõ /filled <id> để đánh dấu thủ công nếu bạn đã vào lệnh.");
+            return;
+        }
 
         $this->telegram->reply("🤖 Đang đánh giá <b>" . count($running) . " lệnh đang chạy</b>... (~15s/lệnh)");
 
