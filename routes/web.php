@@ -4,12 +4,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\AccessController;
 
 // ── Auth (không cần đăng nhập) ───────────────────────────────────────────────
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login/send', [AuthController::class, 'sendOtp'])->name('login.send')->middleware('throttle:5,1');
 Route::post('/login/verify', [AuthController::class, 'verifyOtp'])->name('login.verify')->middleware('throttle:10,1');
 Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+Route::post('/access/request', [AccessController::class, 'submitRequest'])->name('access.request')->middleware('throttle:5,1');
 
 Route::get('/health', fn() => response()->json([
     'status' => 'ok',
@@ -38,4 +40,10 @@ Route::middleware(\App\Http\Middleware\RequireAuth::class)->group(function () {
     });
 
     Route::post('/advisor', [DashboardController::class, 'advisor'])->middleware('throttle:20,1')->name('advisor');
+
+    // Admin: access management
+    Route::get('/admin/access', [AccessController::class, 'dashboard'])->name('admin.access');
+    Route::post('/admin/access/{id}/approve', [AccessController::class, 'approve'])->name('access.approve');
+    Route::post('/admin/access/{id}/deny', [AccessController::class, 'deny'])->name('access.deny');
+    Route::post('/admin/access/{id}/revoke', [AccessController::class, 'revoke'])->name('access.revoke');
 });

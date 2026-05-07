@@ -59,8 +59,11 @@
                         ${{ number_format($currentPrice, 2) }}
                     </div>
                 </div>
-                <div class="hidden md:flex items-center gap-4">
-                    <div class="h-10 w-px bg-white/10"></div>
+                <div class="hidden md:flex items-center gap-2">
+                    <div class="h-10 w-px bg-white/10 mr-1"></div>
+                    <a href="{{ route('admin.access') }}" class="text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-white/10 hover:border-white/20">
+                        👥 Truy cập
+                    </a>
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-white/10 hover:border-white/20">
