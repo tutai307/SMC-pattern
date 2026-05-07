@@ -665,6 +665,26 @@ PROMPT;
             ? "🟢 Giá đã tại vùng entry — bot theo dõi TP/SL ngay."
             : "⏳ Chờ giá chạm entry <code>{$p['entry']}</code> — bot tự nhận khi khớp.";
 
+        // Position sizing block nếu có vốn
+        $posBlock = '';
+        $capital  = (float) ($p['capital'] ?? 0);
+        $entry    = (float) $signal->entry_price;
+        $sl       = (float) $signal->sl_price;
+        if ($capital > 0 && $entry > 0 && $sl > 0) {
+            $slPct    = round(abs($entry - $sl) / $entry * 100, 2);
+            $tpPct    = $signal->tp_price > 0 ? round(abs($signal->tp_price - $entry) / $entry * 100, 2) : 0;
+            $rr       = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
+            $riskAmt  = round($capital * 0.02, 2);
+            $slFrac   = $slPct / 100;
+            $leverage = max(1, min(20, (int) floor(1 / ($slFrac * 2))));
+            $volume   = round($riskAmt / $slFrac, 2);
+            $margin   = round($volume / $leverage, 2);
+            $posBlock = "\n━━━━━━━━━━━━━━━\n"
+                      . "💰 Vốn: <b>\${$capital}</b> | Đòn bẩy: <b>{$leverage}x</b>\n"
+                      . "📊 Ký quỹ: <code>\${$margin}</code> | KL vị thế: <code>\${$volume}</code>\n"
+                      . "💀 Rủi ro tối đa: <code>\${$riskAmt}</code> (2%) | R:R = 1:{$rr}";
+        }
+
         $this->telegram->reply(
             "✅ <b>Đã ghi vào hệ thống!</b>\n\n"
             . "{$dir} <b>{$signal->symbol}</b> | {$signal->timeframe}\n"
@@ -672,6 +692,7 @@ PROMPT;
             . "📌 Entry: <code>{$signal->entry_price}</code>\n"
             . "🎯 TP: <code>{$signal->tp_price}</code>\n"
             . "🛑 SL: <code>{$signal->sl_price}</code>\n"
+            . $posBlock . "\n"
             . "━━━━━━━━━━━━━━━\n"
             . "🆔 ID: <b>#{$signal->id}</b>\n"
             . $statusNote
