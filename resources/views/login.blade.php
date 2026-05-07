@@ -59,13 +59,13 @@
             <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-xl transition-all text-sm">
                 Xác nhận
             </button>
-            <div class="text-center mt-4">
-                <form method="POST" action="{{ route('login.send') }}" class="inline">
-                    @csrf
-                    <button type="submit" class="text-slate-500 hover:text-slate-300 text-xs transition-all">Gửi lại OTP</button>
-                </form>
-            </div>
         </form>
+        <div class="text-center mt-4">
+            <form method="POST" action="{{ route('login.send') }}">
+                @csrf
+                <button type="submit" class="text-slate-500 hover:text-slate-300 text-xs transition-all">Gửi lại OTP</button>
+            </form>
+        </div>
     </div>
 
     @else
