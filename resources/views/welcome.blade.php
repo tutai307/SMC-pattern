@@ -101,13 +101,10 @@
                 <span class="text-[9px] text-slate-600 uppercase font-bold tracking-widest shrink-0 pr-2 border-r border-white/10 mr-1">SMC</span>
                 @php
                 $watchlistCoins = [
-                    ['sym' => 'XAUUSDT', 'label' => 'XAU',  'name' => 'Gold',    'tier' => 1],
-                    ['sym' => 'XAGUSDT', 'label' => 'XAG',  'name' => 'Silver',  'tier' => 1],
-                    ['sym' => 'BTCUSDT', 'label' => 'BTC',  'name' => 'Bitcoin', 'tier' => 1],
-                    ['sym' => 'ETHUSDT', 'label' => 'ETH',  'name' => 'Ethereum','tier' => 1],
-                    ['sym' => 'SOLUSDT', 'label' => 'SOL',  'name' => 'Solana',  'tier' => 2],
-                    ['sym' => 'BNBUSDT', 'label' => 'BNB',  'name' => 'BNB',     'tier' => 2],
-                    ['sym' => 'LINKUSDT','label' => 'LINK', 'name' => 'Chainlink','tier' => 2],
+                    ['sym' => 'XAUUSDT', 'label' => 'XAU', 'name' => 'Gold',     'tier' => 1],
+                    ['sym' => 'XAGUSDT', 'label' => 'XAG', 'name' => 'Silver',   'tier' => 1],
+                    ['sym' => 'BTCUSDT', 'label' => 'BTC', 'name' => 'Bitcoin',  'tier' => 1],
+                    ['sym' => 'ETHUSDT', 'label' => 'ETH', 'name' => 'Ethereum', 'tier' => 1],
                 ];
                 @endphp
                 @foreach($watchlistCoins as $coin)
