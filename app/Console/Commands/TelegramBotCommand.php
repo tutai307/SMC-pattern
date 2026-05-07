@@ -465,6 +465,16 @@ PROMPT;
             $currentPrice = (float) $this->binance->getPrice($symbol);
             $analysis     = $this->priceAction->analyze($klines, $klinesHTF, 'smc', $symbol, $tf);
 
+            // Gold correlation context cho silver
+            $goldBlock = '';
+            if ($symbol === 'XAGUSDT') {
+                $gold      = $this->getGoldTrend();
+                $goldEmoji = $gold['trend'] === 'TĂNG GIÁ' ? '📈' : ($gold['trend'] === 'GIẢM GIÁ' ? '📉' : '↔');
+                $goldBlock = "\n━━━━━━━━━━━━━━━\n"
+                           . "🥇 <b>Vàng (XAU/USD)</b>: {$goldEmoji} <b>{$gold['trend']}</b> @ <code>" . number_format($gold['price'], 2) . "</code>\n"
+                           . "<i>Bạc thường follow vàng — dùng làm cơ sở xác nhận xu hướng.</i>";
+            }
+
             if (!$analysis['signal']) {
                 $adx   = round($analysis['indicators']['adx'] ?? 0, 1);
                 $trend = $analysis['structure']['trend'] ?? 'không rõ';
@@ -472,6 +482,7 @@ PROMPT;
                     "📊 <b>{$symbol}</b> | {$label}\n"
                     . "━━━━━━━━━━━━━━━\n"
                     . "Xu hướng: <b>{$trend}</b> | ADX: {$adx}\n"
+                    . $goldBlock . "\n"
                     . "━━━━━━━━━━━━━━━\n"
                     . "❌ Chưa có setup đủ điều kiện.\n"
                     . "Thử khung khác hoặc đợi thị trường rõ hơn."
@@ -527,6 +538,7 @@ PROMPT;
 
             $msg = "{$dirEmoji} <b>{$type} — {$symbol} {$label}</b>\n"
                  . "━━━━━━━━━━━━━━━\n"
+                 . ($goldBlock ? ltrim($goldBlock, "\n") . "\n━━━━━━━━━━━━━━━\n" : '')
                  . "💰 Giá: <code>{$currentPrice}</code>\n"
                  . "📌 Entry: <code>{$sig['entry']}</code>\n"
                  . "🎯 TP: <code>{$sig['tp']}</code> <b>(+{$tpPct}%)</b>\n"
@@ -667,6 +679,26 @@ PROMPT;
 
         $fillStr = $alreadyFilled ? 'filled ngay' : 'chờ fill';
         $this->info("  [{$signal->symbol}] Lệnh #{$signal->id} tạo từ Telegram — {$fillStr}.");
+    }
+
+    // ─── Gold/Silver correlation ─────────────────────────────────────────────────
+
+    private function getGoldTrend(): array
+    {
+        $cacheKey = 'gold_trend_4h';
+        if ($cached = Cache::get($cacheKey)) return $cached;
+
+        $klines = $this->binance->getKlines('XAUUSDT', '4h', 100);
+        $price  = (float) ($this->binance->getPrice('XAUUSDT') ?? 0);
+
+        if (empty($klines)) {
+            return ['trend' => 'không rõ', 'price' => $price];
+        }
+
+        $structure = $this->priceAction->getStructure($klines);
+        $result    = ['trend' => $structure['trend'] ?? 'không rõ', 'price' => $price];
+        Cache::put($cacheKey, $result, now()->addMinutes(15));
+        return $result;
     }
 
     // ─── Metals news ─────────────────────────────────────────────────────────────

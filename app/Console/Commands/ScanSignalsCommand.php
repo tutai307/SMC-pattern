@@ -258,6 +258,24 @@ class ScanSignalsCommand extends Command
         }
     }
 
+    private function getGoldTrend(): array
+    {
+        $cacheKey = 'gold_trend_4h';
+        if ($cached = Cache::get($cacheKey)) return $cached;
+
+        $klines = $this->binanceService->getKlines('XAUUSDT', '4h', 100);
+        $price  = (float) ($this->binanceService->getPrice('XAUUSDT') ?? 0);
+
+        if (empty($klines)) {
+            return ['trend' => 'không rõ', 'price' => $price];
+        }
+
+        $structure = $this->priceActionService->getStructure($klines);
+        $result    = ['trend' => $structure['trend'] ?? 'không rõ', 'price' => $price];
+        Cache::put($cacheKey, $result, now()->addMinutes(15));
+        return $result;
+    }
+
     private function sendNoSetupReminder(): void
     {
         $dedupKey = 'scan_no_setup_reminder';
@@ -320,6 +338,25 @@ class ScanSignalsCommand extends Command
         if (str_starts_with($aiRec, 'BỎ QUA')) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI: {$aiRec}, bỏ qua");
             return false;
+        }
+
+        // ── Silver/Gold correlation filter ──
+        if ($symbol === 'XAGUSDT') {
+            $gold        = $this->getGoldTrend();
+            $isLongSig   = str_contains(strtolower($signal['type'] ?? ''), 'mua');
+            $goldTrend   = $gold['trend'];
+
+            if ($isLongSig && $goldTrend === 'GIẢM GIÁ') {
+                $this->warn('[' . now()->format('H:i:s') . "] XAGUSDT MUA bị block — XAU đang {$goldTrend}");
+                return false;
+            }
+            if (!$isLongSig && $goldTrend === 'TĂNG GIÁ') {
+                $this->warn('[' . now()->format('H:i:s') . "] XAGUSDT BÁN bị block — XAU đang {$goldTrend}");
+                return false;
+            }
+
+            $goldLabel   = $goldTrend === 'TĂNG GIÁ' ? '📈 TĂNG' : ($goldTrend === 'GIẢM GIÁ' ? '📉 GIẢM' : '↔ ĐI NGANG');
+            $signal['reason'] = "🥇 XAU/USD {$goldLabel} @ " . number_format($gold['price'], 2) . " — bạc align\n" . ($signal['reason'] ?? '');
         }
 
         $entryKey = round((float) $signal['entry'], 4);
