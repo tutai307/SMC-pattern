@@ -61,6 +61,7 @@ class AuthController extends Controller
         $startTime = microtime(true);
 
         try {
+            $start = microtime(true);
             Mail::raw(
                 "Felix Terminal — Mã OTP đăng nhập của bạn:\n\n{$otp}\n\nMã có hiệu lực trong 10 phút.\nNếu bạn không yêu cầu, hãy bỏ qua email này.",
                 function ($message) use ($adminEmail, $otp) {
