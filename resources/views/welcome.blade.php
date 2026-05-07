@@ -1333,7 +1333,7 @@
                 chartObj.timeScale().fitContent();
             }
 
-            async function navigate(sym, tf, method) {
+            window.navigate = async function navigate(sym, tf, method) {
                 if (sym === currentSymbol && tf === currentTimeframe && method === currentMethod) return;
 
                 currentSymbol    = sym;
