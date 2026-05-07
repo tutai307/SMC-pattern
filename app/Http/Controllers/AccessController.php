@@ -129,18 +129,16 @@ class AccessController extends Controller
     public static function logVisit(Request $request): void
     {
         $ip = $request->ip();
-        // Skip if already has any record
         if (AccessRequest::where('ip', $ip)->exists()) return;
 
         $cacheKey = 'visit_logged_' . md5($ip);
         if (Cache::has($cacheKey)) return;
         Cache::put($cacheKey, true, now()->addMinutes(30));
 
-        $location = (new self(app(TelegramService::class)))->resolveLocation($ip);
-
+        // No geolocation here — keep request path fast
         AccessRequest::create([
             'ip'         => $ip,
-            'location'   => $location,
+            'location'   => null,
             'user_agent' => substr($request->userAgent() ?? '', 0, 200),
             'status'     => 'visiting',
         ]);
