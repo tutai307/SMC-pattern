@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 class AuthController extends Controller
@@ -35,6 +36,30 @@ class AuthController extends Controller
 
         Cache::put($cacheKey, $otp, now()->addMinutes(10));
 
+        // ── Pre-send diagnostics ──────────────────────────────────────────────
+        $mailer     = config('mail.default');
+        $smtpHost   = config('mail.mailers.smtp.host');
+        $smtpPort   = config('mail.mailers.smtp.port');
+        $smtpScheme = config('mail.mailers.smtp.scheme');
+        $smtpUser   = config('mail.mailers.smtp.username');
+        $fromAddr   = config('mail.from.address');
+        $timeout    = config('mail.mailers.smtp.timeout');
+
+        Log::info('Felix OTP mail: attempting send', [
+            'mailer'      => $mailer,
+            'smtp_host'   => $smtpHost,
+            'smtp_port'   => $smtpPort,
+            'smtp_scheme' => $smtpScheme,
+            'smtp_user'   => $smtpUser,
+            'from'        => $fromAddr,
+            'to'          => $adminEmail,
+            'timeout'     => $timeout,
+            'php_version' => PHP_VERSION,
+            'timestamp'   => now()->toIso8601String(),
+        ]);
+
+        $startTime = microtime(true);
+
         try {
             Mail::raw(
                 "Felix Terminal — Mã OTP đăng nhập của bạn:\n\n{$otp}\n\nMã có hiệu lực trong 10 phút.\nNếu bạn không yêu cầu, hãy bỏ qua email này.",
@@ -43,8 +68,36 @@ class AuthController extends Controller
                             ->subject("[Felix] OTP đăng nhập: {$otp}");
                 }
             );
+
+            $elapsed = round((microtime(true) - $startTime) * 1000);
+
+            Log::info('Felix OTP mail: sent successfully', [
+                'to'           => $adminEmail,
+                'elapsed_ms'   => $elapsed,
+                'timestamp'    => now()->toIso8601String(),
+            ]);
         } catch (\Exception $e) {
-            \Log::error('Felix OTP mail error: ' . $e->getMessage());
+            $elapsed = round((microtime(true) - $startTime) * 1000);
+
+            Log::error('Felix OTP mail: send failed', [
+                'to'            => $adminEmail,
+                'elapsed_ms'    => $elapsed,
+                'error_class'   => get_class($e),
+                'error_code'    => $e->getCode(),
+                'error_message' => $e->getMessage(),
+                'stack_trace'   => $e->getTraceAsString(),
+                // Surface the root cause when the exception wraps another
+                'previous_error' => $e->getPrevious()
+                    ? '[' . get_class($e->getPrevious()) . '] ' . $e->getPrevious()->getMessage()
+                    : null,
+                'smtp_host'     => $smtpHost,
+                'smtp_port'     => $smtpPort,
+                'smtp_scheme'   => $smtpScheme,
+                'smtp_user'     => $smtpUser,
+                'timeout'       => $timeout,
+                'timestamp'     => now()->toIso8601String(),
+            ]);
+
             return back()->withErrors(['otp' => 'Không gửi được email. Kiểm tra cấu hình MAIL_* trong .env']);
         }
 
