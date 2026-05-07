@@ -331,8 +331,14 @@ class ScanSignalsCommand extends Command
             $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), bỏ qua");
             return false;
         }
-        if ($aiScore < 60) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 60, bỏ qua");
+        if ($aiScore < 70) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 70, bỏ qua");
+            return false;
+        }
+
+        // Chỉ gửi SNIPER (OB + CHoCH confirmed) — bỏ qua standard SMC
+        if (empty($signal['sniper'])) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — không phải SNIPER, bỏ qua");
             return false;
         }
         if (str_starts_with($aiRec, 'BỎ QUA')) {

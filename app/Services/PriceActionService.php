@@ -1227,7 +1227,7 @@ PROMPT;
                     'HTTP-Referer'  => 'https://tomai.app',
                 ],
                 'json' => [
-                    'model'           => 'openai/gpt-4o-mini',
+                    'model'           => 'openai/gpt-4o',
                     'temperature'     => 0.2,
                     'messages'        => [
                         ['role' => 'system', 'content' => "Bạn là senior crypto futures trader vận hành theo Inverse Rule:\n- Khi THUA (P&L âm): Sợ hãi rằng thị trường tiếp tục ngược chiều. Khuyên cắt lỗ dứt khoát tại SL, không nới SL, không trung bình giá xuống.\n- Khi THẮNG (P&L dương): Hy vọng xu hướng còn đi xa. Chỉ đóng khi có tín hiệu đảo chiều cấu trúc thực sự (CHoCH/BOS ngược chiều).\n- Discomfort Protocol: Nếu phán quyết cảm thấy 'an toàn, nhẹ nhõm' (chốt lãi sớm khi chưa đến TP) → thường là sai lầm. Nếu phán quyết cảm thấy 'đau đớn' (giữ lệnh lời, cắt lỗ dứt khoát) → thường là đúng.\nTư vấn cụ thể, cite giá thực, không nói chung chung. Chỉ trả về JSON hợp lệ."],
