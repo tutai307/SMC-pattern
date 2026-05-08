@@ -15,9 +15,10 @@ class ScanSignalsCommand extends Command
     protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)}';
     protected $description = 'Quét setup SMC mới + theo dõi lệnh đang mở trong cùng 1 vòng lặp';
 
-    private array $watchlist    = [];
-    private int   $lastScanAt   = 0;
-    private int   $lastMonitorAt = 0;
+    private array $watchlist      = [];
+    private int   $lastScanAt     = 0;
+    private int   $lastMonitorAt  = 0;
+    private int   $lastAiReviewAt = 0;
 
     public function __construct(
         private BinanceService     $binanceService,
@@ -61,6 +62,17 @@ class ScanSignalsCommand extends Command
                     \Log::error('ScanSignals monitor: ' . $e->getMessage());
                 }
                 $this->lastMonitorAt = $now;
+            }
+
+            // ── AI review lệnh đang chạy mỗi 30 phút ──
+            if ($now - $this->lastAiReviewAt >= 1800) {
+                try {
+                    $this->autoReviewRunningSignals();
+                } catch (\Exception $e) {
+                    $this->warn('[' . now()->format('H:i:s') . '] AI review lỗi: ' . $e->getMessage());
+                    \Log::error('ScanSignals ai_review: ' . $e->getMessage());
+                }
+                $this->lastAiReviewAt = $now;
             }
 
             // ── Scan setup mới theo interval ──
@@ -237,6 +249,85 @@ class ScanSignalsCommand extends Command
         $tpDist = $signal->tp_price > 0 ? round(abs($currentPrice - $signal->tp_price) / $signal->tp_price * 100, 2) : 0;
         $slDist = $signal->sl_price > 0 ? round(abs($currentPrice - $signal->sl_price) / $signal->sl_price * 100, 2) : 0;
         $this->line("  [{$signal->symbol}] {$signal->type} #{$signal->id} giá={$currentPrice} | TP còn {$tpDist}% | SL còn {$slDist}%");
+    }
+
+    private function autoReviewRunningSignals(): void
+    {
+        $running = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
+        if ($running->isEmpty()) return;
+
+        $ts = now()->format('H:i:s');
+        $this->line("[{$ts}] AI Review: kiểm tra {$running->count()} lệnh đang chạy...");
+
+        foreach ($running as $signal) {
+            try {
+                $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+                $cacheKey     = "auto_review_sig_{$signal->id}";
+                $last         = Cache::get($cacheKey);
+
+                // Bỏ qua nếu lệnh mới khớp < 15 phút
+                if ($signal->filled_at && $signal->filled_at->diffInMinutes(now()) < 15) continue;
+
+                // Bỏ qua nếu đã review gần đây VÀ giá không biến động > 1.5%
+                if ($last) {
+                    $priceShift = abs($currentPrice - $last['price']) / max($last['price'], 0.0001) * 100;
+                    if ($priceShift < 1.5) continue;
+                }
+
+                $htfMap = ['1m' => '5m', '5m' => '15m', '15m' => '1h', '1h' => '4h', '4h' => '1d', '1d' => '1w'];
+                $htf    = $htfMap[$signal->timeframe] ?? '4h';
+
+                $klines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 200);
+                $klinesHTF = $this->binanceService->getKlines($signal->symbol, $htf, 100);
+                if (empty($klines)) continue;
+
+                $advice = $this->priceActionService->adviseOpenPosition(
+                    $klines, $klinesHTF,
+                    $signal->symbol, $signal->timeframe, $signal->type,
+                    (float) $signal->entry_price,
+                    (float) $signal->sl_price,
+                    (float) $signal->tp_price,
+                    $currentPrice
+                );
+
+                Cache::put($cacheKey, ['price' => $currentPrice, 'at' => time()], now()->addMinutes(90));
+
+                $isLong   = $signal->type === 'LONG';
+                $pnlPct   = $signal->entry_price > 0
+                    ? round((($isLong ? ($currentPrice - $signal->entry_price) : ($signal->entry_price - $currentPrice)) / $signal->entry_price) * 100, 2)
+                    : 0;
+                $pnlSign  = $pnlPct >= 0 ? "+{$pnlPct}%" : "{$pnlPct}%";
+                $pnlEmoji = $pnlPct >= 0 ? '🟢' : '🔴';
+
+                $verdict      = strtoupper($advice['verdict'] ?? '');
+                $verdictEmoji = match (true) {
+                    str_contains($verdict, 'GIỮ')        => '✋',
+                    str_contains($verdict, 'CHỐT LỜI')   => '💰',
+                    str_contains($verdict, 'CẮT LỖ')     => '🔴',
+                    str_contains($verdict, 'DI CHUYỂN')   => '🔧',
+                    str_contains($verdict, 'ĐIỀU CHỈNH')  => '🔧',
+                    str_contains($verdict, '50%')          => '⚖️',
+                    default                               => '💡',
+                };
+
+                $msg = "🤖 <b>Auto Review #{$signal->id} — {$signal->symbol} {$signal->type}</b>\n"
+                     . "━━━━━━━━━━━━━━━\n"
+                     . "💰 Giá: <code>{$currentPrice}</code> | P&amp;L: {$pnlEmoji} <b>{$pnlSign}</b>\n"
+                     . "📌 Entry: <code>{$signal->entry_price}</code> | TP: <code>{$signal->tp_price}</code> | SL: <code>{$signal->sl_price}</code>\n"
+                     . "━━━━━━━━━━━━━━━\n"
+                     . "{$verdictEmoji} <b>Phán quyết: {$advice['verdict']}</b>\n"
+                     . "🔍 {$advice['analysis']}";
+
+                if (!empty($advice['sl_advice'])) $msg .= "\n🛑 SL: {$advice['sl_advice']}";
+                if (!empty($advice['tp_advice']))  $msg .= "\n🎯 TP: {$advice['tp_advice']}";
+
+                $this->telegramService->sendRaw($msg);
+                $this->line("  [{$signal->symbol}] 🤖 #{$signal->id} auto review gửi xong — verdict: {$advice['verdict']}");
+
+            } catch (\Exception $e) {
+                \Log::error("auto_review #{$signal->id}: " . $e->getMessage());
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
