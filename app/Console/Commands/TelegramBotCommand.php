@@ -525,18 +525,15 @@ PROMPT;
 
             $dirEmoji = $isLong ? '📈' : '📉';
 
-            // News block cho vàng/bạc
-            $newsBlock = '';
-            if (in_array($symbol, ['XAUUSDT', 'XAGUSDT'])) {
-                $news = $this->fetchMetalsNews();
-                if ($news) {
-                    $newsBlock = "\n━━━━━━━━━━━━━━━\n"
-                               . "📰 <b>Tin tức vàng/bạc gần đây:</b>\n"
-                               . $news;
-                }
+            // Kiểm tra AI có khuyên bỏ qua không
+            $aiRec       = strtoupper($sig['ai_recommendation'] ?? '');
+            $aiSkipWords = ['BỎ QUA', 'KHÔNG NÊN', 'TRÁNH', 'KHÔNG VÀO', 'SKIP', 'AVOID'];
+            $aiSaysSkip  = false;
+            foreach ($aiSkipWords as $w) {
+                if (str_contains($aiRec, $w)) { $aiSaysSkip = true; break; }
             }
 
-            $msg = "{$dirEmoji} <b>{$type} — {$symbol} {$label}</b>\n"
+            $baseMsg = "{$dirEmoji} <b>{$type} — {$symbol} {$label}</b>\n"
                  . "━━━━━━━━━━━━━━━\n"
                  . ($goldBlock ? ltrim($goldBlock, "\n") . "\n━━━━━━━━━━━━━━━\n" : '')
                  . "💰 Giá: <code>{$currentPrice}</code>\n"
@@ -547,8 +544,15 @@ PROMPT;
                  . $posBlock
                  . $aiBlock . "\n"
                  . "━━━━━━━━━━━━━━━\n"
-                 . "📝 <i>{$sig['reason']}</i>"
-                 . $newsBlock . "\n\n"
+                 . "📝 <i>{$sig['reason']}</i>";
+
+            if ($aiSaysSkip) {
+                $this->telegram->reply($baseMsg . "\n\n⛔ <b>AI khuyên bỏ qua setup này.</b> Chờ cơ hội tốt hơn.");
+                $this->info("  [{$symbol}] Phân tích xong → {$type}, AI khuyên skip.");
+                return;
+            }
+
+            $msg = $baseMsg . "\n\n"
                  . "❓ <b>Bạn muốn vào lệnh này không?</b>\n"
                  . "✅ Gõ <b>ok</b> → kiểm tra tâm lý pre-flight trước khi ghi\n"
                  . "❌ Gõ <b>không</b> → bỏ qua";
@@ -609,19 +613,21 @@ PROMPT;
             return;
         }
 
-        // Kiểm tra cấu trúc thị trường
-        $klines    = $this->binance->getKlines($p['symbol'], $p['timeframe'], 100);
-        $structure = $this->priceAction->getStructure($klines);
-        $broken    = $isLong
-            ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
-            : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+        // Kiểm tra cấu trúc HTF (không dùng LTF — pullback về entry sẽ tạo CHoCH LTF giả)
+        $htfMap    = ['1m' => '5m', '5m' => '15m', '15m' => '1h', '1h' => '4h', '4h' => '1d', '1d' => '1w'];
+        $htf       = $htfMap[$p['timeframe']] ?? '4h';
+        $klinesHTF = $this->binance->getKlines($p['symbol'], $htf, 100);
+        $htfStr    = $this->priceAction->getStructure($klinesHTF);
+        $htfBroken = $isLong
+            ? ($htfStr['trend'] === 'GIẢM GIÁ')
+            : ($htfStr['trend'] === 'TĂNG GIÁ');
 
-        if ($broken) {
+        if ($htfBroken) {
             Cache::forget($pendingKey);
             Cache::forget($scanPendingKey);
             $this->telegram->reply(
-                "🚨 <b>Cấu trúc đã đảo chiều!</b>\n\n"
-                . "Xu hướng mới: <b>{$structure['trend']}</b> — ngược chiều lệnh {$p['type']}.\n"
+                "🚨 <b>HTF đảo chiều!</b>\n\n"
+                . "Xu hướng HTF ({$htf}): <b>{$htfStr['trend']}</b> — ngược chiều lệnh {$p['type']}.\n"
                 . "Setup không còn hợp lệ. Không vào lệnh."
             );
             return;
