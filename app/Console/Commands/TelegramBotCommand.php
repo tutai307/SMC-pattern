@@ -819,6 +819,15 @@ PROMPT;
 
         $this->telegram->reply(implode("\n", $lines));
 
+        // Đánh giá lệnh chưa khớp
+        $unfilled = $signals->filter(fn($s) => !$s->filled_at);
+        if ($unfilled->isNotEmpty()) {
+            $this->telegram->reply("🔎 Đang đánh giá <b>{$unfilled->count()} lệnh chưa khớp</b>...");
+            foreach ($unfilled as $s) {
+                $this->reviewUnfilledSignal($s);
+            }
+        }
+
         if (empty($running)) {
             $this->telegram->reply("💡 Chưa có lệnh nào khớp entry.\nGõ /filled <id> để đánh dấu thủ công nếu bạn đã vào lệnh.");
             return;
@@ -828,6 +837,59 @@ PROMPT;
 
         foreach ($running as $s) {
             $this->reviewRunningSignal($s);
+        }
+    }
+
+    private function reviewUnfilledSignal(\App\Models\TradingSignal $signal): void
+    {
+        try {
+            $klines       = $this->binance->getKlines($signal->symbol, $signal->timeframe, 200);
+            $currentPrice = (float) $this->binance->getPrice($signal->symbol);
+
+            if (empty($klines)) {
+                $this->telegram->reply("❌ Không lấy được dữ liệu #{$signal->id} {$signal->symbol}.");
+                return;
+            }
+
+            $isLong    = $signal->type === 'LONG';
+            $htfMap    = ['1m' => '5m', '5m' => '15m', '15m' => '1h', '1h' => '4h', '4h' => '1d', '1d' => '1w'];
+            $htf       = $htfMap[$signal->timeframe] ?? '4h';
+            $klinesHTF = $this->binance->getKlines($signal->symbol, $htf, 100);
+            $htfStr    = $this->priceAction->getStructure($klinesHTF);
+
+            $htfBroken = $isLong ? ($htfStr['trend'] === 'GIẢM GIÁ') : ($htfStr['trend'] === 'TĂNG GIÁ');
+            $slHit     = $isLong ? ($currentPrice <= (float) $signal->sl_price) : ($currentPrice >= (float) $signal->sl_price);
+            $distPct   = $signal->entry_price > 0
+                ? round(abs($currentPrice - $signal->entry_price) / $signal->entry_price * 100, 2)
+                : 0;
+
+            if ($slHit || $htfBroken) {
+                $reason  = $slHit ? "Giá đã chạm SL <code>{$signal->sl_price}</code>" : "HTF ({$htf}) đảo chiều → <b>{$htfStr['trend']}</b>";
+                $verdict = '🚫 HUỶ NGAY';
+            } elseif ($distPct > 3) {
+                $reason  = "Giá cách entry <b>{$distPct}%</b> — khả năng retest thấp";
+                $verdict = '⚠️ CÂN NHẮC HUỶ';
+            } else {
+                $reason  = "HTF ({$htf}) vẫn <b>{$htfStr['trend']}</b>, giá cách entry <b>{$distPct}%</b>. Chờ retest.";
+                $verdict = '✅ GIỮ NGUYÊN';
+            }
+
+            $msg = "⏳ <b>Chưa khớp #{$signal->id} — {$signal->symbol} {$signal->type}</b>\n"
+                 . "━━━━━━━━━━━━━━━\n"
+                 . "💰 Giá: <code>{$currentPrice}</code> | Entry: <code>{$signal->entry_price}</code> | Cách: <b>{$distPct}%</b>\n"
+                 . "📊 HTF ({$htf}): <b>{$htfStr['trend']}</b> | Tạo: {$signal->created_at->diffForHumans()}\n"
+                 . "━━━━━━━━━━━━━━━\n"
+                 . "<b>{$verdict}</b> — {$reason}";
+
+            if ($htfBroken || $slHit) {
+                $msg .= "\n🗑 Gõ <b>/cancel {$signal->id}</b> để huỷ.";
+            }
+
+            $this->telegram->reply($msg);
+
+        } catch (\Exception $e) {
+            $this->telegram->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
+            \Log::error('reviewUnfilledSignal: ' . $e->getMessage());
         }
     }
 
