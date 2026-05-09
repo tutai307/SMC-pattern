@@ -368,9 +368,11 @@ PROMPT;
                 return;
             }
 
-            $klinesHTF    = $this->binance->getKlines($symbol, $htf, 100);
+            $klinesHTF    = $this->binance->getKlines($symbol, $htf,  100);
+            $klinesDaily  = $this->binance->getKlines($symbol, '1d',   60);
+            $klinesWeekly = $this->binance->getKlines($symbol, '1w',   60);
             $currentPrice = (float) $this->binance->getPrice($symbol);
-            $analysis     = $this->priceAction->analyze($klines, $klinesHTF, 'smc', $symbol, $tf);
+            $analysis     = $this->priceAction->analyze($klines, $klinesHTF, 'smc', $symbol, $tf, false, $klinesDaily, false, $klinesWeekly);
 
             // Gold correlation context cho silver
             $goldBlock = '';

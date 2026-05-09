@@ -7,7 +7,7 @@ class PriceActionService
     /**
      * Analyze market data with SMC (Smart Money Concepts).
      */
-    public function analyze(array $klines, array $klinesHTF = [], string $method = 'smc', string $symbol = '', string $timeframe = '')
+    public function analyze(array $klines, array $klinesHTF = [], string $method = 'smc', string $symbol = '', string $timeframe = '', bool $skipAI = false, array $klinesDaily = [], bool $applySessionFilter = false, array $klinesWeekly = [])
     {
         $default = [
             'method' => $method,
@@ -18,6 +18,7 @@ class PriceActionService
             'volumeProfile' => ['bins' => [], 'poc' => 0],
             'signal' => null,
             'htf_trend' => 'không rõ',
+            'daily_trend' => 'không rõ',
             'indicators' => ['adx' => 0, 'atr' => 0, 'ema200' => 0]
         ];
 
@@ -35,7 +36,29 @@ class PriceActionService
         $structure = $this->detectSMCStructure($candles);
         $htfStructure = !empty($candlesHTF) ? $this->detectSMCStructure($candlesHTF) : ['trend' => 'unknown'];
 
+        // Daily / Weekly bias
+        $candlesDaily   = !empty($klinesDaily)  ? $this->formatCandles($klinesDaily)  : [];
+        $candlesWeekly  = !empty($klinesWeekly) ? $this->formatCandles($klinesWeekly) : [];
+        $dailyStructure  = !empty($candlesDaily)  ? $this->detectSMCStructure($candlesDaily)  : ['trend' => 'không rõ'];
+        $weeklyStructure = !empty($candlesWeekly) ? $this->detectSMCStructure($candlesWeekly) : ['trend' => 'không rõ'];
+
+        // Macro trend: price vs EMA50 weekly — bộ lọc chiều giao dịch chính
+        // TĂNG = chỉ LONG | GIẢM = chỉ SHORT | không rõ = cả hai
+        $macroTrend = 'không rõ';
+        if (!empty($candlesWeekly) && count($candlesWeekly) >= 10) {
+            $emaPeriod      = min(50, count($candlesWeekly) - 1);
+            $weeklyEma      = $this->calculateEMA($candlesWeekly, $emaPeriod);
+            $weeklyEmaVal   = (float) end($weeklyEma);
+            $weeklyClose    = (float) end($candlesWeekly)['close'];
+            if ($weeklyEmaVal > 0) {
+                $macroTrend = $weeklyClose > $weeklyEmaVal ? 'TĂNG GIÁ' : 'GIẢM GIÁ';
+            }
+        }
+
         $volumeProfile = $this->calculateVolumeProfile($candles);
+
+        // Last candle timestamp — dùng cho session filter
+        $lastCandleTs = (int)(end($candles)['time'] ?? 0);
 
         // 4. Analysis by Method
         $waves = [];
@@ -52,11 +75,11 @@ class PriceActionService
             foreach ($htfOBs as &$ob) { $ob['label'] = 'HTF ' . $ob['label']; }
             $orderBlocks = array_merge($orderBlocks, array_slice($htfOBs, -2));
 
-            $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr);
+            $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend);
         }
 
         // 5. Advanced AI Scoring
-        if ($signal) {
+        if ($signal && !$skipAI) {
             $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
             $signal = $this->enrichWithAIScore(
                 $signal,
@@ -77,6 +100,9 @@ class PriceActionService
             'method' => $method,
             'structure' => $structure,
             'htf_trend' => $htfStructure['trend'],
+            'daily_trend' => $dailyStructure['trend'] ?? 'không rõ',
+            'weekly_trend' => $weeklyStructure['trend'] ?? 'không rõ',
+            'macro_trend' => $macroTrend,
             'orderBlocks' => $orderBlocks,
             'fvgs' => array_slice($fvgs, -5),
             'waves' => $waves,
@@ -114,54 +140,48 @@ class PriceActionService
 
     /**
      * Detect SMC Market Structure (BOS, CHoCH, Trend).
+     * Uses wing=3 swing detection for meaningful structure points (not minor wiggles).
      */
-    private function detectSMCStructure(array $candles)
+    private function detectSMCStructure(array $candles): array
     {
         $count = count($candles);
-        if ($count < 50) return ['trend' => 'không rõ', 'bos' => false, 'choch' => false];
+        if ($count < 50) return [
+            'trend' => 'không rõ', 'bos' => false, 'choch' => false,
+            'last_price' => 0, 'swing_highs' => [], 'swing_lows' => []
+        ];
 
-        $trend = 'ĐI NGANG';
-        $bos = false;
-        $choch = false;
-
-        // Simplified SMC Structure
-        $lastHighs = [];
-        $lastLows = [];
-        
-        for ($i = 40; $i < $count - 2; $i++) {
-            if ($candles[$i]['high'] > $candles[$i-1]['high'] && $candles[$i]['high'] > $candles[$i+1]['high']) {
-                $lastHighs[] = $candles[$i]['high'];
-            }
-            if ($candles[$i]['low'] < $candles[$i-1]['low'] && $candles[$i]['low'] < $candles[$i+1]['low']) {
-                $lastLows[] = $candles[$i]['low'];
-            }
-        }
-
+        $swings    = $this->detectSwingPoints($candles, 3);
+        $highs     = $swings['highs'];
+        $lows      = $swings['lows'];
         $lastPrice = $candles[$count - 1]['close'];
-        
-        if (count($lastHighs) >= 2 && count($lastLows) >= 2) {
-            $h1 = $lastHighs[count($lastHighs)-2];
-            $h2 = $lastHighs[count($lastHighs)-1];
-            $l1 = $lastLows[count($lastLows)-2];
-            $l2 = $lastLows[count($lastLows)-1];
+        $trend     = 'ĐI NGANG';
+        $bos       = false;
+        $choch     = false;
 
-            if ($h2 > $h1 && $l2 > $l1) $trend = 'TĂNG GIÁ';
-            if ($h2 < $h1 && $l2 < $l1) $trend = 'GIẢM GIÁ';
+        if (count($highs) >= 2 && count($lows) >= 2) {
+            $lastHigh = end($highs)['price'];
+            $prevHigh = $highs[count($highs) - 2]['price'];
+            $lastLow  = end($lows)['price'];
+            $prevLow  = $lows[count($lows)  - 2]['price'];
 
-            // Detect BOS
-            if ($trend == 'TĂNG GIÁ' && $lastPrice > $h2) $bos = true;
-            if ($trend == 'GIẢM GIÁ' && $lastPrice < $l2) $bos = true;
-            
-            // Detect CHoCH (Aggressive reversal)
-            if ($trend == 'GIẢM GIÁ' && $lastPrice > $h2) $choch = true;
-            if ($trend == 'TĂNG GIÁ' && $lastPrice < $l2) $choch = true;
+            // Uptrend: Higher High AND Higher Low (both conditions required)
+            if ($lastHigh > $prevHigh && $lastLow > $prevLow) $trend = 'TĂNG GIÁ';
+            // Downtrend: Lower High AND Lower Low
+            if ($lastHigh < $prevHigh && $lastLow < $prevLow)  $trend = 'GIẢM GIÁ';
+
+            if ($trend === 'TĂNG GIÁ' && $lastPrice > $lastHigh) $bos   = true;
+            if ($trend === 'GIẢM GIÁ' && $lastPrice < $lastLow)  $bos   = true;
+            if ($trend === 'GIẢM GIÁ' && $lastPrice > $lastHigh) $choch = true;
+            if ($trend === 'TĂNG GIÁ' && $lastPrice < $lastLow)  $choch = true;
         }
 
         return [
-            'trend' => $trend,
-            'last_price' => $lastPrice,
-            'bos' => $bos,
-            'choch' => $choch
+            'trend'       => $trend,
+            'last_price'  => $lastPrice,
+            'bos'         => $bos,
+            'choch'       => $choch,
+            'swing_highs' => array_slice($highs, -5),
+            'swing_lows'  => array_slice($lows,  -5),
         ];
     }
 
@@ -371,6 +391,16 @@ class PriceActionService
 
             $type = ($displacementCandle['close'] > $displacementCandle['open']) ? 'demand' : 'supply';
 
+            // Real SMC: OB candle must be the OPPOSITE color to the displacement.
+            // Demand OB = last BEARISH (close < open) candle before bullish displacement.
+            // Supply OB = last BULLISH (close > open) candle before bearish displacement.
+            if ($type === 'demand' && $current['close'] >= $current['open']) continue;
+            if ($type === 'supply' && $current['close'] <= $current['open']) continue;
+
+            // OB zone = body bounds, not full wick (body is the institutional level)
+            $obHigh = max($current['open'], $current['close']);
+            $obLow  = min($current['open'], $current['close']);
+
             // ── Liquidity sweep check ────────────────────────────────────────
             $liquiditySwept = false;
             $sweptLevel     = null;
@@ -389,9 +419,9 @@ class PriceActionService
 
             $obs[] = [
                 'type'            => $type,
-                'top'             => $current['high'],
-                'bottom'          => $current['low'],
-                'price'           => $current['close'],
+                'top'             => $obHigh,
+                'bottom'          => $obLow,
+                'price'           => ($obHigh + $obLow) / 2,
                 'label'           => $liquiditySwept
                     ? ($type === 'demand' ? 'SNIPER DEMAND' : 'SNIPER SUPPLY')
                     : ($type === 'demand' ? 'SMC DEMAND'    : 'SMC SUPPLY'),
@@ -404,13 +434,36 @@ class PriceActionService
         return array_slice($obs, -5);
     }
 
-    private function generateSMCSignal($candles, $structure, $zones, $fvgs, $htfStructure, $htfZones, $poc, $adx, $atr)
+    private function generateSMCSignal($candles, $structure, $zones, $fvgs, $htfStructure, $htfZones, $poc, $adx, $atr, $ema200 = [], array $dailyStructure = [], int $candleTs = 0, bool $applySessionFilter = false, array $weeklyStructure = [], string $macroTrend = 'không rõ')
     {
-        $lastPrice = $structure['last_price'];
-        $lastAdx   = end($adx);
-        $lastAtr   = end($atr);
+        $lastPrice    = $structure['last_price'];
+        $lastAdx      = end($adx);
+        $lastAtr      = end($atr);
+        $lastEma200   = !empty($ema200) ? end($ema200) : 0;
+        $htfTrend     = $htfStructure['trend']    ?? 'không rõ';
+        $dailyTrend   = $dailyStructure['trend']  ?? 'không rõ';
+        $weeklyTrend  = $weeklyStructure['trend'] ?? 'không rõ';
 
         if ($lastAdx < 25) return null;
+
+        // ── Macro trend filter (EMA50 weekly) ───────────────────────────────
+        // Chỉ trade THEO chiều macro: TĂNG = chỉ LONG, GIẢM = chỉ SHORT
+        // Đây là nguyên tắc trend-following cốt lõi — không trade counter-trend
+        if ($macroTrend === 'GIẢM GIÁ') {
+            $demandOnly = true;  // block demand (LONG) zones
+        } elseif ($macroTrend === 'TĂNG GIÁ') {
+            $supplyOnly = true;  // block supply (SHORT) zones
+        }
+        $blockLong  = isset($demandOnly)  ? true : false;
+        $blockShort = isset($supplyOnly)  ? true : false;
+
+        // Session filter: chỉ trade trong London (07-10 UTC) và New York (13-17 UTC)
+        if ($applySessionFilter && $candleTs > 0) {
+            $hour = (int) gmdate('G', (int) ($candleTs / 1000));
+            $inLondon  = $hour >= 7  && $hour < 10;
+            $inNewYork = $hour >= 13 && $hour < 17;
+            if (!$inLondon && !$inNewYork) return null;
+        }
 
         // Kiểm tra giá có đang trong vùng HTF POI không
         $inHtfPoi = false;
@@ -430,8 +483,23 @@ class PriceActionService
 
             // ─── LONG SETUP ───────────────────────────────────────────────
             if ($zone['type'] === 'demand') {
+                // Macro trend (EMA50 weekly): GIẢM = không LONG tuyệt đối
+                if ($blockLong) continue;
+
+                // Weekly structure: hard-block tuyệt đối — weekly bearish = không LONG dù SNIPER
+                if ($weeklyTrend === 'GIẢM GIÁ') continue;
+
+                // Daily bias: không LONG khi daily bearish
+                if ($dailyTrend === 'GIẢM GIÁ') continue;
+
                 // Hard-block: không LONG khi HTF đang bearish
-                if ($htfStructure['trend'] === 'GIẢM GIÁ') continue;
+                if ($htfTrend === 'GIẢM GIÁ') continue;
+
+                // EMA200 filter: LONG chỉ khi giá trên EMA200
+                if ($lastEma200 > 0 && $lastPrice < $lastEma200) continue;
+
+                // HTF sideways → chỉ cho SNIPER, không cho standard OB
+                if ($htfTrend !== 'TĂNG GIÁ' && !$isSniper) continue;
 
                 $entry = ($zone['top'] + $zone['bottom']) / 2;
 
@@ -450,10 +518,10 @@ class PriceActionService
                     $entry = $choch['choch_level']; // entry tại điểm phá CHoCH
                 }
 
-                $isCounterTrend = ($htfStructure['trend'] === 'GIẢM GIÁ');
+                $isCounterTrend = ($htfTrend === 'GIẢM GIÁ');
                 $confluence = 0;
                 if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                if ($htfStructure['trend'] === 'TĂNG GIÁ') $confluence += 30;
+                if ($htfTrend === 'TĂNG GIÁ') $confluence += 30;
                 if ($inHtfPoi) $confluence += 20;
 
                 $inFvg = false;
@@ -469,12 +537,16 @@ class PriceActionService
                 if ($isSniper && $choch)  $confidence += 15;
                 if ($isCounterTrend) $confidence -= 20;
 
-                if ($confidence < 40) continue;
+                if ($confidence < 60) continue;
 
                 $sl = $zone['bottom'] - ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% dưới entry — tránh bị quét bởi noise
                 $sl = min($sl, $entry * 0.985);
-                $tp = $entry + ($entry - $sl) * 2.0;
+                $slDist = $entry - $sl;
+                // TP = next swing high (liquidity pool), fallback to 2x R:R
+                $swingHighPrices = array_column($structure['swing_highs'] ?? [], 'price');
+                $liquidityTps    = array_filter($swingHighPrices, fn($h) => $h > $entry + $slDist * 1.5);
+                $tp = !empty($liquidityTps) ? (float) min($liquidityTps) : $entry + $slDist * 2.0;
 
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
@@ -503,8 +575,20 @@ class PriceActionService
 
             // ─── SHORT SETUP ──────────────────────────────────────────────
             if ($zone['type'] === 'supply') {
+                // Macro trend (EMA50 weekly): TĂNG = không SHORT tuyệt đối
+                if ($blockShort) continue;
+
+                // Weekly structure: hard-block tuyệt đối — weekly bullish = không SHORT dù SNIPER
+                if ($weeklyTrend === 'TĂNG GIÁ') continue;
+
                 // Hard-block: không SHORT khi HTF đang bullish
-                if ($htfStructure['trend'] === 'TĂNG GIÁ') continue;
+                if ($htfTrend === 'TĂNG GIÁ') continue;
+
+                // EMA200 filter: SHORT chỉ khi giá dưới EMA200
+                if ($lastEma200 > 0 && $lastPrice > $lastEma200) continue;
+
+                // HTF sideways → chỉ cho SNIPER, không cho standard OB
+                if ($htfTrend !== 'GIẢM GIÁ' && !$isSniper) continue;
 
                 $entry = ($zone['top'] + $zone['bottom']) / 2;
 
@@ -523,10 +607,10 @@ class PriceActionService
                     $entry = $choch['choch_level'];
                 }
 
-                $isCounterTrend = ($htfStructure['trend'] === 'TĂNG GIÁ');
+                $isCounterTrend = ($htfTrend === 'TĂNG GIÁ');
                 $confluence = 0;
                 if ($structure['choch'] || $structure['bos']) $confluence += 20;
-                if ($htfStructure['trend'] === 'GIẢM GIÁ') $confluence += 30;
+                if ($htfTrend === 'GIẢM GIÁ') $confluence += 30;
                 if ($inHtfPoi) $confluence += 20;
 
                 $inFvg = false;
@@ -547,7 +631,11 @@ class PriceActionService
                 $sl = $zone['top'] + ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% trên entry — tránh bị quét bởi noise
                 $sl = max($sl, $entry * 1.015);
-                $tp = $entry - ($sl - $entry) * 2.0;
+                $slDist = $sl - $entry;
+                // TP = next swing low (liquidity pool), fallback to 2x R:R
+                $swingLowPrices = array_column($structure['swing_lows'] ?? [], 'price');
+                $liquidityTps   = array_filter($swingLowPrices, fn($l) => $l < $entry - $slDist * 1.5);
+                $tp = !empty($liquidityTps) ? (float) max($liquidityTps) : $entry - $slDist * 2.0;
 
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');

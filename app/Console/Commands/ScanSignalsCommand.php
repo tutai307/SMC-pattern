@@ -399,9 +399,11 @@ class ScanSignalsCommand extends Command
             '1h'              => '4h',
             default           => '1d',
         };
-        $klinesHTF = $this->binanceService->getKlines($symbol, $htf, 50);
+        $klinesHTF    = $this->binanceService->getKlines($symbol, $htf,  50);
+        $klinesDaily  = $this->binanceService->getKlines($symbol, '1d',  60);
+        $klinesWeekly = $this->binanceService->getKlines($symbol, '1w',  60);
 
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe);
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, true, $klinesWeekly);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
