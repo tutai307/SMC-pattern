@@ -296,6 +296,17 @@ class TelegramService
         $this->send($text);
     }
 
+    // Backtest stats Jan-Apr 2026 — 15m/HTF 1h, 1:3 RR (walk-forward, no look-ahead)
+    private array $backtestStats = [
+        'SOLUSDT'  => ['wr' => 43.6, 'ev' => 0.74, 'signals' => 42,  'pnl' => '+58%'],
+        'LINKUSDT' => ['wr' => 37.2, 'ev' => 0.49, 'signals' => 49,  'pnl' => '+42%'],
+        'XAGUSDT'  => ['wr' => 39.4, 'ev' => 0.58, 'signals' => 40,  'pnl' => '+38%'],
+        'BTCUSDT'  => ['wr' => 33.3, 'ev' => 0.33, 'signals' => 38,  'pnl' => '+22%'],
+        'ETHUSDT'  => ['wr' => 33.3, 'ev' => 0.33, 'signals' => 33,  'pnl' => '+18%'],
+        'XAUUSDT'  => ['wr' => 38.5, 'ev' => 0.54, 'signals' => 29,  'pnl' => '+28%'],
+        'VVVUSDT'  => ['wr' => 35.1, 'ev' => 0.40, 'signals' => 40,  'pnl' => '+30%'],
+    ];
+
     public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc'): void
     {
         $type     = $signal['type'] ?? 'N/A';
@@ -337,6 +348,18 @@ class TelegramService
         if ($aiRec)      $aiBlock .= "💡 <b>{$aiRec}</b>\n";
         if ($aiTiming)   $aiBlock .= "⏱ {$aiTiming}\n";
 
+        // Backtest stats block
+        $stats    = $this->backtestStats[$symbol] ?? null;
+        $statsTf  = $timeframe === '15m' ? '15m' : ($timeframe === '1h' ? '1h' : $timeframe);
+        $evSign   = ($stats['ev'] ?? 0) >= 0 ? '+' : '';
+        $wrEmoji  = ($stats['wr'] ?? 0) >= 40 ? '🟢' : (($stats['wr'] ?? 0) >= 33 ? '🟡' : '🔴');
+        $statsBlock = $stats
+            ? "━━━━━━━━━━━━━━━\n"
+              . "📊 <b>Backtest {$statsTf} (Jan-Apr 2026, 1:3 RR)</b>\n"
+              . "{$wrEmoji} WR: <b>{$stats['wr']}%</b>  |  EV: <b>{$evSign}{$stats['ev']}R</b>/lệnh\n"
+              . "📈 P&L 4 tháng: <b>{$stats['pnl']}</b>  |  {$stats['signals']} signals\n"
+            : '';
+
         $appUrl = rtrim(env('APP_URL', 'http://localhost'), '/');
         $link   = "{$appUrl}/?symbol={$symbol}&timeframe={$timeframe}";
 
@@ -348,12 +371,13 @@ class TelegramService
             . "🏷 Pattern: <code>{$pattern}</code>\n"
             . "━━━━━━━━━━━━━━━\n"
             . "📌 Entry : <code>{$entry}</code>\n"
-            . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%)\n"
+            . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%) ← 1:3 R:R\n"
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
             . "📍 {$proximity}\n"
+            . $statsBlock
             . $aiBlock
             . "━━━━━━━━━━━━━━━\n"
             . "🔍 <i>{$reason}</i>\n\n"

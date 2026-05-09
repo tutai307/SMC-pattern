@@ -403,7 +403,8 @@ class ScanSignalsCommand extends Command
         $klinesDaily  = $this->binanceService->getKlines($symbol, '1d',  60);
         $klinesWeekly = $this->binanceService->getKlines($symbol, '1w',  60);
 
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, true, $klinesWeekly);
+        // Session filter OFF — backtest data cho thấy tắt session filter cho WR tốt hơn
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, false, $klinesWeekly);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
@@ -419,19 +420,24 @@ class ScanSignalsCommand extends Command
             $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), bỏ qua");
             return false;
         }
-        if ($aiScore < 70) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 70, bỏ qua");
-            return false;
-        }
-
-        // Chỉ gửi SNIPER (OB + CHoCH confirmed) — bỏ qua standard SMC
-        if (empty($signal['sniper'])) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — không phải SNIPER, bỏ qua");
+        if ($aiScore < 65) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 65, bỏ qua");
             return false;
         }
         if (str_starts_with($aiRec, 'BỎ QUA')) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI: {$aiRec}, bỏ qua");
             return false;
+        }
+
+        // Override TP → 1:3 R:R (backtest Jan-Apr 2026 cho EV dương với tất cả 5 symbol)
+        $entry  = (float) $signal['entry'];
+        $sl     = (float) $signal['sl'];
+        $slDist = abs($entry - $sl);
+        $isLongSig = str_contains(strtolower($signal['type'] ?? ''), 'mua');
+        if ($slDist > 0) {
+            $signal['tp'] = $isLongSig
+                ? round($entry + $slDist * 3, 8)
+                : round($entry - $slDist * 3, 8);
         }
 
         // ── Silver/Gold correlation filter ──
