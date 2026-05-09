@@ -43,15 +43,24 @@ class PriceActionService
         $weeklyStructure = !empty($candlesWeekly) ? $this->detectSMCStructure($candlesWeekly) : ['trend' => 'không rõ'];
 
         // Macro trend: price vs EMA50 weekly — bộ lọc chiều giao dịch chính
+        // Nếu weekly < 50 candles (contract mới như XAG), fallback sang daily EMA50
         // TĂNG = chỉ LONG | GIẢM = chỉ SHORT | không rõ = cả hai
         $macroTrend = 'không rõ';
-        if (!empty($candlesWeekly) && count($candlesWeekly) >= 10) {
-            $emaPeriod      = min(50, count($candlesWeekly) - 1);
-            $weeklyEma      = $this->calculateEMA($candlesWeekly, $emaPeriod);
-            $weeklyEmaVal   = (float) end($weeklyEma);
-            $weeklyClose    = (float) end($candlesWeekly)['close'];
+        if (!empty($candlesWeekly) && count($candlesWeekly) >= 50) {
+            $weeklyEma    = $this->calculateEMA($candlesWeekly, 50);
+            $weeklyEmaVal = (float) end($weeklyEma);
+            $weeklyClose  = (float) end($candlesWeekly)['close'];
             if ($weeklyEmaVal > 0) {
                 $macroTrend = $weeklyClose > $weeklyEmaVal ? 'TĂNG GIÁ' : 'GIẢM GIÁ';
+            }
+        } elseif (!empty($candlesDaily) && count($candlesDaily) >= 10) {
+            // Fallback: daily EMA50 (hoặc tối đa số candle có sẵn)
+            $emaPeriod    = min(50, count($candlesDaily) - 1);
+            $dailyEma     = $this->calculateEMA($candlesDaily, $emaPeriod);
+            $dailyEmaVal  = (float) end($dailyEma);
+            $dailyClose   = (float) end($candlesDaily)['close'];
+            if ($dailyEmaVal > 0) {
+                $macroTrend = $dailyClose > $dailyEmaVal ? 'TĂNG GIÁ' : 'GIẢM GIÁ';
             }
         }
 
