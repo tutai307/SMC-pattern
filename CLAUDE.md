@@ -135,3 +135,32 @@ php artisan config:clear && php artisan cache:clear  # reset state
 - Cache keys format: `{service}_{entity}_{params}`
 - Signals dùng Vietnamese text cho UI labels (TĂNG/GIẢM/ĐI NGANG, LONG/SHORT)
 - AI responses luôn parse JSON, handle parse failure gracefully
+
+## Agent Workflow
+
+> Chi tiết đầy đủ: `.claude/WORKFLOW.md`
+> Trạng thái hệ thống sống: `.claude/SYSTEM_STATE.md`
+
+### Cấu trúc
+```
+User → /ba [yêu cầu] → BA Orchestrator
+                          ├── ANALYZE → BA tự làm
+                          ├── FIX/IMPROVE → BA → Coder → Tester → BA
+                          ├── BUILD → BA → Coder → Tester → BA
+                          └── VERIFY → BA → Tester → BA
+                       → Báo cáo User
+```
+
+### Agents
+| Agent | File | Vai trò |
+|---|---|---|
+| BA | `.claude/agents/ba.md` | Orchestrator, phân tích, điều phối, báo cáo |
+| Coder | `.claude/agents/coder.md` | Implement theo spec của BA |
+| Tester | `.claude/agents/tester.md` | Verify theo checklist của BA |
+
+### Token-saving rules
+- **Đọc `SYSTEM_STATE.md` trước** — không re-read toàn bộ source mỗi session
+- **Sau mỗi thay đổi** — cập nhật `SYSTEM_STATE.md` (Recent Changes, Bug Status)
+- **Coder đọc file theo offset+limit** — không read toàn bộ khi chỉ cần 1 phần
+- **Tester dùng grep** — verify invariants không cần read toàn file
+- **BA spec cụ thể** — Coder không cần hỏi lại, tiết kiệm 1 round trip

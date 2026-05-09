@@ -64,8 +64,8 @@ class ScanSignalsCommand extends Command
                 $this->lastMonitorAt = $now;
             }
 
-            // ── AI review lệnh đang chạy mỗi 30 phút ──
-            if ($now - $this->lastAiReviewAt >= 1800) {
+            // ── AI review lệnh đang chạy mỗi 10 phút ──
+            if ($now - $this->lastAiReviewAt >= 600) {
                 try {
                     $this->autoReviewRunningSignals();
                 } catch (\Exception $e) {
@@ -262,16 +262,27 @@ class ScanSignalsCommand extends Command
         foreach ($running as $signal) {
             try {
                 $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
-                $cacheKey     = "auto_review_sig_{$signal->id}";
-                $last         = Cache::get($cacheKey);
+                $reviewKey    = "auto_review_sig_{$signal->id}";
+                $pnlSignKey   = "auto_review_pnl_{$signal->id}";
+                $last         = Cache::get($reviewKey);
 
-                // Bỏ qua nếu lệnh mới khớp < 15 phút
-                if ($signal->filled_at && $signal->filled_at->diffInMinutes(now()) < 15) continue;
+                // Bỏ qua nếu lệnh mới khớp < 10 phút
+                if ($signal->filled_at && $signal->filled_at->diffInMinutes(now()) < 10) continue;
 
-                // Bỏ qua nếu đã review gần đây VÀ giá không biến động > 1.5%
-                if ($last) {
+                // Phát hiện P&L đổi chiều (dương → âm hoặc ngược lại)
+                $isLong     = $signal->type === 'LONG';
+                $pnlPct     = $signal->entry_price > 0
+                    ? round((($isLong ? ($currentPrice - $signal->entry_price) : ($signal->entry_price - $currentPrice)) / $signal->entry_price) * 100, 2)
+                    : 0;
+                $currentSign = $pnlPct >= 0 ? '+' : '-';
+                $lastSign    = Cache::get($pnlSignKey);
+                $pnlFlipped  = $lastSign && $lastSign !== $currentSign;
+                Cache::put($pnlSignKey, $currentSign, now()->addHours(24));
+
+                // Skip nếu không có sự kiện đáng chú ý
+                if (!$pnlFlipped && $last) {
                     $priceShift = abs($currentPrice - $last['price']) / max($last['price'], 0.0001) * 100;
-                    if ($priceShift < 1.5) continue;
+                    if ($priceShift < 1.0) continue;
                 }
 
                 $htfMap = ['1m' => '5m', '5m' => '15m', '15m' => '1h', '1h' => '4h', '4h' => '1d', '1d' => '1w'];
@@ -290,13 +301,9 @@ class ScanSignalsCommand extends Command
                     $currentPrice
                 );
 
-                Cache::put($cacheKey, ['price' => $currentPrice, 'at' => time()], now()->addMinutes(90));
+                Cache::put($reviewKey, ['price' => $currentPrice, 'at' => time()], now()->addMinutes(30));
 
-                $isLong   = $signal->type === 'LONG';
-                $pnlPct   = $signal->entry_price > 0
-                    ? round((($isLong ? ($currentPrice - $signal->entry_price) : ($signal->entry_price - $currentPrice)) / $signal->entry_price) * 100, 2)
-                    : 0;
-                $pnlSign  = $pnlPct >= 0 ? "+{$pnlPct}%" : "{$pnlPct}%";
+                $pnlStr   = $pnlPct >= 0 ? "+{$pnlPct}%" : "{$pnlPct}%";
                 $pnlEmoji = $pnlPct >= 0 ? '🟢' : '🔴';
 
                 $verdict      = strtoupper($advice['verdict'] ?? '');
@@ -310,9 +317,26 @@ class ScanSignalsCommand extends Command
                     default                               => '💡',
                 };
 
+                // Chỉ gửi khi có hành động cụ thể hoặc P&L đảo chiều
+                $isActionable = str_contains($verdict, 'CẮT LỖ')
+                    || str_contains($verdict, 'CHỐT LỜI')
+                    || str_contains($verdict, 'DI CHUYỂN')
+                    || str_contains($verdict, 'ĐIỀU CHỈNH')
+                    || str_contains($verdict, '50%');
+
+                if (!$isActionable && !$pnlFlipped) {
+                    $this->line("  [{$signal->symbol}] #{$signal->id} verdict=GIỮ, skip gửi");
+                    continue;
+                }
+
+                $flipAlert = $pnlFlipped && $currentSign === '-'
+                    ? "🚨 <b>P&amp;L ĐẢO CHIỀU — từ dương sang âm!</b>\n"
+                    : '';
+
                 $msg = "🤖 <b>Auto Review #{$signal->id} — {$signal->symbol} {$signal->type}</b>\n"
+                     . $flipAlert
                      . "━━━━━━━━━━━━━━━\n"
-                     . "💰 Giá: <code>{$currentPrice}</code> | P&amp;L: {$pnlEmoji} <b>{$pnlSign}</b>\n"
+                     . "💰 Giá: <code>{$currentPrice}</code> | P&amp;L: {$pnlEmoji} <b>{$pnlStr}</b>\n"
                      . "📌 Entry: <code>{$signal->entry_price}</code> | TP: <code>{$signal->tp_price}</code> | SL: <code>{$signal->sl_price}</code>\n"
                      . "━━━━━━━━━━━━━━━\n"
                      . "{$verdictEmoji} <b>Phán quyết: {$advice['verdict']}</b>\n"
@@ -322,7 +346,7 @@ class ScanSignalsCommand extends Command
                 if (!empty($advice['tp_advice']))  $msg .= "\n🎯 TP: {$advice['tp_advice']}";
 
                 $this->telegramService->sendRaw($msg);
-                $this->line("  [{$signal->symbol}] 🤖 #{$signal->id} auto review gửi xong — verdict: {$advice['verdict']}");
+                $this->line("  [{$signal->symbol}] 🤖 #{$signal->id} auto review — verdict: {$advice['verdict']}" . ($pnlFlipped ? ' [P&L FLIP]' : ''));
 
             } catch (\Exception $e) {
                 \Log::error("auto_review #{$signal->id}: " . $e->getMessage());
@@ -337,15 +361,8 @@ class ScanSignalsCommand extends Command
     private function scan(): void
     {
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
-        $anySignalSent = false;
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
-            if ($this->scanPair($symbol, $timeframe, 'smc')) {
-                $anySignalSent = true;
-            }
-        }
-
-        if (!$anySignalSent) {
-            $this->sendNoSetupReminder();
+            $this->scanPair($symbol, $timeframe, 'smc');
         }
     }
 
@@ -365,28 +382,6 @@ class ScanSignalsCommand extends Command
         $result    = ['trend' => $structure['trend'] ?? 'không rõ', 'price' => $price];
         Cache::put($cacheKey, $result, now()->addMinutes(15));
         return $result;
-    }
-
-    private function sendNoSetupReminder(): void
-    {
-        $dedupKey = 'scan_no_setup_reminder';
-        if (Cache::has($dedupKey)) return;
-
-        Cache::put($dedupKey, true, now()->addMinutes(30));
-
-        $messages = [
-            "🧘 <b>Không có setup nào đủ điều kiện lúc này.</b>\n\nThị trường chưa cho bạn cơ hội — đây <b>không phải lúc để vào lệnh</b>.\n\nNgồi chờ là một quyết định giao dịch. Trader giỏi nhất thế giới bỏ qua 90% ngày không có setup rõ ràng.",
-            "⏳ <b>Chưa có kèo A+ nào.</b>\n\nThị trường ranging hoặc ADX quá thấp. Vào lúc này = đánh bạc, không phải giao dịch.\n\n💡 Nhắc nhở: <i>Tiền bạn giữ được khi không vào lệnh cũng là tiền kiếm được.</i>",
-            "🚫 <b>Không có tín hiệu hợp lệ.</b>\n\nHTF chưa align, không có OB/FVG đủ mạnh, hoặc ADX chưa đủ trend.\n\nHãy làm việc khác. Bot sẽ báo ngay khi có setup thật.",
-            "🔕 <b>Thị trường im lặng — bạn cũng nên im lặng.</b>\n\nKhông có setup = không có lệnh. Đơn giản vậy thôi.\n\n<i>\"The goal is not to trade every day. The goal is to be profitable.\"</i>",
-            "📵 <b>Scan xong — trắng tay.</b>\n\nĐây là tín hiệu tốt nhất hôm nay: <b>ở ngoài thị trường.</b>\n\nBot đang theo dõi 24/7. Khi có kèo thật, bạn sẽ biết ngay.",
-        ];
-
-        $idx = Cache::get('scan_no_setup_idx', 0);
-        Cache::put('scan_no_setup_idx', ($idx + 1) % count($messages), now()->addDays(7));
-
-        $this->telegramService->sendRaw($messages[$idx]);
-        $this->info('[' . now()->format('H:i:s') . '] Nhắc nhở không có setup → đã gửi Telegram.');
     }
 
     private function scanPair(string $symbol, string $timeframe, string $method = 'smc'): bool

@@ -474,7 +474,7 @@ class PriceActionService
                 $sl = $zone['bottom'] - ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% dưới entry — tránh bị quét bởi noise
                 $sl = min($sl, $entry * 0.985);
-                $tp = $entry + ($entry - $sl) * 3.0;
+                $tp = $entry + ($entry - $sl) * 2.0;
 
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
@@ -547,7 +547,7 @@ class PriceActionService
                 $sl = $zone['top'] + ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% trên entry — tránh bị quét bởi noise
                 $sl = max($sl, $entry * 1.015);
-                $tp = $entry - ($sl - $entry) * 3.0;
+                $tp = $entry - ($sl - $entry) * 2.0;
 
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
@@ -1111,18 +1111,22 @@ PROMPT;
         float $entry,
         ?float $sl,
         ?float $tp,
-        float $currentPrice
+        float $currentPrice,
+        bool $fresh = false
     ): array {
         $apiKey = env('OPENROUTER_API_KEY');
         if (!$apiKey) {
             return ['verdict' => 'AI chưa cấu hình', 'analysis' => 'Thiếu OPENROUTER_API_KEY', 'sl_advice' => null, 'tp_advice' => null];
         }
 
-        // Cache theo signal params + price bucket 30 phút
-        $priceBucket = floor($currentPrice / max($currentPrice * 0.005, 0.0001));
-        $adviseCacheKey = 'advise_' . md5($symbol . $timeframe . $type . $entry . $sl . $tp . $priceBucket);
-        $cached = \Illuminate\Support\Facades\Cache::get($adviseCacheKey);
-        if ($cached) return $cached;
+        // Cache 5 phút — bucket 0.5% của entry, thêm dấu P&L để invalidate khi lệnh đổi chiều
+        $priceBucket = round($currentPrice / max($entry * 0.005, 0.0001));
+        $pnlSign     = ($type === 'LONG') ? ($currentPrice >= $entry ? '+' : '-') : ($currentPrice <= $entry ? '+' : '-');
+        $adviseCacheKey = 'advise_' . md5($symbol . $timeframe . $type . $entry . $sl . $tp . $priceBucket . $pnlSign);
+        if (!$fresh) {
+            $cached = \Illuminate\Support\Facades\Cache::get($adviseCacheKey);
+            if ($cached) return $cached;
+        }
 
         $candles    = $this->formatCandles($klines);
         $htfCandles = $this->formatCandles($klinesHTF);
@@ -1161,6 +1165,12 @@ PROMPT;
         $tpStr   = $tp ? "{$tp} (+{$tpPct}%)" : 'chưa đặt';
         $rrStr   = $rr ? "1:{$rr}" : 'N/A';
 
+        // % quãng đường đến SL đã dùng (giúp AI không cắt lỗ sớm)
+        $slUsedPct = ($slPct && $slPct > 0 && $pnlPct < 0)
+            ? round(abs($pnlPct) / $slPct * 100, 0)
+            : 0;
+        $slUsedStr = $pnlPct < 0 ? "⚠️ Đã dùng {$slUsedPct}% quãng đường đến SL" : "Chưa chạm vùng âm";
+
         // Khoảng cách tới swing
         $distToSwingH = $swingH > 0 ? round(abs($currentPrice - $swingH) / $currentPrice * 100, 2) : 0;
         $distToSwingL = $swingL > 0 ? round(abs($currentPrice - $swingL) / $currentPrice * 100, 2) : 0;
@@ -1188,12 +1198,12 @@ PROMPT;
 SYMBOL: {$symbol} | TF: {$timeframe}
 
 === LỆNH ĐANG MỞ ===
-Loại   : {$type}
-Entry  : {$entry}
+Loại        : {$type}
+Entry       : {$entry}
 Giá hiện tại: {$currentPrice} (P&L: {$pnlSign})
-SL     : {$slStr}
-TP     : {$tpStr}
-R:R    : {$rrStr}
+SL          : {$slStr} | {$slUsedStr}
+TP          : {$tpStr}
+R:R         : {$rrStr}
 
 === THỊ TRƯỜNG HIỆN TẠI ===
 Trend LTF: {$structure['trend']} | BOS: {$this->boolStr($structure['bos'] ?? false)} | CHoCH: {$this->boolStr($structure['choch'] ?? false)}
@@ -1209,12 +1219,17 @@ FVG: {$fvgStr}
 Với tư cách senior trader, hãy tư vấn trader này nên làm gì với lệnh đang mở.
 YÊU CẦU: cite giá thực, không dùng câu chung chung. Phán quyết phải là 1 trong: GIỮ LỆNH / DI CHUYỂN SL / ĐIỀU CHỈNH TP / CHỐT LỜI NGAY / CẮT LỖ NGAY / CHỐT 50% + GIỮ 50%.
 
+NGUYÊN TẮC CỨNG — vi phạm là sai hoàn toàn:
+1. CẮT LỖ NGAY chỉ khi: giá đã dùng ≥ 60% quãng đường đến SL HOẶC có CHoCH ngược chiều rõ ràng trên LTF. Nếu chỉ âm nhẹ (<60% SL) mà không có CHoCH → GIỮ LỆNH hoặc DI CHUYỂN SL, KHÔNG cắt lỗ sớm.
+2. CHỐT LỜI NGAY chỉ khi: giá đã đạt ≥ 70% quãng đường đến TP HOẶC có BOS ngược chiều. Không chốt lời sớm vì "sợ mất lợi nhuận".
+3. GIỮ LỆNH khi: SL chưa bị đe dọa nghiêm trọng (<60% quãng đường) và không có tín hiệu đảo chiều cấu trúc.
+
 Trả về JSON:
 {
   "verdict": "GIỮ LỆNH | DI CHUYỂN SL | ĐIỀU CHỈNH TP | CHỐT LỜI NGAY | CẮT LỖ NGAY | CHỐT 50% + GIỮ 50%",
-  "analysis": "2-3 câu phân tích cụ thể với giá thực tế, lý do rõ ràng",
-  "sl_advice": "null hoặc khuyến nghị SL mới cụ thể với giá (vd: di chuyển SL lên {giá} để breakeven)",
-  "tp_advice": "null hoặc khuyến nghị TP mới cụ thể với giá"
+  "analysis": "2-3 câu phân tích cụ thể với giá thực tế, bao gồm % SL đã dùng, lý do rõ ràng",
+  "sl_advice": null,
+  "tp_advice": null
 }
 PROMPT;
 
@@ -1241,13 +1256,15 @@ PROMPT;
             $content = $result['choices'][0]['message']['content'] ?? '{}';
             $data    = json_decode($content, true);
 
+            $slRaw = $this->flattenAiField($data['sl_advice'] ?? '');
+            $tpRaw = $this->flattenAiField($data['tp_advice'] ?? '');
             $result = [
                 'verdict'   => $this->flattenAiField($data['verdict']   ?? 'Không rõ'),
                 'analysis'  => $this->flattenAiField($data['analysis']  ?? ''),
-                'sl_advice' => $this->flattenAiField($data['sl_advice'] ?? '') ?: null,
-                'tp_advice' => $this->flattenAiField($data['tp_advice'] ?? '') ?: null,
+                'sl_advice' => ($slRaw && strtolower($slRaw) !== 'null') ? $slRaw : null,
+                'tp_advice' => ($tpRaw && strtolower($tpRaw) !== 'null') ? $tpRaw : null,
             ];
-            \Illuminate\Support\Facades\Cache::put($adviseCacheKey, $result, 1800);
+            \Illuminate\Support\Facades\Cache::put($adviseCacheKey, $result, 300);
             return $result;
         } catch (\Exception $e) {
             \Log::warning('Advisor AI error: ' . $e->getMessage());
