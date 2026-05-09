@@ -168,7 +168,7 @@ class TelegramBotCommand extends Command
         // Lấy context thực tế
         $pendingSignals = TradingSignal::where('status', 'PENDING')->orderBy('created_at', 'desc')->limit(5)->get();
         $runningSignals = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
-        $watchlist      = env('SCAN_SYMBOLS', 'XAGUSDT:15m,VVVUSDT:15m');
+        $watchlist      = env('SCAN_SYMBOLS', 'SOLUSDT:15m,LINKUSDT:15m,XAGUSDT:15m,BTCUSDT:15m,ETHUSDT:15m');
         $now            = now()->format('d/m/Y H:i');
 
         // Tóm tắt lệnh đang mở
