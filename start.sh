@@ -1,8 +1,9 @@
 #!/bin/bash
-set -e
 
 echo "[start] Running migrations..."
-php artisan migrate --force
+php artisan migrate --force || echo "[start] WARNING: migrations failed, continuing anyway..."
+
+set -e
 
 # Auto-restart wrapper: nếu process crash thì tự restart sau 5s
 respawn() {
