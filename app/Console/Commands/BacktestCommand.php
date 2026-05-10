@@ -22,7 +22,10 @@ class BacktestCommand extends Command
         {--rr=2 : Risk:Reward target multiplier (e.g. 2 = 1:2, 3 = 1:3)}
         {--min-rr=1.4 : Minimum signal R:R to accept (filter weak setups)}
         {--adx=25 : Minimum ADX threshold (default 25, lower=more signals)}
-        {--min-confidence=60 : Minimum confidence score (default 60, lower=more signals)}';
+        {--min-confidence=60 : Minimum confidence score (default 60, lower=more signals)}
+        {--ai : Enable AI scoring filter (calls OpenRouter per signal)}
+        {--ai-min=65 : Minimum AI score to accept signal (default 65, used with --ai)}
+        {--struct-exit : Exit early when LTF structure flips against signal direction}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -39,6 +42,9 @@ class BacktestCommand extends Command
         $minRR         = (float) $this->option('min-rr');
         $adxThreshold  = (int)   $this->option('adx');
         $minConfidence = (int)   $this->option('min-confidence');
+        $useAI         = (bool)  $this->option('ai');
+        $aiMin         = (int)   $this->option('ai-min');
+        $useStructExit = (bool)  $this->option('struct-exit');
 
         // Resolve date range
         [$fromTs, $toTs, $fromLabel, $toLabel] = $this->resolveDateRange(
@@ -51,7 +57,9 @@ class BacktestCommand extends Command
         $this->info("═══════════════════════════════════════════════════");
         $this->info("  BACKTEST [{$methodLabel}] — {$symbol} {$tf}  |  {$fromLabel} → {$toLabel}");
         $this->info("  HTF bias: {$htf}  |  Risk/trade: \${$risk}  |  Capital: \${$capital}{$sessionLabel}");
-        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}");
+        $aiLabel     = $useAI ? "AI≥{$aiMin}" : 'AI: OFF';
+        $structLabel = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
+        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}");
         $this->info("═══════════════════════════════════════════════════");
 
         // ── 1. Fetch klines ──────────────────────────────────────────────
@@ -129,6 +137,27 @@ class BacktestCommand extends Command
                     }
                 }
 
+                // Filled — structure exit check every 4 candles (= 1h for 15m TF)
+                if ($useStructExit && ($i - $activeSignal['fill_candle']) % 4 === 0) {
+                    $structWin = array_slice($klines1h, max(0, $i - 49), 50);
+                    $struct    = $service->getStructure($structWin);
+                    $trend     = $struct['trend'] ?? 'không rõ';
+                    $flipLong  = $isLong  && $trend === 'GIẢM GIÁ';
+                    $flipShort = !$isLong && $trend === 'TĂNG GIÁ';
+                    if ($flipLong || $flipShort) {
+                        $slDist  = abs($activeSignal['entry'] - $activeSignal['sl']);
+                        $pxDiff  = $isLong ? ($close - $activeSignal['entry']) : ($activeSignal['entry'] - $close);
+                        $exitPnl = $slDist > 0 ? round($pxDiff / $slDist * $risk, 2) : 0;
+                        $activeSignal['outcome']     = 'STRUCT_EXIT';
+                        $activeSignal['close_time']  = $ts;
+                        $activeSignal['close_price'] = $close;
+                        $activeSignal['exit_pnl']    = $exitPnl;
+                        $signals[]    = $activeSignal;
+                        $activeSignal = null;
+                        continue;
+                    }
+                }
+
                 // Filled — check TP/SL
                 if ($isLong) {
                     if ($low <= $activeSignal['sl']) {
@@ -186,11 +215,21 @@ class BacktestCommand extends Command
             $weeklyWin   = array_values(array_filter($klinesWeekly, fn($k) => (int)$k[0] <= $ts));
             $weeklyWin   = array_slice($weeklyWin, -60);
 
-            $result = $service->analyze($window, $htfWin, $method, $symbol, $tf, true, $dailyWin, $useSession, $weeklyWin);
+            $result = $service->analyze($window, $htfWin, $method, $symbol, $tf, !$useAI, $dailyWin, $useSession, $weeklyWin);
             $sig    = $result['signal'] ?? null;
             $scanned++;
 
             if (!$sig || empty($sig['entry']) || empty($sig['tp']) || empty($sig['sl'])) continue;
+
+            if ($useAI) {
+                $aiScore = (int) ($sig['ai_score'] ?? 0);
+                $aiErr   = $sig['ai_error'] ?? null;
+                if ($aiErr || $aiScore < $aiMin) {
+                    $this->line("  → AI score {$aiScore}/100" . ($aiErr ? " (err: {$aiErr})" : '') . " < {$aiMin}, skip");
+                    continue;
+                }
+                $this->line("  → AI score {$aiScore}/100 ✓");
+            }
 
             $entry = (float)$sig['entry'];
             $tp    = (float)$sig['tp'];
@@ -254,11 +293,14 @@ class BacktestCommand extends Command
             $sigDate  = date('d/m H:i', (int)($s['signal_time'] / 1000));
             $fillDate = $s['fill_time'] ? date('d/m H:i', (int)($s['fill_time'] / 1000)) : 'NOT FILLED';
             $resultColor = match($s['outcome']) {
-                'WIN'     => "<fg=green>{$s['outcome']}</>",
-                'LOSS'    => "<fg=red>{$s['outcome']}</>",
-                'EXPIRED' => "<fg=yellow>EXPIRED</>",
-                'OPEN'    => "<fg=cyan>OPEN</>",
-                default   => $s['outcome'],
+                'WIN'         => "<fg=green>WIN</>",
+                'LOSS'        => "<fg=red>LOSS</>",
+                'EXPIRED'     => "<fg=yellow>EXPIRED</>",
+                'OPEN'        => "<fg=cyan>OPEN</>",
+                'STRUCT_EXIT' => ($s['exit_pnl'] ?? 0) >= 0
+                    ? "<fg=green>CUT+" . number_format($s['exit_pnl'] ?? 0, 2) . "</>"
+                    : "<fg=yellow>CUT" . number_format($s['exit_pnl'] ?? 0, 2) . "</>",
+                default       => $s['outcome'],
             };
 
             $this->line(
@@ -276,19 +318,21 @@ class BacktestCommand extends Command
         }
 
         // ── 5. Stats ─────────────────────────────────────────────────────
-        $wins     = array_filter($signals, fn($s) => $s['outcome'] === 'WIN');
-        $losses   = array_filter($signals, fn($s) => $s['outcome'] === 'LOSS');
-        $expired  = array_filter($signals, fn($s) => $s['outcome'] === 'EXPIRED');
-        $open     = array_filter($signals, fn($s) => $s['outcome'] === 'OPEN');
-        $filled   = array_filter($signals, fn($s) => $s['filled']);
-        $closed   = count($wins) + count($losses);
-        $wr       = $closed > 0 ? round(count($wins) / $closed * 100, 1) : 0;
+        $wins        = array_filter($signals, fn($s) => $s['outcome'] === 'WIN');
+        $losses      = array_filter($signals, fn($s) => $s['outcome'] === 'LOSS');
+        $structExits = array_filter($signals, fn($s) => $s['outcome'] === 'STRUCT_EXIT');
+        $expired     = array_filter($signals, fn($s) => $s['outcome'] === 'EXPIRED');
+        $open        = array_filter($signals, fn($s) => $s['outcome'] === 'OPEN');
+        $filled      = array_filter($signals, fn($s) => $s['filled']);
+        $closed      = count($wins) + count($losses) + count($structExits);
+        $wr          = $closed > 0 ? round(count($wins) / $closed * 100, 1) : 0;
 
-        // P&L: risk = $risk/trade, R:R 1:$rrTarget → win = $risk*$rrTarget, loss = -$risk
+        // P&L: WIN = +risk*rr, LOSS = -risk, STRUCT_EXIT = actual exit_pnl
         $pnl = 0;
         foreach ($signals as $s) {
-            if ($s['outcome'] === 'WIN')  $pnl += $risk * $rrTarget;
-            if ($s['outcome'] === 'LOSS') $pnl -= $risk;
+            if ($s['outcome'] === 'WIN')         $pnl += $risk * $rrTarget;
+            if ($s['outcome'] === 'LOSS')        $pnl -= $risk;
+            if ($s['outcome'] === 'STRUCT_EXIT') $pnl += ($s['exit_pnl'] ?? 0);
         }
 
         $fillRate = count($signals) > 0
@@ -301,6 +345,12 @@ class BacktestCommand extends Command
         $this->line("  Fill rate:      {$fillRate}%  (" . count($filled) . "/" . count($signals) . " filled)");
         $this->line("  WIN:            " . count($wins));
         $this->line("  LOSS:           " . count($losses));
+        if (count($structExits) > 0) {
+            $seTotal = array_sum(array_map(fn($s) => $s['exit_pnl'] ?? 0, $structExits));
+            $seAvg   = round($seTotal / count($structExits), 2);
+            $seSign  = $seTotal >= 0 ? '+' : '';
+            $this->line("  STRUCT_EXIT:    " . count($structExits) . "  (avg {$seSign}{$seAvg}\$ | total {$seSign}" . round($seTotal, 2) . "\$)");
+        }
         $this->line("  EXPIRED:        " . count($expired) . "  (chưa fill trong thời hạn)");
         $this->line("  OPEN (end):     " . count($open));
         $this->line("  Winrate:        <fg=" . ($wr >= 50 ? 'green' : 'red') . ">{$wr}%</> ({$closed} closed)");

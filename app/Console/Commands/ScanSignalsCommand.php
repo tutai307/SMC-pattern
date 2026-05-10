@@ -404,7 +404,8 @@ class ScanSignalsCommand extends Command
         $klinesWeekly = $this->binanceService->getKlines($symbol, '1w',  60);
 
         // Session filter OFF — backtest data cho thấy tắt session filter cho WR tốt hơn
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, false, $klinesWeekly);
+        // skipAI = true — backtest chứng minh AI không thêm alpha cho entry, tiết kiệm API cost
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, true, $klinesDaily, false, $klinesWeekly);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
