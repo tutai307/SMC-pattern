@@ -31,7 +31,8 @@ class BacktestCommand extends Command
         {--use-cache : Dùng kết quả đã lưu nếu params + logic trùng khớp}
         {--ai-risk : Dynamic sizing: AI score≥ai-high → risk-high USD, otherwise → risk USD}
         {--ai-high=75 : AI score threshold for high risk (default 75)}
-        {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}';
+        {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}
+        {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -56,6 +57,7 @@ class BacktestCommand extends Command
         $aiRisk        = (bool)  $this->option('ai-risk');
         $aiHigh        = (int)   $this->option('ai-high');
         $riskHigh      = (float) $this->option('risk-high');
+        $overrideTp    = (bool)  $this->option('override-tp');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -72,8 +74,9 @@ class BacktestCommand extends Command
         $aiLabel     = $aiRisk
             ? "AI-RISK ≥{$aiHigh}→\${$riskHigh} / <{$aiHigh}→\${$risk}"
             : ($useAI ? "AI≥{$aiMin}" : 'AI: OFF');
-        $structLabel = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
-        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}");
+        $structLabel  = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
+        $tpLabel      = $overrideTp ? "TP=override(1:{$rrTarget})" : "TP=signal";
+        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}  |  {$tpLabel}");
         $this->info("═══════════════════════════════════════════════════");
 
         // ── 1. Fetch klines ──────────────────────────────────────────────
@@ -273,11 +276,17 @@ class BacktestCommand extends Command
                 $this->line("  → AI {$sigAiScore}/100 → Risk: \${$tradeRisk}");
             }
 
-            $entry = (float)$sig['entry'];
-            $tp    = (float)$sig['tp'];
-            $sl    = (float)$sig['sl'];
+            $entry  = (float)$sig['entry'];
+            $sl     = (float)$sig['sl'];
             $slDist = abs($entry - $sl);
             if ($slDist <= 0) continue;
+
+            $isLongEntry = str_contains(strtolower($sig['type'] ?? ''), 'mua');
+            $tp = $overrideTp
+                ? ($isLongEntry
+                    ? round($entry + $slDist * $rrTarget, 8)
+                    : round($entry - $slDist * $rrTarget, 8))
+                : (float)$sig['tp'];
 
             $rr = abs($tp - $entry) / $slDist;
             if ($rr < $minRR) continue; // R:R gate

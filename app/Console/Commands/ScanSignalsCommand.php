@@ -417,8 +417,8 @@ class ScanSignalsCommand extends Command
         $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
         $aiError = $signal['ai_error'] ?? null;
 
-        // AI-RISK: ≥85 → risk 5% (backtest 50% WR), <85 → risk 2% (backtest ~31% WR)
-        $riskPct = $aiScore >= 85 ? 5 : 2;
+        // AI-RISK: ≥85 → risk 8% (backtest XAGUSDT +73% / 4th), <85 → risk 2%
+        $riskPct = $aiScore >= 85 ? 8 : 2;
 
         if ($aiError) {
             $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), dùng risk mặc định 2%");
@@ -427,15 +427,15 @@ class ScanSignalsCommand extends Command
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI {$aiScore}/100 → Risk {$riskPct}%" . ($aiRec ? " | {$aiRec}" : ''));
         }
 
-        // Override TP → 1:3 R:R (backtest Jan-Apr 2026 cho EV dương với tất cả 5 symbol)
+        // Override TP → 1:2.5 R:R (backtest Jan-Apr 2026: WR 39.4%, +73% với AI-risk vs +60% ở 1:3)
         $entry  = (float) $signal['entry'];
         $sl     = (float) $signal['sl'];
         $slDist = abs($entry - $sl);
         $isLongSig = str_contains(strtolower($signal['type'] ?? ''), 'mua');
         if ($slDist > 0) {
             $signal['tp'] = $isLongSig
-                ? round($entry + $slDist * 3, 8)
-                : round($entry - $slDist * 3, 8);
+                ? round($entry + $slDist * 2.5, 8)
+                : round($entry - $slDist * 2.5, 8);
         }
 
         // ── Silver/Gold correlation filter ──

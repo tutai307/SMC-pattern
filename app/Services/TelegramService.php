@@ -296,13 +296,13 @@ class TelegramService
         $this->send($text);
     }
 
-    // Backtest stats Jan-May 2026 — 15m, 1:3 RR, $2/trade (walk-forward, no look-ahead)
+    // Backtest stats Jan-Apr 2026 — 15m, 1:2.5 RR, AI-risk ($8 nếu AI≥85, $2 nếu <85)
     private array $backtestStats = [
         'SOLUSDT'  => ['wr' => 41.5, 'ev' => 0.64, 'signals' => 41, 'pnl' => '+54%'],
-        'XAGUSDT'  => ['wr' => 38.2, 'ev' => 0.53, 'signals' => 34, 'pnl' => '+36%'],
+        'XAGUSDT'  => ['wr' => 39.4, 'ev' => 0.38, 'signals' => 33, 'pnl' => '+73%'],
         'LINKUSDT' => ['wr' => 34.8, 'ev' => 0.39, 'signals' => 46, 'pnl' => '+36%'],
         'XAUUSDT'  => ['wr' => 37.0, 'ev' => 0.48, 'signals' => 27, 'pnl' => '+26%'],
-        'BTCUSDT'  => ['wr' => 32.4, 'ev' => 0.30, 'signals' => 35, 'pnl' => '+20%'],
+        'BTCUSDT'  => ['wr' => 34.4, 'ev' => 0.38, 'signals' => 32, 'pnl' => '+13%'],
         'ETHUSDT'  => ['wr' => 32.1, 'ev' => 0.28, 'signals' => 29, 'pnl' => '+16%'],
     ];
 
@@ -357,7 +357,7 @@ class TelegramService
         $wrEmoji  = ($stats['wr'] ?? 0) >= 40 ? '🟢' : (($stats['wr'] ?? 0) >= 33 ? '🟡' : '🔴');
         $statsBlock = $stats
             ? "━━━━━━━━━━━━━━━\n"
-              . "📊 <b>Backtest {$statsTf} (Jan-May 2026, 1:3 RR)</b>\n"
+              . "📊 <b>Backtest {$statsTf} (Jan-Apr 2026, 1:2.5 RR + AI-risk)</b>\n"
               . "{$wrEmoji} WR: <b>{$stats['wr']}%</b>  |  EV: <b>{$evSign}{$stats['ev']}R</b>/lệnh\n"
               . "📈 P&L 4 tháng: <b>{$stats['pnl']}</b>  |  {$stats['signals']} signals\n"
             : '';
@@ -373,7 +373,7 @@ class TelegramService
             . "🏷 Pattern: <code>{$pattern}</code>\n"
             . "━━━━━━━━━━━━━━━\n"
             . "📌 Entry : <code>{$entry}</code>\n"
-            . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%) ← 1:3 R:R\n"
+            . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%) ← 1:2.5 R:R\n"
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
             . "💵 Risk {$riskPct}%: WIN <b>+" . round($riskPct * $rr, 1) . "%</b> vốn | LOSS <b>-{$riskPct}%</b> vốn\n"
