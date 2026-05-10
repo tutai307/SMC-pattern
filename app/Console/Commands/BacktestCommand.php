@@ -6,6 +6,7 @@ use App\Services\BinanceService;
 use App\Services\PriceActionService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
+use App\Models\BacktestRun;
 
 class BacktestCommand extends Command
 {
@@ -25,7 +26,9 @@ class BacktestCommand extends Command
         {--min-confidence=60 : Minimum confidence score (default 60, lower=more signals)}
         {--ai : Enable AI scoring filter (calls OpenRouter per signal)}
         {--ai-min=65 : Minimum AI score to accept signal (default 65, used with --ai)}
-        {--struct-exit : Exit early when LTF structure flips against signal direction}';
+        {--struct-exit : Exit early when LTF structure flips against signal direction}
+        {--save : Lưu kết quả vào DB để tái sử dụng}
+        {--use-cache : Dùng kết quả đã lưu nếu params + logic trùng khớp}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -45,6 +48,9 @@ class BacktestCommand extends Command
         $useAI         = (bool)  $this->option('ai');
         $aiMin         = (int)   $this->option('ai-min');
         $useStructExit = (bool)  $this->option('struct-exit');
+        $saveResult    = (bool)  $this->option('save');
+        $useCache      = (bool)  $this->option('use-cache');
+        $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
         [$fromTs, $toTs, $fromLabel, $toLabel] = $this->resolveDateRange(
@@ -90,6 +96,26 @@ class BacktestCommand extends Command
         if ($startIdx < 200) $startIdx = 200;
 
         $this->line("Walk-forward from candle #{$startIdx} (warm-up OK).\n");
+
+        // Cache lookup
+        if ($useCache) {
+            $cacheParams = [
+                'symbol' => $symbol, 'timeframe' => $tf, 'htf' => $htf,
+                'from_date' => date('Y-m-d', $fromTs / 1000), 'to_date' => date('Y-m-d', $toTs / 1000),
+                'method' => $method, 'rr' => $rrTarget, 'risk' => $risk, 'capital' => $capital,
+                'adx_threshold' => $adxThreshold, 'min_confidence' => $minConfidence,
+                'use_session' => $useSession, 'use_ai' => $useAI, 'use_struct_exit' => $useStructExit,
+            ];
+            $cached = BacktestRun::findCached($cacheParams, $logicHash);
+            if ($cached) {
+                $this->info("  ✅ Cache HIT — ID #{$cached->id} (chạy lúc {$cached->created_at->format('Y-m-d H:i')})");
+                $this->line("  Signals: {$cached->signals_count} | Filled: {$cached->filled_count} | WR: {$cached->winrate}% | P&L: " . ($cached->pnl >= 0 ? '+' : '') . "\${$cached->pnl}");
+                $this->line("  Capital cuối: \${$cached->capital_end}");
+                $this->info(str_repeat('═', 55));
+                return 0;
+            }
+            $this->line('  Cache MISS — chạy mới...');
+        }
 
         // Apply custom thresholds for backtest exploration
         $service->setThresholds($adxThreshold, $minConfidence);
@@ -408,6 +434,41 @@ class BacktestCommand extends Command
             $this->line("    {$date}  {$d['wins']}W/{$d['losses']}L  <fg={$color}>{$sign}" . number_format($d['pnl'], 2) . "</>");
         }
         $this->line(str_repeat('═', 55));
+
+        // Save result to DB
+        if ($saveResult) {
+            $structExitArr = array_filter($signals, fn($s) => $s['outcome'] === 'STRUCT_EXIT');
+            BacktestRun::create([
+                'symbol'            => $symbol,
+                'timeframe'         => $tf,
+                'htf'               => $htf,
+                'from_date'         => date('Y-m-d', $fromTs / 1000),
+                'to_date'           => date('Y-m-d', $toTs / 1000),
+                'method'            => $method,
+                'rr'                => $rrTarget,
+                'risk'              => $risk,
+                'capital'           => $capital,
+                'adx_threshold'     => $adxThreshold,
+                'min_confidence'    => $minConfidence,
+                'use_session'       => $useSession,
+                'use_ai'            => $useAI,
+                'ai_min'            => $useAI ? $aiMin : null,
+                'use_struct_exit'   => $useStructExit,
+                'logic_hash'        => $logicHash,
+                'signals_count'     => count($signals),
+                'filled_count'      => count(array_filter($signals, fn($s) => $s['filled'])),
+                'win_count'         => count(array_filter($signals, fn($s) => $s['outcome'] === 'WIN')),
+                'loss_count'        => count(array_filter($signals, fn($s) => $s['outcome'] === 'LOSS')),
+                'expired_count'     => count(array_filter($signals, fn($s) => $s['outcome'] === 'EXPIRED')),
+                'struct_exit_count' => count($structExitArr),
+                'fill_rate'         => $fillRate,
+                'winrate'           => $wr,
+                'pnl'               => $pnl,
+                'capital_end'       => round($capital + $pnl, 2),
+                'signals_json'      => json_encode($signals),
+            ]);
+            $this->info("  💾 Đã lưu vào DB — dùng --use-cache để tái sử dụng lần sau.");
+        }
 
         return 0;
     }
