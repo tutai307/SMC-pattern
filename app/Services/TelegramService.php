@@ -306,7 +306,7 @@ class TelegramService
         'ETHUSDT'  => ['wr' => 32.1, 'ev' => 0.28, 'signals' => 29, 'pnl' => '+16%'],
     ];
 
-    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc'): void
+    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc', int $riskPct = 2): void
     {
         $type     = $signal['type'] ?? 'N/A';
         $entry    = $signal['entry'] ?? 0;
@@ -339,9 +339,12 @@ class TelegramService
         $aiRec      = $signal['ai_recommendation']        ?? '';
         $aiTiming   = $signal['ai_entry_timing']          ?? '';
 
-        $aiEmoji  = $aiScore >= 75 ? '🟢' : ($aiScore >= 60 ? '🟡' : '🔴');
+        $aiEmoji     = $aiScore >= 85 ? '⚡' : ($aiScore >= 75 ? '🟢' : ($aiScore >= 60 ? '🟡' : '🔴'));
+        $aiRiskLabel = $riskPct >= 5
+            ? "⚡ <b>HIGH CONFIDENCE</b> — AI≥85 → Risk <b>{$riskPct}%</b>"
+            : "📊 <b>NORMAL</b> — AI&lt;85 → Risk <b>{$riskPct}%</b>";
         $aiBlock  = "━━━━━━━━━━━━━━━\n"
-                  . "🤖 <b>AI Verdict: {$aiEmoji} {$aiScore}/100</b>\n";
+                  . "🤖 <b>AI Score: {$aiEmoji} {$aiScore}/100</b> | {$aiRiskLabel}\n";
         if ($aiAnalysis) $aiBlock .= "🔍 {$aiAnalysis}\n";
         if ($aiRisk)     $aiBlock .= "⚠️ {$aiRisk}\n";
         if ($aiRec)      $aiBlock .= "💡 <b>{$aiRec}</b>\n";
@@ -373,7 +376,7 @@ class TelegramService
             . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%) ← 1:3 R:R\n"
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
-            . "💵 Risk 2%: WIN <b>+" . round(2 * $rr, 1) . "%</b> vốn | LOSS <b>-2%</b> vốn\n"
+            . "💵 Risk {$riskPct}%: WIN <b>+" . round($riskPct * $rr, 1) . "%</b> vốn | LOSS <b>-{$riskPct}%</b> vốn\n"
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
             . "📍 {$proximity}\n"

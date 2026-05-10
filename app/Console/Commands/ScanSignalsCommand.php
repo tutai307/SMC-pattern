@@ -404,8 +404,8 @@ class ScanSignalsCommand extends Command
         $klinesWeekly = $this->binanceService->getKlines($symbol, '1w',  60);
 
         // Session filter OFF — backtest data cho thấy tắt session filter cho WR tốt hơn
-        // skipAI = true — backtest chứng minh AI không thêm alpha cho entry, tiết kiệm API cost
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, true, $klinesDaily, false, $klinesWeekly);
+        // skipAI = false — AI score dùng để điều chỉnh position size: ≥85→5%, <85→2%
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, false, $klinesWeekly);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
@@ -417,11 +417,14 @@ class ScanSignalsCommand extends Command
         $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
         $aiError = $signal['ai_error'] ?? null;
 
-        // AI chỉ hiển thị thông tin, không block signal — backtest đã chứng minh EV dương không cần AI gate
+        // AI-RISK: ≥85 → risk 5% (backtest 50% WR), <85 → risk 2% (backtest ~31% WR)
+        $riskPct = $aiScore >= 85 ? 5 : 2;
+
         if ($aiError) {
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), vẫn gửi signal");
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), dùng risk mặc định 2%");
+            $riskPct = 2;
         } elseif ($aiScore > 0) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100" . ($aiRec ? " | {$aiRec}" : ''));
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI {$aiScore}/100 → Risk {$riskPct}%" . ($aiRec ? " | {$aiRec}" : ''));
         }
 
         // Override TP → 1:3 R:R (backtest Jan-Apr 2026 cho EV dương với tất cả 5 symbol)
@@ -463,7 +466,7 @@ class ScanSignalsCommand extends Command
         }
 
         Cache::put($dedupKey, true, now()->addHours(6));
-        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method);
+        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method, $riskPct);
 
         $isLong = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
         $chatId = config('services.telegram.chat_id');
@@ -481,7 +484,8 @@ class ScanSignalsCommand extends Command
         ], now()->addHours(8));
 
         $methodLabel = strtoupper($method);
-        $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [{$aiScore}/100]: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        $riskLabel   = $aiScore >= 85 ? "⚡ HIGH ({$riskPct}%)" : "📊 NORMAL ({$riskPct}%)";
+        $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [AI:{$aiScore} {$riskLabel}]: {$symbol} {$signal['type']} @ {$signal['entry']}");
         return true;
     }
 }

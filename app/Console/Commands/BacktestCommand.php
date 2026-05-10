@@ -28,7 +28,10 @@ class BacktestCommand extends Command
         {--ai-min=65 : Minimum AI score to accept signal (default 65, used with --ai)}
         {--struct-exit : Exit early when LTF structure flips against signal direction}
         {--save : Lưu kết quả vào DB để tái sử dụng}
-        {--use-cache : Dùng kết quả đã lưu nếu params + logic trùng khớp}';
+        {--use-cache : Dùng kết quả đã lưu nếu params + logic trùng khớp}
+        {--ai-risk : Dynamic sizing: AI score≥ai-high → risk-high USD, otherwise → risk USD}
+        {--ai-high=75 : AI score threshold for high risk (default 75)}
+        {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -50,6 +53,9 @@ class BacktestCommand extends Command
         $useStructExit = (bool)  $this->option('struct-exit');
         $saveResult    = (bool)  $this->option('save');
         $useCache      = (bool)  $this->option('use-cache');
+        $aiRisk        = (bool)  $this->option('ai-risk');
+        $aiHigh        = (int)   $this->option('ai-high');
+        $riskHigh      = (float) $this->option('risk-high');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -63,7 +69,9 @@ class BacktestCommand extends Command
         $this->info("═══════════════════════════════════════════════════");
         $this->info("  BACKTEST [{$methodLabel}] — {$symbol} {$tf}  |  {$fromLabel} → {$toLabel}");
         $this->info("  HTF bias: {$htf}  |  Risk/trade: \${$risk}  |  Capital: \${$capital}{$sessionLabel}");
-        $aiLabel     = $useAI ? "AI≥{$aiMin}" : 'AI: OFF';
+        $aiLabel     = $aiRisk
+            ? "AI-RISK ≥{$aiHigh}→\${$riskHigh} / <{$aiHigh}→\${$risk}"
+            : ($useAI ? "AI≥{$aiMin}" : 'AI: OFF');
         $structLabel = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
         $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}");
         $this->info("═══════════════════════════════════════════════════");
@@ -173,7 +181,7 @@ class BacktestCommand extends Command
                     if ($flipLong || $flipShort) {
                         $slDist  = abs($activeSignal['entry'] - $activeSignal['sl']);
                         $pxDiff  = $isLong ? ($close - $activeSignal['entry']) : ($activeSignal['entry'] - $close);
-                        $exitPnl = $slDist > 0 ? round($pxDiff / $slDist * $risk, 2) : 0;
+                        $exitPnl = $slDist > 0 ? round($pxDiff / $slDist * ($activeSignal['trade_risk'] ?? $risk), 2) : 0;
                         $activeSignal['outcome']     = 'STRUCT_EXIT';
                         $activeSignal['close_time']  = $ts;
                         $activeSignal['close_price'] = $close;
@@ -241,7 +249,7 @@ class BacktestCommand extends Command
             $weeklyWin   = array_values(array_filter($klinesWeekly, fn($k) => (int)$k[0] <= $ts));
             $weeklyWin   = array_slice($weeklyWin, -60);
 
-            $result = $service->analyze($window, $htfWin, $method, $symbol, $tf, !$useAI, $dailyWin, $useSession, $weeklyWin);
+            $result = $service->analyze($window, $htfWin, $method, $symbol, $tf, !$useAI && !$aiRisk, $dailyWin, $useSession, $weeklyWin);
             $sig    = $result['signal'] ?? null;
             $scanned++;
 
@@ -255,6 +263,14 @@ class BacktestCommand extends Command
                     continue;
                 }
                 $this->line("  → AI score {$aiScore}/100 ✓");
+            }
+
+            // Per-trade risk based on AI score
+            $tradeRisk  = $risk;
+            $sigAiScore = (int)($sig['ai_score'] ?? 0);
+            if ($aiRisk) {
+                $tradeRisk = ($sigAiScore >= $aiHigh) ? $riskHigh : $risk;
+                $this->line("  → AI {$sigAiScore}/100 → Risk: \${$tradeRisk}");
             }
 
             $entry = (float)$sig['entry'];
@@ -293,6 +309,8 @@ class BacktestCommand extends Command
                 'outcome'      => 'PENDING',
                 'close_time'   => null,
                 'close_price'  => null,
+                'trade_risk'   => $tradeRisk,
+                'ai_score'     => $sigAiScore,
             ];
         }
 
@@ -309,11 +327,12 @@ class BacktestCommand extends Command
             return 0;
         }
 
+        $riskCol = $aiRisk ? str_pad('RISK/AI', 12) : '';
         $this->line(str_pad('#', 3) . str_pad('TYPE', 7) . str_pad('LABEL', 14)
             . str_pad('SIGNAL', 14) . str_pad('FILL', 14)
             . str_pad('ENTRY', 10) . str_pad('TP', 10) . str_pad('SL', 10)
-            . str_pad('R:R', 6) . 'RESULT');
-        $this->line(str_repeat('─', 100));
+            . str_pad('R:R', 6) . $riskCol . 'RESULT');
+        $this->line(str_repeat('─', $aiRisk ? 112 : 100));
 
         foreach ($signals as $s) {
             $sigDate  = date('d/m H:i', (int)($s['signal_time'] / 1000));
@@ -329,6 +348,9 @@ class BacktestCommand extends Command
                 default       => $s['outcome'],
             };
 
+            $riskAiCol = $aiRisk
+                ? str_pad('$' . number_format($s['trade_risk'] ?? $risk, 0) . '/AI:' . ($s['ai_score'] ?? 0), 12)
+                : '';
             $this->line(
                 str_pad($s['id'], 3)
                 . str_pad($s['type'], 7)
@@ -339,6 +361,7 @@ class BacktestCommand extends Command
                 . str_pad(number_format($s['tp'], 3), 10)
                 . str_pad(number_format($s['sl'], 3), 10)
                 . str_pad($s['rr'], 6)
+                . $riskAiCol
                 . $resultColor
             );
         }
@@ -353,11 +376,12 @@ class BacktestCommand extends Command
         $closed      = count($wins) + count($losses) + count($structExits);
         $wr          = $closed > 0 ? round(count($wins) / $closed * 100, 1) : 0;
 
-        // P&L: WIN = +risk*rr, LOSS = -risk, STRUCT_EXIT = actual exit_pnl
+        // P&L: WIN = +tradeRisk*rr, LOSS = -tradeRisk, STRUCT_EXIT = actual exit_pnl
         $pnl = 0;
         foreach ($signals as $s) {
-            if ($s['outcome'] === 'WIN')         $pnl += $risk * $rrTarget;
-            if ($s['outcome'] === 'LOSS')        $pnl -= $risk;
+            $tr = $s['trade_risk'] ?? $risk;
+            if ($s['outcome'] === 'WIN')         $pnl += $tr * $rrTarget;
+            if ($s['outcome'] === 'LOSS')        $pnl -= $tr;
             if ($s['outcome'] === 'STRUCT_EXIT') $pnl += ($s['exit_pnl'] ?? 0);
         }
 
@@ -382,7 +406,13 @@ class BacktestCommand extends Command
         $this->line("  Winrate:        <fg=" . ($wr >= 50 ? 'green' : 'red') . ">{$wr}%</> ({$closed} closed)");
         $pnlColor = $pnl >= 0 ? 'green' : 'red';
         $pnlSign  = $pnl >= 0 ? '+' : '';
-        $this->line("  P&L (\${$capital}, {$risk}\$/trade, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>");
+        if ($aiRisk) {
+            $highCount = count(array_filter($signals, fn($s) => $s['filled'] && ($s['trade_risk'] ?? 0) >= $riskHigh));
+            $lowCount  = count(array_filter($signals, fn($s) => $s['filled'] && ($s['trade_risk'] ?? 0) < $riskHigh));
+            $this->line("  P&L (\${$capital}, AI-RISK \${$riskHigh}/\${$risk}, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>  ({$highCount}×\${$riskHigh} + {$lowCount}×\${$risk})");
+        } else {
+            $this->line("  P&L (\${$capital}, {$risk}\$/trade, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>");
+        }
         $this->line("  Capital cuối:   " . number_format($capital + $pnl, 2) . " USD");
         $this->line(str_repeat('═', 55));
 
@@ -396,8 +426,8 @@ class BacktestCommand extends Command
             }
             $byDay[$day]['signals']++;
             if ($s['filled'])              $byDay[$day]['filled']++;
-            if ($s['outcome'] === 'WIN')  { $byDay[$day]['wins']++;   $byDay[$day]['pnl'] += $risk * $rrTarget; }
-            if ($s['outcome'] === 'LOSS') { $byDay[$day]['losses']++; $byDay[$day]['pnl'] -= $risk; }
+            if ($s['outcome'] === 'WIN')  { $byDay[$day]['wins']++;   $byDay[$day]['pnl'] += ($s['trade_risk'] ?? $risk) * $rrTarget; }
+            if ($s['outcome'] === 'LOSS') { $byDay[$day]['losses']++; $byDay[$day]['pnl'] -= ($s['trade_risk'] ?? $risk); }
         }
         ksort($byDay);
 
