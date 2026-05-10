@@ -124,6 +124,7 @@ Không còn 2-bước confirm. "ok" lưu thẳng.
 | 2026-05-09 | Xóa sendNoSetupReminder — không spam tin nhắn | ScanSignalsCommand.php |
 | 2026-05-09 | /l dùng fresh=true → bypass cache, luôn data mới | TelegramBotCommand.php + PriceActionService.php |
 | 2026-05-09 | Fix AI cắt lỗ sớm: thêm slUsedPct calculation + hard rules (CẮT LỖ chỉ khi ≥60% SL, CHỐT LỜI chỉ khi ≥70% TP) | PriceActionService.php |
+| 2026-05-10 | Đổi scanner sang M15 cho 6 symbols (SOL/XAG/LINK/ETH/BTC/XAU), cập nhật backtestStats Jan-May 2026, thêm PnL 2% risk vào scan alert | ScanSignalsCommand.php, TelegramService.php |
 
 ---
 
@@ -144,7 +145,7 @@ DB_DATABASE=price_action
 OPENROUTER_API_KEY=sk-or-v1-...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
-SCAN_SYMBOLS=XAGUSDT:1h,XAGUSDT:4h
+SCAN_SYMBOLS=SOLUSDT:15m,XAGUSDT:15m,LINKUSDT:15m,ETHUSDT:15m,BTCUSDT:15m,XAUUSDT:15m
 ```
 
 ## Dev Commands

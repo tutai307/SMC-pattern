@@ -27,7 +27,7 @@ class ScanSignalsCommand extends Command
     ) {
         parent::__construct();
 
-        $raw = env('SCAN_SYMBOLS', 'XAGUSDT:1h,XAGUSDT:4h');
+        $raw = env('SCAN_SYMBOLS', 'SOLUSDT:15m,XAGUSDT:15m,LINKUSDT:15m,ETHUSDT:15m,BTCUSDT:15m,XAUUSDT:15m');
         foreach (explode(',', $raw) as $item) {
             [$sym, $tf] = array_pad(explode(':', trim($item)), 2, '15m');
             $this->watchlist[] = ['symbol' => strtoupper($sym), 'timeframe' => $tf];

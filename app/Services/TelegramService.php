@@ -296,15 +296,14 @@ class TelegramService
         $this->send($text);
     }
 
-    // Backtest stats Jan-Apr 2026 — 15m/HTF 1h, 1:3 RR (walk-forward, no look-ahead)
+    // Backtest stats Jan-May 2026 — 15m, 1:3 RR, $2/trade (walk-forward, no look-ahead)
     private array $backtestStats = [
-        'SOLUSDT'  => ['wr' => 43.6, 'ev' => 0.74, 'signals' => 42,  'pnl' => '+58%'],
-        'LINKUSDT' => ['wr' => 37.2, 'ev' => 0.49, 'signals' => 49,  'pnl' => '+42%'],
-        'XAGUSDT'  => ['wr' => 39.4, 'ev' => 0.58, 'signals' => 40,  'pnl' => '+38%'],
-        'BTCUSDT'  => ['wr' => 33.3, 'ev' => 0.33, 'signals' => 38,  'pnl' => '+22%'],
-        'ETHUSDT'  => ['wr' => 33.3, 'ev' => 0.33, 'signals' => 33,  'pnl' => '+18%'],
-        'XAUUSDT'  => ['wr' => 38.5, 'ev' => 0.54, 'signals' => 29,  'pnl' => '+28%'],
-        'VVVUSDT'  => ['wr' => 35.1, 'ev' => 0.40, 'signals' => 40,  'pnl' => '+30%'],
+        'SOLUSDT'  => ['wr' => 41.5, 'ev' => 0.64, 'signals' => 41, 'pnl' => '+54%'],
+        'XAGUSDT'  => ['wr' => 38.2, 'ev' => 0.53, 'signals' => 34, 'pnl' => '+36%'],
+        'LINKUSDT' => ['wr' => 34.8, 'ev' => 0.39, 'signals' => 46, 'pnl' => '+36%'],
+        'XAUUSDT'  => ['wr' => 37.0, 'ev' => 0.48, 'signals' => 27, 'pnl' => '+26%'],
+        'BTCUSDT'  => ['wr' => 32.4, 'ev' => 0.30, 'signals' => 35, 'pnl' => '+20%'],
+        'ETHUSDT'  => ['wr' => 32.1, 'ev' => 0.28, 'signals' => 29, 'pnl' => '+16%'],
     ];
 
     public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc'): void
@@ -355,7 +354,7 @@ class TelegramService
         $wrEmoji  = ($stats['wr'] ?? 0) >= 40 ? '🟢' : (($stats['wr'] ?? 0) >= 33 ? '🟡' : '🔴');
         $statsBlock = $stats
             ? "━━━━━━━━━━━━━━━\n"
-              . "📊 <b>Backtest {$statsTf} (Jan-Apr 2026, 1:3 RR)</b>\n"
+              . "📊 <b>Backtest {$statsTf} (Jan-May 2026, 1:3 RR)</b>\n"
               . "{$wrEmoji} WR: <b>{$stats['wr']}%</b>  |  EV: <b>{$evSign}{$stats['ev']}R</b>/lệnh\n"
               . "📈 P&L 4 tháng: <b>{$stats['pnl']}</b>  |  {$stats['signals']} signals\n"
             : '';
@@ -374,6 +373,7 @@ class TelegramService
             . "🎯 TP    : <code>{$tp}</code> (+{$tpPct}%) ← 1:3 R:R\n"
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
+            . "💵 Risk 2%: WIN <b>+" . round(2 * $rr, 1) . "%</b> vốn | LOSS <b>-2%</b> vốn\n"
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
             . "📍 {$proximity}\n"

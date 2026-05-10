@@ -4,6 +4,15 @@ namespace App\Services;
 
 class PriceActionService
 {
+    private int $adxThreshold    = 25;
+    private int $minConfidence   = 60;
+
+    public function setThresholds(int $adx, int $minConfidence): void
+    {
+        $this->adxThreshold  = $adx;
+        $this->minConfidence = $minConfidence;
+    }
+
     /**
      * Analyze market data with SMC (Smart Money Concepts).
      */
@@ -453,7 +462,7 @@ class PriceActionService
         $dailyTrend   = $dailyStructure['trend']  ?? 'không rõ';
         $weeklyTrend  = $weeklyStructure['trend'] ?? 'không rõ';
 
-        if ($lastAdx < 25) return null;
+        if ($lastAdx < $this->adxThreshold) return null;
 
         // ── Macro trend filter (EMA50 weekly) ───────────────────────────────
         // Chỉ trade THEO chiều macro: TĂNG = chỉ LONG, GIẢM = chỉ SHORT
@@ -546,7 +555,7 @@ class PriceActionService
                 if ($isSniper && $choch)  $confidence += 15;
                 if ($isCounterTrend) $confidence -= 20;
 
-                if ($confidence < 60) continue;
+                if ($confidence < $this->minConfidence) continue;
 
                 $sl = $zone['bottom'] - ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% dưới entry — tránh bị quét bởi noise
@@ -635,7 +644,7 @@ class PriceActionService
                 if ($isSniper && $choch)  $confidence += 15;
                 if ($isCounterTrend) $confidence -= 20;
 
-                if ($confidence < 60) continue;
+                if ($confidence < $this->minConfidence) continue;
 
                 $sl = $zone['top'] + ($lastAtr * 0.8);
                 // SL tối thiểu 1.5% trên entry — tránh bị quét bởi noise

@@ -20,7 +20,9 @@ class BacktestCommand extends Command
         {--session : Apply London/NY session filter (07-10 & 13-17 UTC)}
         {--method=smc : Analysis method (smc/elliot)}
         {--rr=2 : Risk:Reward target multiplier (e.g. 2 = 1:2, 3 = 1:3)}
-        {--min-rr=1.4 : Minimum signal R:R to accept (filter weak setups)}';
+        {--min-rr=1.4 : Minimum signal R:R to accept (filter weak setups)}
+        {--adx=25 : Minimum ADX threshold (default 25, lower=more signals)}
+        {--min-confidence=60 : Minimum confidence score (default 60, lower=more signals)}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -35,6 +37,8 @@ class BacktestCommand extends Command
         $method        = $this->option('method');
         $rrTarget      = (float) $this->option('rr');
         $minRR         = (float) $this->option('min-rr');
+        $adxThreshold  = (int)   $this->option('adx');
+        $minConfidence = (int)   $this->option('min-confidence');
 
         // Resolve date range
         [$fromTs, $toTs, $fromLabel, $toLabel] = $this->resolveDateRange(
@@ -47,6 +51,7 @@ class BacktestCommand extends Command
         $this->info("═══════════════════════════════════════════════════");
         $this->info("  BACKTEST [{$methodLabel}] — {$symbol} {$tf}  |  {$fromLabel} → {$toLabel}");
         $this->info("  HTF bias: {$htf}  |  Risk/trade: \${$risk}  |  Capital: \${$capital}{$sessionLabel}");
+        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}");
         $this->info("═══════════════════════════════════════════════════");
 
         // ── 1. Fetch klines ──────────────────────────────────────────────
@@ -77,6 +82,9 @@ class BacktestCommand extends Command
         if ($startIdx < 200) $startIdx = 200;
 
         $this->line("Walk-forward from candle #{$startIdx} (warm-up OK).\n");
+
+        // Apply custom thresholds for backtest exploration
+        $service->setThresholds($adxThreshold, $minConfidence);
 
         // ── 3. Walk-forward simulation ───────────────────────────────────
         $signals      = [];
@@ -300,6 +308,55 @@ class BacktestCommand extends Command
         $pnlSign  = $pnl >= 0 ? '+' : '';
         $this->line("  P&L (\${$capital}, {$risk}\$/trade, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>");
         $this->line("  Capital cuối:   " . number_format($capital + $pnl, 2) . " USD");
+        $this->line(str_repeat('═', 55));
+
+        // ── 6. Daily stats ───────────────────────────────────────────────
+        $byDay = [];
+        foreach ($signals as $s) {
+            // Dùng signal_time để group (ngày tín hiệu xuất hiện)
+            $day = date('Y-m-d', (int)($s['signal_time'] / 1000));
+            if (!isset($byDay[$day])) {
+                $byDay[$day] = ['signals' => 0, 'filled' => 0, 'wins' => 0, 'losses' => 0, 'pnl' => 0];
+            }
+            $byDay[$day]['signals']++;
+            if ($s['filled'])              $byDay[$day]['filled']++;
+            if ($s['outcome'] === 'WIN')  { $byDay[$day]['wins']++;   $byDay[$day]['pnl'] += $risk * $rrTarget; }
+            if ($s['outcome'] === 'LOSS') { $byDay[$day]['losses']++; $byDay[$day]['pnl'] -= $risk; }
+        }
+        ksort($byDay);
+
+        $totalDays      = count($byDay);
+        $profitDays     = count(array_filter($byDay, fn($d) => $d['pnl'] > 0));
+        $breakEvenDays  = count(array_filter($byDay, fn($d) => $d['pnl'] == 0 && $d['filled'] > 0));
+        $lossDays       = count(array_filter($byDay, fn($d) => $d['pnl'] < 0));
+        $avgSignals     = $totalDays > 0 ? round(array_sum(array_column($byDay, 'signals')) / $totalDays, 2) : 0;
+        $avgFilled      = $totalDays > 0 ? round(array_sum(array_column($byDay, 'filled'))  / $totalDays, 2) : 0;
+        $dayWR          = ($profitDays + $lossDays) > 0
+            ? round($profitDays / ($profitDays + $lossDays) * 100, 1) : 0;
+
+        $this->line("\n  THỐNG KÊ THEO NGÀY");
+        $this->line(str_repeat('─', 55));
+        $this->line("  Ngày có signal:  {$totalDays}");
+        $this->line("  Avg signal/ngày: {$avgSignals}  (filled: {$avgFilled})");
+        $this->line("  Ngày có lãi:     <fg=green>{$profitDays}</>");
+        $this->line("  Ngày hòa:        {$breakEvenDays}");
+        $this->line("  Ngày lỗ:         <fg=red>{$lossDays}</>");
+        $this->line("  Winrate/ngày:    <fg=" . ($dayWR >= 50 ? 'green' : 'red') . ">{$dayWR}%</>");
+        $this->line(str_repeat('─', 55));
+
+        // Top 5 ngày tốt nhất và tệ nhất
+        uasort($byDay, fn($a, $b) => $b['pnl'] <=> $a['pnl']);
+        $this->line("  Top ngày tốt nhất:");
+        foreach (array_slice($byDay, 0, 3, true) as $date => $d) {
+            $sign = $d['pnl'] >= 0 ? '+' : '';
+            $this->line("    {$date}  {$d['wins']}W/{$d['losses']}L  <fg=green>{$sign}" . number_format($d['pnl'], 2) . "</>");
+        }
+        $this->line("  Top ngày tệ nhất:");
+        foreach (array_slice(array_reverse($byDay, true), 0, 3, true) as $date => $d) {
+            $sign = $d['pnl'] >= 0 ? '+' : '';
+            $color = $d['pnl'] < 0 ? 'red' : 'green';
+            $this->line("    {$date}  {$d['wins']}W/{$d['losses']}L  <fg={$color}>{$sign}" . number_format($d['pnl'], 2) . "</>");
+        }
         $this->line(str_repeat('═', 55));
 
         return 0;
