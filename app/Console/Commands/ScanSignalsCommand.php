@@ -416,17 +416,11 @@ class ScanSignalsCommand extends Command
         $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
         $aiError = $signal['ai_error'] ?? null;
 
+        // AI chỉ hiển thị thông tin, không block signal — backtest đã chứng minh EV dương không cần AI gate
         if ($aiError) {
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), bỏ qua");
-            return false;
-        }
-        if ($aiScore < 65) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100 < 65, bỏ qua");
-            return false;
-        }
-        if (str_starts_with($aiRec, 'BỎ QUA')) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI: {$aiRec}, bỏ qua");
-            return false;
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), vẫn gửi signal");
+        } elseif ($aiScore > 0) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI score {$aiScore}/100" . ($aiRec ? " | {$aiRec}" : ''));
         }
 
         // Override TP → 1:3 R:R (backtest Jan-Apr 2026 cho EV dương với tất cả 5 symbol)
