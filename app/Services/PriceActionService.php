@@ -1208,6 +1208,81 @@ PROMPT;
         });
     }
 
+    /**
+     * Deterministic confidence score (0–100) — dùng thay AI khi backtest.
+     * Ưu tiên dùng AI trong production; hàm này để so sánh/tiết kiệm token.
+     *
+     * Breakdown:
+     *   HTF alignment   25 pts
+     *   ADX strength    25 pts
+     *   Momentum 5c     20 pts
+     *   SNIPER OB       15 pts
+     *   EMA200 align    10 pts
+     *   BOS confirm      5 pts
+     */
+    public function computeConfidenceScore(
+        array $signal,
+        array $recentCandles,
+        array $structure,
+        array $htfStructure,
+        array $indicators = [],
+        array $orderBlocks = []
+    ): int {
+        $score    = 0;
+        $isLong   = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
+        $last5    = array_slice($recentCandles, -5);
+        $lastClose = end($recentCandles)['close'] ?? $signal['entry'];
+        $adx      = (float) ($indicators['adx']    ?? 0);
+        $ema200   = (float) ($indicators['ema200'] ?? 0);
+        $htfTrend = $htfStructure['trend'] ?? 'không rõ';
+        $ltfTrend = $structure['trend']    ?? 'không rõ';
+
+        // 1. HTF alignment (25 pts)
+        if ($isLong  && $htfTrend === 'TĂNG GIÁ') $score += 25;
+        elseif (!$isLong && $htfTrend === 'GIẢM GIÁ') $score += 25;
+        elseif ($htfTrend === 'ĐI NGANG')              $score += 10;
+
+        // 2. ADX strength (25 pts)
+        if      ($adx >= 35) $score += 25;
+        elseif  ($adx >= 28) $score += 18;
+        elseif  ($adx >= 22) $score += 10;
+        else                 $score += 3;
+
+        // 3. Momentum 5 nến (20 pts)
+        $bullCount = count(array_filter($last5, fn($c) => ($c['close'] ?? 0) > ($c['open'] ?? 0)));
+        $bearCount = 5 - $bullCount;
+        $momCount  = $isLong ? $bullCount : $bearCount;
+        $score += (int) round($momCount / 5 * 20);
+
+        // 4. SNIPER OB gần entry (15 pts)
+        $entry = (float) ($signal['entry'] ?? 0);
+        if ($entry > 0) {
+            $nearOb = null;
+            foreach ($orderBlocks as $ob) {
+                $obPrice = (float) ($ob['price'] ?? 0);
+                if ($obPrice <= 0) continue;
+                $dist = abs($obPrice - $entry) / $entry;
+                if ($dist <= 0.015) {
+                    if (($ob['strength'] ?? '') === 'SNIPER') { $nearOb = 'SNIPER'; break; }
+                    if ($nearOb !== 'SNIPER') $nearOb = 'HIGH';
+                }
+            }
+            if ($nearOb === 'SNIPER') $score += 15;
+            elseif ($nearOb === 'HIGH') $score += 8;
+        }
+
+        // 5. EMA200 alignment (10 pts)
+        if ($ema200 > 0) {
+            if ($isLong  && $lastClose > $ema200) $score += 10;
+            if (!$isLong && $lastClose < $ema200) $score += 10;
+        }
+
+        // 6. BOS confirmation (5 pts)
+        if (!empty($structure['bos'])) $score += 5;
+
+        return min(100, $score);
+    }
+
     public function adviseOpenPosition(
         array $klines,
         array $klinesHTF,

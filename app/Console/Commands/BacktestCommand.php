@@ -32,7 +32,8 @@ class BacktestCommand extends Command
         {--ai-risk : Dynamic sizing: AI score≥ai-high → risk-high USD, otherwise → risk USD}
         {--ai-high=75 : AI score threshold for high risk (default 75)}
         {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}
-        {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}';
+        {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}
+        {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -58,6 +59,7 @@ class BacktestCommand extends Command
         $aiHigh        = (int)   $this->option('ai-high');
         $riskHigh      = (float) $this->option('risk-high');
         $overrideTp    = (bool)  $this->option('override-tp');
+        $localScore    = (bool)  $this->option('local-score');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -73,7 +75,7 @@ class BacktestCommand extends Command
         $this->info("  HTF bias: {$htf}  |  Risk/trade: \${$risk}  |  Capital: \${$capital}{$sessionLabel}");
         $aiLabel     = $aiRisk
             ? "AI-RISK ≥{$aiHigh}→\${$riskHigh} / <{$aiHigh}→\${$risk}"
-            : ($useAI ? "AI≥{$aiMin}" : 'AI: OFF');
+            : ($useAI ? "AI≥{$aiMin}" : ($localScore ? 'AI: OFF | LOCAL-SCORE: ON' : 'AI: OFF'));
         $structLabel  = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
         $tpLabel      = $overrideTp ? "TP=override(1:{$rrTarget})" : "TP=signal";
         $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}  |  {$tpLabel}");
@@ -266,6 +268,19 @@ class BacktestCommand extends Command
                     continue;
                 }
                 $this->line("  → AI score {$aiScore}/100 ✓");
+            }
+
+            if ($localScore && !$useAI) {
+                $localSc = $service->computeConfidenceScore(
+                    $sig,
+                    array_slice($window, -50),
+                    $result['structure']     ?? [],
+                    ['trend' => $result['htf_trend'] ?? 'không rõ'],
+                    $result['indicators']    ?? [],
+                    $result['orderBlocks']   ?? []
+                );
+                $sig['ai_score'] = $localSc;
+                $this->line("  → LocalScore {$localSc}/100");
             }
 
             // Per-trade risk based on AI score
