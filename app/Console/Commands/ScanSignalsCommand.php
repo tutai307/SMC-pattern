@@ -423,6 +423,9 @@ class ScanSignalsCommand extends Command
         $klinesHTF    = $this->binanceService->getKlines($symbol, $htf,  50);
         $klinesDaily  = $this->binanceService->getKlines($symbol, '1d',  60);
         $klinesWeekly = $this->binanceService->getKlines($symbol, '1w',  60);
+        $btcDaily     = $symbol !== 'BTCUSDT'
+            ? $this->binanceService->getKlines('BTCUSDT', '1d', 30)
+            : $klinesDaily;
 
         // Session filter OFF — backtest data cho thấy tắt session filter cho WR tốt hơn
         // skipAI = false — AI score dùng để điều chỉnh position size: ≥85→5%, <85→2%
@@ -432,6 +435,28 @@ class ScanSignalsCommand extends Command
         if (!$signal) {
             $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — không có setup");
             return false;
+        }
+
+        // BTC sentiment filter: không SHORT khi BTC daily EMA20 bullish, không LONG khi bearish
+        if (!empty($btcDaily) && count($btcDaily) >= 5) {
+            $btcCloses = array_map(fn($k) => (float)$k[4], $btcDaily);
+            $period    = min(20, count($btcCloses) - 1);
+            $kk        = 2 / ($period + 1);
+            $ema       = $btcCloses[0];
+            for ($i = 1; $i < count($btcCloses); $i++) {
+                $ema = $btcCloses[$i] * $kk + $ema * (1 - $kk);
+            }
+            $btcMacro  = end($btcCloses) > $ema ? 'TĂNG GIÁ' : 'GIẢM GIÁ';
+            $isShort   = !str_contains(strtolower($signal['type'] ?? ''), 'mua');
+            $isLong    = !$isShort;
+            if ($isShort && $btcMacro === 'TĂNG GIÁ') {
+                $this->line('[' . now()->format('H:i:s') . "] {$symbol} — SHORT blocked (BTC daily bullish)");
+                return false;
+            }
+            if ($isLong && $btcMacro === 'GIẢM GIÁ') {
+                $this->line('[' . now()->format('H:i:s') . "] {$symbol} — LONG blocked (BTC daily bearish)");
+                return false;
+            }
         }
 
         $aiScore = (int) ($signal['ai_score'] ?? 0);

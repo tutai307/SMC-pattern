@@ -21,7 +21,8 @@ class BacktestPortfolioCommand extends Command
         {--ai-high=85 : AI score threshold for high risk}
         {--rr=2.5 : Risk:Reward target multiplier}
         {--adx=25 : Minimum ADX threshold}
-        {--vision : Use Binance Vision data}';
+        {--vision : Use Binance Vision data}
+        {--detail : Print each trade entry/tp/sl/outcome}';
 
     protected $description = 'Portfolio backtest — multiple symbols sharing one capital pool, trades merged by time';
 
@@ -60,6 +61,13 @@ class BacktestPortfolioCommand extends Command
         $this->line(str_repeat('═', 60));
 
         $service->setThresholds($adxThresh, $minConf);
+
+        // BTC daily klines — dùng làm market sentiment proxy (EMA20 daily)
+        $btcDaily = [];
+        if (!$useVision) {
+            $dailyWarmupBtc = 60 * 86_400_000;
+            $btcDaily = $this->fetchKlines('BTCUSDT', '1d', $fromTs - $dailyWarmupBtc, $toTs);
+        }
 
         $allSignals  = [];
         $perPairStat = [];
@@ -225,6 +233,15 @@ class BacktestPortfolioCommand extends Command
                 $sig    = $result['signal'] ?? null;
 
                 if (!$sig || empty($sig['entry']) || empty($sig['tp']) || empty($sig['sl'])) continue;
+
+                // BTC sentiment filter: không SHORT khi BTC daily bullish, không LONG khi BTC daily bearish
+                if (!empty($btcDaily)) {
+                    $btcMacro = $this->computeBtcMacro($btcDaily, $ts);
+                    $isShort  = in_array($sig['type'] ?? '', ['BÁN', 'SHORT']);
+                    $isLong   = in_array($sig['type'] ?? '', ['MUA', 'LONG']);
+                    if ($isShort && $btcMacro === 'TĂNG GIÁ') continue;
+                    if ($isLong  && $btcMacro === 'GIẢM GIÁ') continue;
+                }
 
                 // Local confidence score
                 $localSc = $service->computeConfidenceScore(
@@ -422,7 +439,72 @@ class BacktestPortfolioCommand extends Command
 
         $this->line(str_repeat('═', 60));
 
+        // Detail: print each trade
+        if ($this->option('detail') && !empty($allSignals)) {
+            $this->line('');
+            $this->line('  TRADE DETAIL');
+            $this->line(str_repeat('─', 80));
+            $this->line(
+                str_pad('Symbol', 10)
+                . str_pad('Type', 7)
+                . str_pad('Fill time', 20)
+                . str_pad('Entry', 12)
+                . str_pad('TP', 12)
+                . str_pad('SL', 12)
+                . str_pad('Score', 7)
+                . str_pad('Risk$', 7)
+                . 'Outcome / P&L'
+            );
+            $this->line(str_repeat('─', 80));
+            foreach ($allSignals as $s) {
+                if (!$s['filled']) continue;
+                $outcomeColor = match($s['outcome']) {
+                    'WIN'         => 'green',
+                    'LOSS'        => 'red',
+                    'STRUCT_EXIT' => 'yellow',
+                    default       => 'gray',
+                };
+                $pnlStr = $s['exit_pnl'] >= 0 ? '+$' . number_format($s['exit_pnl'], 2) : '-$' . number_format(abs($s['exit_pnl']), 2);
+                $this->line(
+                    str_pad($s['symbol'], 10)
+                    . str_pad($s['type'], 7)
+                    . str_pad($s['fill_time'] ? date('m/d H:i', (int)($s['fill_time'] / 1000)) : '-', 20)
+                    . str_pad(number_format((float)$s['entry'], 4), 12)
+                    . str_pad(number_format((float)$s['tp'], 4), 12)
+                    . str_pad(number_format((float)$s['sl'], 4), 12)
+                    . str_pad($s['ai_score'], 7)
+                    . str_pad('$' . $s['trade_risk'], 7)
+                    . '<fg=' . $outcomeColor . '>' . $s['outcome'] . '  ' . $pnlStr . '</>'
+                );
+            }
+            $this->line(str_repeat('─', 80));
+        }
+
         return 0;
+    }
+
+    // ── BTC Macro Sentiment ───────────────────────────────────────────────
+
+    private function computeBtcMacro(array $btcDaily, int $ts): string
+    {
+        $available = array_values(array_filter($btcDaily, fn($k) => (int)$k[0] <= $ts));
+        if (count($available) < 5) return 'không rõ';
+
+        $closes = array_map(fn($k) => (float)$k[4], $available);
+        $period = min(20, count($closes) - 1);
+
+        // Simple EMA
+        $k   = 2 / ($period + 1);
+        $ema = $closes[0];
+        for ($i = 1; $i <= $period; $i++) {
+            $ema = $closes[$i] * $k + $ema * (1 - $k);
+        }
+        for ($i = $period + 1; $i < count($closes); $i++) {
+            $ema = $closes[$i] * $k + $ema * (1 - $k);
+        }
+
+        $lastClose = end($closes);
+        return $lastClose > $ema ? 'TĂNG GIÁ' : 'GIẢM GIÁ';
     }
 
     // ── Helpers (copied from BacktestCommand) ────────────────────────────
