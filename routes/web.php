@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\AccessController;
+use App\Http\Controllers\VisitorController;
 
 // ── Auth (không cần đăng nhập) ───────────────────────────────────────────────
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
@@ -41,7 +42,8 @@ Route::middleware(\App\Http\Middleware\RequireAuth::class)->group(function () {
 
     Route::post('/advisor', [DashboardController::class, 'advisor'])->middleware('throttle:20,1')->name('advisor');
 
-    // Admin: access management
+    // Admin: visitors & access management
+    Route::get('/visitors', [VisitorController::class, 'index'])->name('visitors');
     Route::get('/admin/access', [AccessController::class, 'dashboard'])->name('admin.access');
     Route::post('/admin/access/{id}/approve', [AccessController::class, 'approve'])->name('access.approve');
     Route::post('/admin/access/{id}/deny', [AccessController::class, 'deny'])->name('access.deny');
