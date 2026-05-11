@@ -108,6 +108,7 @@ class ScanSignalsCommand extends Command
         }
         $stillUnfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
         foreach ($stillUnfilled as $signal) {
+            $this->checkUnfilledExpiry($signal);
             $this->checkUnfilledStructure($signal);
         }
 
@@ -151,6 +152,20 @@ class ScanSignalsCommand extends Command
                 return;
             }
         }
+    }
+
+    private function checkUnfilledExpiry(TradingSignal $signal): void
+    {
+        if ($signal->notified_expiry) return;
+
+        $expiryHours = 8;
+        if ($signal->created_at->diffInHours(now()) < $expiryHours) return;
+
+        $signal->update(['notified_expiry' => true, 'status' => 'CANCELLED']);
+        broadcast(new SignalStatusChanged($signal->fresh()));
+        $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+        $this->telegramService->sendUnfilledExpiry($signal, $currentPrice, $expiryHours);
+        $this->info("  [{$signal->symbol}] ⏰ #{$signal->id} chưa khớp sau {$expiryHours}h → CANCELLED");
     }
 
     private function checkUnfilledStructure(TradingSignal $signal): void
@@ -423,14 +438,26 @@ class ScanSignalsCommand extends Command
         $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
         $aiError = $signal['ai_error'] ?? null;
 
-        // AI-RISK: ≥85 → risk 8% (backtest XAGUSDT +73% / 4th), <85 → risk 2%
-        $riskPct = $aiScore >= 85 ? 8 : 2;
+        // Tính LocalScore để dùng làm fallback khi AI lỗi
+        $localScore = $this->priceActionService->computeConfidenceScore(
+            $signal,
+            array_slice($this->priceActionService->formatCandlesPublic($klines), -5),
+            $analysis['structure']    ?? [],
+            ['trend' => $analysis['htf_trend'] ?? 'không rõ'],
+            $analysis['indicators']   ?? [],
+            $analysis['orderBlocks']  ?? []
+        );
 
+        // AI-RISK: ≥85 → risk 8% (backtest XAGUSDT +73% / 4th), <85 → risk 2%
         if ($aiError) {
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), dùng risk mặc định 2%");
-            $riskPct = 2;
-        } elseif ($aiScore > 0) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI {$aiScore}/100 → Risk {$riskPct}%" . ($aiRec ? " | {$aiRec}" : ''));
+            // Fallback sang LocalScore khi AI không khả dụng
+            $riskPct = $localScore >= 85 ? 8 : 2;
+            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), LocalScore={$localScore} → Risk {$riskPct}%");
+        } else {
+            $riskPct = $aiScore >= 85 ? 8 : 2;
+            if ($aiScore > 0) {
+                $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI {$aiScore}/100 LocalScore={$localScore} → Risk {$riskPct}%" . ($aiRec ? " | {$aiRec}" : ''));
+            }
         }
 
         // Override TP → 1:2.5 R:R (backtest Jan-Apr 2026: WR 39.4%, +73% với AI-risk vs +60% ở 1:3)

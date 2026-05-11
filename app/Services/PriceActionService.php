@@ -96,9 +96,9 @@ class PriceActionService
             $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend);
         }
 
-        // 5. Advanced AI Scoring
+        // 5. Advanced AI Scoring + LocalScore
+        $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
         if ($signal && !$skipAI) {
-            $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
             $signal = $this->enrichWithAIScore(
                 $signal,
                 array_slice($candles, -50),
@@ -111,6 +111,16 @@ class PriceActionService
                 $orderBlocks ?? [],
                 $fvgs ?? [],
                 $volumeProfile['poc'] ?? 0
+            );
+        }
+        if ($signal) {
+            $signal['local_score'] = $this->computeConfidenceScore(
+                $signal,
+                array_slice($candles, -20),
+                $structure,
+                $htfStructure,
+                $indicators,
+                $orderBlocks ?? []
             );
         }
 
@@ -140,6 +150,12 @@ class PriceActionService
     {
         if (count($klines) < 50) return ['trend' => 'không rõ', 'bos' => false, 'choch' => false, 'last_price' => 0];
         return $this->detectSMCStructure($this->formatCandles($klines));
+    }
+
+    /** Public wrapper — dùng bởi ScanSignalsCommand để format klines trước khi gọi computeConfidenceScore() */
+    public function formatCandlesPublic(array $klines): array
+    {
+        return $this->formatCandles($klines);
     }
 
     private function formatCandles(array $klines)
@@ -1236,24 +1252,24 @@ PROMPT;
         $ema200    = (float) ($indicators['ema200'] ?? 0);
         $htfTrend  = $htfStructure['trend'] ?? 'không rõ';
 
-        // 1. HTF alignment (25 pts)
-        if     ($isLong  && $htfTrend === 'TĂNG GIÁ')  $score += 25;
-        elseif (!$isLong && $htfTrend === 'GIẢM GIÁ')  $score += 25;
-        elseif ($htfTrend === 'ĐI NGANG')               $score += 12;
+        // 1. HTF alignment (30 pts)
+        if     ($isLong  && $htfTrend === 'TĂNG GIÁ')  $score += 30;
+        elseif (!$isLong && $htfTrend === 'GIẢM GIÁ')  $score += 30;
+        elseif ($htfTrend === 'ĐI NGANG')               $score += 15;
 
-        // 2. ADX strength (25 pts) — tăng mid-range để phù hợp XAGUSDT
+        // 2. ADX strength (25 pts)
         if      ($adx >= 35) $score += 25;
-        elseif  ($adx >= 28) $score += 20;
-        elseif  ($adx >= 22) $score += 14;
+        elseif  ($adx >= 28) $score += 23;
+        elseif  ($adx >= 22) $score += 18;
         else                 $score += 5;
 
-        // 3. Momentum 5 nến (20 pts)
+        // 3. Momentum 5 nến (22 pts) — tính theo 4 nến thuận chiều = max
         $bullCount = count(array_filter($last5, fn($c) => ($c['close'] ?? 0) > ($c['open'] ?? 0)));
         $bearCount = 5 - $bullCount;
         $momCount  = $isLong ? $bullCount : $bearCount;
-        $score += (int) round($momCount / 5 * 20);
+        $score += (int) round($momCount / 4 * 22);
 
-        // 4. OB gần entry (15 pts) — nới distance check 1.5%→3%, HIGH OB 8→12
+        // 4. OB gần entry (18 pts) — nới distance check 1.5%→3%
         $entry = (float) ($signal['entry'] ?? 0);
         if ($entry > 0) {
             $nearOb = null;
@@ -1265,18 +1281,18 @@ PROMPT;
                     if ($nearOb !== 'SNIPER') $nearOb = 'HIGH';
                 }
             }
-            if ($nearOb === 'SNIPER')    $score += 15;
-            elseif ($nearOb === 'HIGH')  $score += 12;
+            if ($nearOb === 'SNIPER')    $score += 18;
+            elseif ($nearOb === 'HIGH')  $score += 15;
         }
 
-        // 5. EMA200 alignment (10 pts)
+        // 5. EMA200 alignment (12 pts)
         if ($ema200 > 0) {
-            if ($isLong  && $lastClose > $ema200) $score += 10;
-            if (!$isLong && $lastClose < $ema200) $score += 10;
+            if ($isLong  && $lastClose > $ema200) $score += 12;
+            if (!$isLong && $lastClose < $ema200) $score += 12;
         }
 
-        // 6. BOS confirmation (5 pts)
-        if (!empty($structure['bos'])) $score += 5;
+        // 6. BOS confirmation (8 pts)
+        if (!empty($structure['bos'])) $score += 8;
 
         return min(100, $score);
     }

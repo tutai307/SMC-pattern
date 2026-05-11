@@ -265,47 +265,39 @@
                             <span class="{{ $badgeColor }} text-[10px] px-2 py-0.5 rounded-full uppercase font-bold" title="Điểm confluence (không phải winrate lịch sử)" style="margin-right:{{ $aiScore ? '44px' : '0' }}">{{ $analysis['signal']['winrate'] }}% Confluence</span>
                         </div>
                         @php
-                            $capital = request('capital', 0);
+                            $capital = (float) request('capital', 0);
                             $margin = 0;
                             $leverage = 0;
-                            $volume = 0;
+                            $volumeContracts = 0;
                             $rrRatio = 0;
                             $liqPrice = 0;
                             $riskAmount = 0;
                             $slTooTight = false;
+                            $localScore = (int) ($analysis['signal']['local_score'] ?? 0);
+                            $riskPct = $localScore >= 85 ? 8.0 : 2.0;
+                            $baseAsset = preg_replace('/USDT$|BUSD$|USD$/', '', $analysis['signal']['symbol'] ?? request('symbol', ''));
 
                             if ($capital > 0 && isset($analysis['signal']['entry'], $analysis['signal']['sl'], $analysis['signal']['tp'])) {
-                                $entry = $analysis['signal']['entry'];
-                                $sl    = $analysis['signal']['sl'];
-                                $tp    = $analysis['signal']['tp'];
+                                $entry = (float) $analysis['signal']['entry'];
+                                $sl    = (float) $analysis['signal']['sl'];
+                                $tp    = (float) $analysis['signal']['tp'];
                                 $isLong = ($analysis['signal']['type'] === 'MUA' || $analysis['signal']['type'] === 'LONG');
 
-                                $slPercent = abs($entry - $sl) / $entry;
-                                $tpPercent = abs($tp - $entry) / $entry;
+                                $slPercent = $entry > 0 ? abs($entry - $sl) / $entry : 0;
+                                $tpPercent = $entry > 0 ? abs($tp - $entry) / $entry : 0;
 
                                 if ($slPercent > 0) {
-                                    // Cảnh báo nếu SL quá chật (< 0.8%) — dễ bị quét bởi noise
                                     $slTooTight = $slPercent < 0.008;
 
-                                    // Leverage an toàn: giữ khoảng cách liquidation = 2× SL distance
-                                    // Công thức: liq_distance ≈ 1/leverage → cần 1/L ≥ 2×SL%
-                                    // → leverage ≤ 1/(2×SL%), cap cứng tại 20x
                                     $safeLeverage = floor(1 / ($slPercent * 2));
                                     $leverage = max(1, min(20, $safeLeverage));
 
-                                    // Rủi ro tối đa = 2% vốn
-                                    $riskAmount = $capital * 0.02;
+                                    $riskAmount = $capital * $riskPct / 100;
+                                    $notional = $riskAmount / $slPercent;
+                                    $margin = $notional / $leverage;
+                                    $volumeContracts = $entry > 0 ? $notional / $entry : 0;
+                                    $rrRatio = round($tpPercent / $slPercent, 2);
 
-                                    // Khối lượng notional dựa trên rủi ro thực
-                                    $volume = $riskAmount / $slPercent;
-
-                                    // Margin cần nạp = notional / leverage
-                                    $margin = $volume / $leverage;
-
-                                    // R:R ratio
-                                    $rrRatio = $slPercent > 0 ? round($tpPercent / $slPercent, 2) : 0;
-
-                                    // Giá thanh lý ước tính (isolated margin, bỏ qua fee ~0.5%)
                                     $liqBuffer = 1 / $leverage;
                                     $liqPrice = $isLong
                                         ? $entry * (1 - $liqBuffer * 0.9)
@@ -313,17 +305,17 @@
                                 }
                             }
 
-                            // Màu đòn bẩy
-                            $levColor = $leverage <= 10 ? 'text-green-400' : ($leverage <= 15 ? 'text-amber-400' : 'text-red-400');
-                            // Màu R:R
-                            $rrColor  = $rrRatio >= 2 ? 'text-green-400' : ($rrRatio >= 1.5 ? 'text-amber-400' : 'text-red-400');
+                            $levColor  = $leverage <= 10 ? 'text-green-400' : ($leverage <= 15 ? 'text-amber-400' : 'text-red-400');
+                            $rrColor   = $rrRatio >= 2 ? 'text-green-400' : ($rrRatio >= 1.5 ? 'text-amber-400' : 'text-red-400');
+                            $riskColor = $riskPct >= 8 ? 'text-amber-400' : 'text-slate-400';
                         @endphp
+                        @if($capital <= 0)
                         <div class="space-y-2 text-sm mb-3">
                             <div class="flex justify-between"><span class="text-slate-500">Điểm vào</span> <span class="font-mono text-white">${{ number_format($analysis['signal']['entry'], 4) }}</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Chốt lời</span> <span class="font-mono text-green-400">${{ number_format($analysis['signal']['tp'], 4) }}</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Cắt lỗ</span> <span class="font-mono text-red-400">${{ number_format($analysis['signal']['sl'], 4) }}</span></div>
                         </div>
-
+                        @endif
                         @if($capital > 0)
                         @if($slTooTight)
                         <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-2 mb-2 text-[10px] text-red-400">
@@ -331,9 +323,25 @@
                         </div>
                         @endif
                         <div class="bg-black/20 border border-white/5 rounded-lg p-3 text-sm space-y-2 mb-2">
-                            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
-                                <span>Quản lý vốn (Risk 2%)</span>
-                                <span>Vốn: <span class="text-white">${{ number_format($capital, 2) }}</span></span>
+                            <div class="flex justify-between text-[11px] mb-1">
+                                <span class="{{ $riskColor }} font-bold">Risk {{ $riskPct }}%{{ $riskPct >= 8 ? ' ★ HIGH' : '' }}</span>
+                                <span class="text-slate-400">Vốn: <span class="text-white">${{ number_format($capital, 2) }}</span></span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Điểm vào</span>
+                                <span class="font-mono text-white">${{ number_format($analysis['signal']['entry'], 4) }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Chốt lời</span>
+                                <span class="font-mono text-green-400">${{ number_format($analysis['signal']['tp'], 4) }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">Cắt lỗ</span>
+                                <span class="font-mono text-red-400">${{ number_format($analysis['signal']['sl'], 4) }}</span>
+                            </div>
+                            <div class="flex justify-between items-center border-t border-white/5 pt-2">
+                                <span class="text-slate-500">Khối lượng</span>
+                                <span class="font-mono text-white font-bold">{{ number_format($volumeContracts, 4) }} {{ $baseAsset }}</span>
                             </div>
                             <div class="flex justify-between items-center">
                                 <span class="text-slate-500">Ký quỹ cần nạp</span>
@@ -344,16 +352,12 @@
                                 <span class="font-mono {{ $levColor }} font-bold">{{ $leverage }}x</span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-slate-500">Khối lượng lệnh</span>
-                                <span class="font-mono text-white">${{ number_format($volume, 2) }}</span>
-                            </div>
-                            <div class="border-t border-white/5 pt-2 flex justify-between items-center">
-                                <span class="text-slate-500">Tỉ lệ R:R</span>
-                                <span class="font-mono {{ $rrColor }} font-bold">1 : {{ $rrRatio }}</span>
+                                <span class="text-slate-500">Lỗ tối đa</span>
+                                <span class="font-mono text-red-400">-${{ number_format($riskAmount, 2) }}</span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-slate-500">Lỗ tối đa</span>
-                                <span class="font-mono text-red-400">-${{ number_format($riskAmount, 2) }} (2% vốn)</span>
+                                <span class="text-slate-500">Tỉ lệ R:R</span>
+                                <span class="font-mono {{ $rrColor }} font-bold">1 : {{ $rrRatio }}</span>
                             </div>
                             <div class="flex justify-between items-center text-[10px]">
                                 <span class="text-slate-500">Giá thanh lý (~)</span>

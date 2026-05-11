@@ -295,7 +295,7 @@ class BacktestPortfolioCommand extends Command
             $pLosses = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'LOSS'));
             $pSE     = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
             $pFilled = count(array_filter($pairSignals, fn($s) => $s['filled']));
-            $pClosed = $pWins + $pLosses + $pSE;
+            $pClosed = $pWins + $pLosses;
             $pWR     = $pClosed > 0 ? round($pWins / $pClosed * 100, 1) : 0.0;
             $pPnl    = array_sum(array_column($pairSignals, 'exit_pnl'));
 
@@ -353,7 +353,7 @@ class BacktestPortfolioCommand extends Command
         $totalWins   = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'WIN'));
         $totalLosses = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'LOSS'));
         $totalSE     = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
-        $totalClosed = $totalWins + $totalLosses + $totalSE;
+        $totalClosed = $totalWins + $totalLosses;
         $portfolioWR = $totalClosed > 0 ? round($totalWins / $totalClosed * 100, 1) : 0.0;
         $totalPnl    = round($currentCapital - $capital, 2);
         $pnlPct      = $capital > 0 ? round($totalPnl / $capital * 100, 1) : 0.0;

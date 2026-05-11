@@ -71,15 +71,18 @@ class DashboardController extends Controller
                     'status'       => 'PENDING',
                 ]);
 
-                // Tính position sizing nếu có capital
+                // Tính position sizing nếu có capital — dùng local_score để quyết định risk %
                 $positionSize = null;
                 if ($signal->capital > 0) {
+                    $localScore  = (int) ($analysis['signal']['local_score'] ?? 0);
+                    $riskPct     = $localScore >= 85 ? 8.0 : 2.0;
                     $positionSize = PriceActionService::calculatePositionSize(
                         balance:    (float) $signal->capital,
-                        riskPercent: 2.0,
+                        riskPercent: $riskPct,
                         entry:      (float) $signal->entry_price,
                         stopLoss:   (float) $signal->sl_price,
                     );
+                    $positionSize['risk_pct'] = $riskPct;
                 }
 
                 // Gửi chi tiết lệnh qua Telegram ngay khi đề xuất

@@ -60,6 +60,7 @@ class MonitorSignalsCommand extends Command
         // Re-fetch vì autoDetectFill có thể đã update filled_at
         $stillUnfilled = TradingSignal::where('status', 'PENDING')->whereNull('filled_at')->get();
         foreach ($stillUnfilled as $signal) {
+            $this->checkUnfilledExpiry($signal);
             $this->checkUnfilledStructure($signal);
         }
 
@@ -75,6 +76,20 @@ class MonitorSignalsCommand extends Command
         foreach ($pending as $signal) {
             $this->checkSignal($signal);
         }
+    }
+
+    private function checkUnfilledExpiry(TradingSignal $signal): void
+    {
+        if ($signal->notified_expiry) return;
+
+        $expiryHours = 8;
+        if ($signal->created_at->diffInHours(now()) < $expiryHours) return;
+
+        $signal->update(['notified_expiry' => true, 'status' => 'CANCELLED']);
+        broadcast(new SignalStatusChanged($signal->fresh()));
+        $currentPrice = (float) $this->binanceService->getPrice($signal->symbol);
+        $this->telegramService->sendUnfilledExpiry($signal, $currentPrice, $expiryHours);
+        $this->info("  [{$signal->symbol}] ⏰ Lệnh #{$signal->id} chưa khớp sau {$expiryHours}h → CANCELLED");
     }
 
     private function checkUnfilledStructure(TradingSignal $signal): void

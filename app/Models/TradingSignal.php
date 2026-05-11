@@ -23,6 +23,7 @@ class TradingSignal extends Model
         'notified_sl',
         'capital',
         'filled_at',
+        'notified_expiry',
     ];
 
     protected $casts = [
@@ -31,6 +32,7 @@ class TradingSignal extends Model
         'notified_structure_break' => 'boolean',
         'notified_tp'              => 'boolean',
         'notified_sl'              => 'boolean',
+        'notified_expiry'          => 'boolean',
         'capital'                  => 'decimal:2',
         'filled_at'                => 'datetime',
     ];

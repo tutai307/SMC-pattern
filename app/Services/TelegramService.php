@@ -151,6 +151,28 @@ class TelegramService
         $this->send($text);
     }
 
+    public function sendUnfilledExpiry(TradingSignal $signal, float $currentPrice, int $hours): void
+    {
+        $dir = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        $priceDiff = $signal->entry_price > 0
+            ? round(abs($currentPrice - $signal->entry_price) / $signal->entry_price * 100, 2)
+            : 0;
+
+        $text = "⏰ <b>LỆNH CHƯA KHỚP QUÁ {$hours}H — ĐỀ XUẤT HUỶ</b>\n\n"
+              . "📊 <b>{$signal->symbol}</b> | {$signal->timeframe} | {$dir}\n"
+              . "━━━━━━━━━━━━━━━\n"
+              . "📌 Entry: <code>{$signal->entry_price}</code>\n"
+              . "🎯 TP: <code>{$signal->tp_price}</code>\n"
+              . "🛑 SL: <code>{$signal->sl_price}</code>\n"
+              . "💰 Giá hiện tại: <code>{$currentPrice}</code> ({$priceDiff}% cách entry)\n"
+              . "━━━━━━━━━━━━━━━\n"
+              . "🆔 Lệnh #{$signal->id} tạo lúc <b>{$signal->created_at->format('H:i d/m')}</b>\n\n"
+              . "⚡ <b>Đã quá {$hours}h chưa khớp — đã tự động huỷ lệnh.</b>\n"
+              . "Dùng /signal {$signal->id} để xem chi tiết.";
+
+        $this->send($text);
+    }
+
     public function sendPreEntryStructureBreak(TradingSignal $signal, float $currentPrice, string $newTrend): void
     {
         $dir = $signal->type === 'LONG' ? '📈 LONG' : '📉 SHORT';
