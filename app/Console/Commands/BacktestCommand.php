@@ -33,7 +33,8 @@ class BacktestCommand extends Command
         {--ai-high=75 : AI score threshold for high risk (default 75)}
         {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}
         {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}
-        {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}';
+        {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}
+        {--vision : Tải dữ liệu từ data.binance.vision thay Binance API (cho backtest dài ngày, cache local)}';
 
     protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
 
@@ -60,6 +61,7 @@ class BacktestCommand extends Command
         $riskHigh      = (float) $this->option('risk-high');
         $overrideTp    = (bool)  $this->option('override-tp');
         $localScore    = (bool)  $this->option('local-score');
+        $useVision     = (bool)  $this->option('vision');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -88,18 +90,32 @@ class BacktestCommand extends Command
 
         $weeklyWarmup = 80 * 7 * 86_400_000; // 80 tuần trước test period (đủ cho EMA50)
 
-        $this->line("Fetching {$symbol} {$tf} klines from Binance...");
-        $klines1h      = $this->fetchKlines($symbol, $tf,   $fetchFrom, $toTs);
-        $klinesHTF     = $this->fetchKlines($symbol, $htf,  $fetchFrom - $this->tfToMs($htf) * 100, $toTs);
-        $klinesDaily   = $this->fetchKlines($symbol, '1d',  $fromTs - $dailyWarmup, $toTs);
-        $klinesWeekly  = $this->fetchKlines($symbol, '1w',  $fromTs - $weeklyWarmup, $toTs);
+        if ($useVision) {
+            $this->info("Fetching {$symbol} {$tf} klines from data.binance.vision...");
+            $klines1h   = $binance->getVisionKlines($symbol, $tf,  $fromLabel, $toLabel);
+            $klinesHTF  = $binance->getVisionKlines($symbol, $htf, $fromLabel, $toLabel);
+            $klinesDaily  = $binance->getVisionKlines($symbol, '1d', $fromLabel, $toLabel);
+            $klinesWeekly = $binance->getVisionKlines($symbol, '1w', $fromLabel, $toLabel);
+            // Ensure proper numeric keys
+            $klines1h     = array_values($klines1h);
+            $klinesHTF    = array_values($klinesHTF);
+            $klinesDaily  = array_values($klinesDaily);
+            $klinesWeekly = array_values($klinesWeekly);
+            $this->info("Fetched " . count($klines1h) . " {$tf} candles, " . count($klinesHTF) . " {$htf} candles, " . count($klinesDaily) . " 1d candles, " . count($klinesWeekly) . " 1w candles.");
+        } else {
+            $this->line("Fetching {$symbol} {$tf} klines from Binance...");
+            $klines1h      = $this->fetchKlines($symbol, $tf,   $fetchFrom, $toTs);
+            $klinesHTF     = $this->fetchKlines($symbol, $htf,  $fetchFrom - $this->tfToMs($htf) * 100, $toTs);
+            $klinesDaily   = $this->fetchKlines($symbol, '1d',  $fromTs - $dailyWarmup, $toTs);
+            $klinesWeekly  = $this->fetchKlines($symbol, '1w',  $fromTs - $weeklyWarmup, $toTs);
+
+            $this->line("Fetched " . count($klines1h) . " {$tf} candles, " . count($klinesHTF) . " {$htf} candles, " . count($klinesDaily) . " 1d candles, " . count($klinesWeekly) . " 1w candles.");
+        }
 
         if (count($klines1h) < 210) {
             $this->error("Not enough klines fetched: " . count($klines1h));
             return 1;
         }
-
-        $this->line("Fetched " . count($klines1h) . " {$tf} candles, " . count($klinesHTF) . " {$htf} candles, " . count($klinesDaily) . " 1d candles, " . count($klinesWeekly) . " 1w candles.");
 
         // ── 2. Find April start index ────────────────────────────────────
         $startIdx = 0;

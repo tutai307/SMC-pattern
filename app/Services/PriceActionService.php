@@ -1214,9 +1214,9 @@ PROMPT;
      *
      * Breakdown:
      *   HTF alignment   25 pts
-     *   ADX strength    25 pts
+     *   ADX strength    25 pts (mid: 14 pts at ≥22)
      *   Momentum 5c     20 pts
-     *   SNIPER OB       15 pts
+     *   OB near entry   15 pts (HIGH OB: 12 pts, distance: 3%)
      *   EMA200 align    10 pts
      *   BOS confirm      5 pts
      */
@@ -1228,25 +1228,24 @@ PROMPT;
         array $indicators = [],
         array $orderBlocks = []
     ): int {
-        $score    = 0;
-        $isLong   = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
-        $last5    = array_slice($recentCandles, -5);
-        $lastClose = end($recentCandles)['close'] ?? $signal['entry'];
-        $adx      = (float) ($indicators['adx']    ?? 0);
-        $ema200   = (float) ($indicators['ema200'] ?? 0);
-        $htfTrend = $htfStructure['trend'] ?? 'không rõ';
-        $ltfTrend = $structure['trend']    ?? 'không rõ';
+        $score     = 0;
+        $isLong    = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
+        $last5     = array_slice($recentCandles, -5);
+        $lastClose = end($recentCandles)['close'] ?? ($signal['entry'] ?? 0);
+        $adx       = (float) ($indicators['adx']    ?? 0);
+        $ema200    = (float) ($indicators['ema200'] ?? 0);
+        $htfTrend  = $htfStructure['trend'] ?? 'không rõ';
 
         // 1. HTF alignment (25 pts)
-        if ($isLong  && $htfTrend === 'TĂNG GIÁ') $score += 25;
-        elseif (!$isLong && $htfTrend === 'GIẢM GIÁ') $score += 25;
-        elseif ($htfTrend === 'ĐI NGANG')              $score += 10;
+        if     ($isLong  && $htfTrend === 'TĂNG GIÁ')  $score += 25;
+        elseif (!$isLong && $htfTrend === 'GIẢM GIÁ')  $score += 25;
+        elseif ($htfTrend === 'ĐI NGANG')               $score += 12;
 
-        // 2. ADX strength (25 pts)
+        // 2. ADX strength (25 pts) — tăng mid-range để phù hợp XAGUSDT
         if      ($adx >= 35) $score += 25;
-        elseif  ($adx >= 28) $score += 18;
-        elseif  ($adx >= 22) $score += 10;
-        else                 $score += 3;
+        elseif  ($adx >= 28) $score += 20;
+        elseif  ($adx >= 22) $score += 14;
+        else                 $score += 5;
 
         // 3. Momentum 5 nến (20 pts)
         $bullCount = count(array_filter($last5, fn($c) => ($c['close'] ?? 0) > ($c['open'] ?? 0)));
@@ -1254,21 +1253,20 @@ PROMPT;
         $momCount  = $isLong ? $bullCount : $bearCount;
         $score += (int) round($momCount / 5 * 20);
 
-        // 4. SNIPER OB gần entry (15 pts)
+        // 4. OB gần entry (15 pts) — nới distance check 1.5%→3%, HIGH OB 8→12
         $entry = (float) ($signal['entry'] ?? 0);
         if ($entry > 0) {
             $nearOb = null;
             foreach ($orderBlocks as $ob) {
                 $obPrice = (float) ($ob['price'] ?? 0);
                 if ($obPrice <= 0) continue;
-                $dist = abs($obPrice - $entry) / $entry;
-                if ($dist <= 0.015) {
+                if (abs($obPrice - $entry) / $entry <= 0.03) {
                     if (($ob['strength'] ?? '') === 'SNIPER') { $nearOb = 'SNIPER'; break; }
                     if ($nearOb !== 'SNIPER') $nearOb = 'HIGH';
                 }
             }
-            if ($nearOb === 'SNIPER') $score += 15;
-            elseif ($nearOb === 'HIGH') $score += 8;
+            if ($nearOb === 'SNIPER')    $score += 15;
+            elseif ($nearOb === 'HIGH')  $score += 12;
         }
 
         // 5. EMA200 alignment (10 pts)

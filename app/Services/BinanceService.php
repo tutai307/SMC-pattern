@@ -139,4 +139,75 @@ class BinanceService
             }
         });
     }
+
+    /**
+     * Fetch historical klines từ data.binance.vision (monthly zip files).
+     * Cache từng tháng vào storage/app/binance_vision/ để tránh download lại.
+     */
+    public function getVisionKlines(string $symbol, string $interval, string $startDate, string $endDate): array
+    {
+        $start    = \Carbon\Carbon::parse($startDate)->startOfMonth();
+        $end      = \Carbon\Carbon::parse($endDate);
+        $all      = [];
+        $current  = $start->copy();
+
+        while ($current->lte($end)) {
+            $month   = $current->format('Y-m');
+            $batch   = $this->fetchVisionMonth($symbol, $interval, $month);
+            $all     = array_merge($all, $batch);
+            $current->addMonth();
+        }
+
+        // Trim to exact requested range
+        $startMs = \Carbon\Carbon::parse($startDate)->startOfDay()->timestamp * 1000;
+        $endMs   = \Carbon\Carbon::parse($endDate)->endOfDay()->timestamp * 1000;
+        return array_values(array_filter($all, fn($k) => (int)$k[0] >= $startMs && (int)$k[0] <= $endMs));
+    }
+
+    private function fetchVisionMonth(string $symbol, string $interval, string $yearMonth): array
+    {
+        $dir  = storage_path("app/binance_vision/{$symbol}/{$interval}");
+        $file = "{$dir}/{$yearMonth}.json";
+
+        if (file_exists($file)) {
+            return json_decode(file_get_contents($file), true) ?: [];
+        }
+
+        $url = "https://data.binance.vision/data/futures/um/monthly/klines/{$symbol}/{$interval}/{$symbol}-{$interval}-{$yearMonth}.zip";
+
+        try {
+            $response = Http::timeout(60)->get($url);
+            if (!$response->successful()) {
+                Log::warning("BinanceVision 404: {$url}");
+                return [];
+            }
+
+            $tmpZip = sys_get_temp_dir() . "/bv_{$symbol}_{$interval}_{$yearMonth}.zip";
+            file_put_contents($tmpZip, $response->body());
+
+            $zip = new \ZipArchive();
+            if ($zip->open($tmpZip) !== true) { unlink($tmpZip); return []; }
+            $csv = $zip->getFromIndex(0);
+            $zip->close();
+            unlink($tmpZip);
+
+            $klines = [];
+            foreach (explode("\n", trim($csv)) as $line) {
+                if (empty($line)) continue;
+                $cols = str_getcsv($line);
+                // Skip header row if present
+                if (!is_numeric($cols[0] ?? '')) continue;
+                if (count($cols) < 6) continue;
+                $klines[] = $cols;
+            }
+
+            if (!is_dir($dir)) mkdir($dir, 0755, true);
+            file_put_contents($file, json_encode($klines));
+
+            return $klines;
+        } catch (\Exception $e) {
+            Log::warning("BinanceVision error {$symbol}/{$interval}/{$yearMonth}: " . $e->getMessage());
+            return [];
+        }
+    }
 }
