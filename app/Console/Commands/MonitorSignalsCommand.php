@@ -86,9 +86,11 @@ class MonitorSignalsCommand extends Command
 
         $structure       = $this->priceActionService->getStructure($recentKlines);
         $isLong          = $signal->type === 'LONG';
+        // Bearish CHoCH (trend TĂNG → price dưới lastLow) → cancel LONG
+        // Bullish CHoCH (trend GIẢM → price trên lastHigh) → cancel SHORT
         $structureBroken = $isLong
-            ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
-            : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+            ? ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ')
+            : ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ');
 
         if (!$structureBroken) return;
 
@@ -182,8 +184,8 @@ class MonitorSignalsCommand extends Command
             $recentKlines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
             $structure       = $this->priceActionService->getStructure($recentKlines);
             $structureBroken = $isLong
-                ? ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ')
-                : ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ');
+                ? ($structure['choch'] && $structure['trend'] === 'TĂNG GIÁ')
+                : ($structure['choch'] && $structure['trend'] === 'GIẢM GIÁ');
 
             if ($structureBroken) {
                 $signal->update(['notified_structure_break' => true, 'status' => 'CANCELLED']);
