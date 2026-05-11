@@ -20,6 +20,9 @@ class ScanSignalsCommand extends Command
     private int   $lastMonitorAt  = 0;
     private int   $lastAiReviewAt = 0;
 
+    // Struct-exit per-pair: chỉ cancel khi CHoCH ngược chiều (backtest-validated)
+    private array $structExitSymbols = ['SOLUSDT'];
+
     public function __construct(
         private BinanceService     $binanceService,
         private PriceActionService $priceActionService,
@@ -153,6 +156,7 @@ class ScanSignalsCommand extends Command
     private function checkUnfilledStructure(TradingSignal $signal): void
     {
         if ($signal->notified_structure_break) return;
+        if (!in_array($signal->symbol, $this->structExitSymbols)) return;
 
         $recentKlines = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
         if (empty($recentKlines)) return;
@@ -213,8 +217,8 @@ class ScanSignalsCommand extends Command
             }
         }
 
-        // Cấu trúc phá vỡ
-        if (!$signal->notified_structure_break) {
+        // Cấu trúc phá vỡ (chỉ với symbols đã bật struct-exit)
+        if (!$signal->notified_structure_break && in_array($signal->symbol, $this->structExitSymbols)) {
             $recentKlines    = $this->binanceService->getKlines($signal->symbol, $signal->timeframe, 100);
             $structure       = $this->priceActionService->getStructure($recentKlines);
             $structureBroken = $isLong
