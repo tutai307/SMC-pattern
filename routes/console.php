@@ -9,3 +9,6 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 // signals:monitor chạy như daemon qua supervisord (không dùng scheduler)
+
+// Gửi báo cáo xu hướng mỗi giờ cho XAGUSDT, XAUUSDT, BTCUSDT
+Schedule::command('trend:hourly')->hourly();

@@ -22,7 +22,8 @@ class BacktestPortfolioCommand extends Command
         {--rr=2.5 : Risk:Reward target multiplier}
         {--adx=25 : Minimum ADX threshold}
         {--vision : Use Binance Vision data}
-        {--detail : Print each trade entry/tp/sl/outcome}';
+        {--detail : Print each trade entry/tp/sl/outcome}
+        {--partial-tp : Đóng 50% tại 1R, dịch SL lên BE, để 50% chạy đến TP}';
 
     protected $description = 'Portfolio backtest — multiple symbols sharing one capital pool, trades merged by time';
 
@@ -63,11 +64,9 @@ class BacktestPortfolioCommand extends Command
         $service->setThresholds($adxThresh, $minConf);
 
         // BTC daily klines — dùng làm market sentiment proxy (EMA20 daily)
-        $btcDaily = [];
-        if (!$useVision) {
-            $dailyWarmupBtc = 60 * 86_400_000;
-            $btcDaily = $this->fetchKlines('BTCUSDT', '1d', $fromTs - $dailyWarmupBtc, $toTs);
-        }
+        // Fetch từ Binance API kể cả khi --vision (BTC daily nhẹ, API giữ lâu)
+        $dailyWarmupBtc = 60 * 86_400_000;
+        $btcDaily = $this->fetchKlines('BTCUSDT', '1d', $fromTs - $dailyWarmupBtc, $toTs);
 
         $allSignals  = [];
         $perPairStat = [];
@@ -177,39 +176,70 @@ class BacktestPortfolioCommand extends Command
                     }
 
                     // TP / SL
+                    $usePartialTp = $this->option('partial-tp');
                     if ($isLong) {
+                        // Partial TP1 hit (1R) — chỉ check khi chưa hit
+                        if ($usePartialTp && !$activeSignal['partial_tp_hit'] && $high >= $activeSignal['tp1']) {
+                            $activeSignal['partial_tp_hit'] = true;
+                            $activeSignal['partial_pnl']    = round($activeSignal['trade_risk'] * 0.5, 2);
+                            $activeSignal['sl']             = $activeSignal['entry']; // dịch SL lên BE
+                        }
+                        // SL hit
                         if ($low <= $activeSignal['sl']) {
-                            $activeSignal['outcome']    = 'LOSS';
+                            $exitPnl = $usePartialTp && $activeSignal['partial_tp_hit']
+                                ? $activeSignal['partial_pnl']  // BE exit: chỉ giữ partial profit
+                                : -$activeSignal['trade_risk'];
+                            $outcome = $usePartialTp && $activeSignal['partial_tp_hit'] ? 'PARTIAL_WIN' : 'LOSS';
+                            $activeSignal['outcome']    = $outcome;
                             $activeSignal['close_time'] = $ts;
-                            $activeSignal['exit_pnl']   = -$activeSignal['trade_risk'];
+                            $activeSignal['exit_pnl']   = $exitPnl;
                             $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 24;
                             $pairSignals[]  = $activeSignal;
                             $activeSignal   = null;
                             continue;
                         }
+                        // Full TP hit
                         if ($high >= $activeSignal['tp']) {
+                            $exitPnl = $usePartialTp
+                                ? $activeSignal['partial_pnl'] + round($activeSignal['trade_risk'] * $rrTarget * 0.5, 2)
+                                : round($activeSignal['trade_risk'] * $rrTarget, 2);
                             $activeSignal['outcome']    = 'WIN';
                             $activeSignal['close_time'] = $ts;
-                            $activeSignal['exit_pnl']   = round($activeSignal['trade_risk'] * $rrTarget, 2);
+                            $activeSignal['exit_pnl']   = $exitPnl;
                             $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 8;
                             $pairSignals[]  = $activeSignal;
                             $activeSignal   = null;
                             continue;
                         }
                     } else {
+                        // Partial TP1 hit (1R)
+                        if ($usePartialTp && !$activeSignal['partial_tp_hit'] && $low <= $activeSignal['tp1']) {
+                            $activeSignal['partial_tp_hit'] = true;
+                            $activeSignal['partial_pnl']    = round($activeSignal['trade_risk'] * 0.5, 2);
+                            $activeSignal['sl']             = $activeSignal['entry']; // dịch SL lên BE
+                        }
+                        // SL hit
                         if ($high >= $activeSignal['sl']) {
-                            $activeSignal['outcome']    = 'LOSS';
+                            $exitPnl = $usePartialTp && $activeSignal['partial_tp_hit']
+                                ? $activeSignal['partial_pnl']
+                                : -$activeSignal['trade_risk'];
+                            $outcome = $usePartialTp && $activeSignal['partial_tp_hit'] ? 'PARTIAL_WIN' : 'LOSS';
+                            $activeSignal['outcome']    = $outcome;
                             $activeSignal['close_time'] = $ts;
-                            $activeSignal['exit_pnl']   = -$activeSignal['trade_risk'];
+                            $activeSignal['exit_pnl']   = $exitPnl;
                             $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 24;
                             $pairSignals[]  = $activeSignal;
                             $activeSignal   = null;
                             continue;
                         }
+                        // Full TP hit
                         if ($low <= $activeSignal['tp']) {
+                            $exitPnl = $usePartialTp
+                                ? $activeSignal['partial_pnl'] + round($activeSignal['trade_risk'] * $rrTarget * 0.5, 2)
+                                : round($activeSignal['trade_risk'] * $rrTarget, 2);
                             $activeSignal['outcome']    = 'WIN';
                             $activeSignal['close_time'] = $ts;
-                            $activeSignal['exit_pnl']   = round($activeSignal['trade_risk'] * $rrTarget, 2);
+                            $activeSignal['exit_pnl']   = $exitPnl;
                             $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 8;
                             $pairSignals[]  = $activeSignal;
                             $activeSignal   = null;
@@ -280,23 +310,32 @@ class BacktestPortfolioCommand extends Command
                 }
                 if ($cooledDown) continue;
 
+                $isLongEntry = str_contains(strtolower($sig['type'] ?? ''), 'mua');
+                $tp1 = $isLongEntry
+                    ? round($entry + $slDist * 1.0, 8)
+                    : round($entry - $slDist * 1.0, 8);
+
                 $activeSignal = [
-                    'symbol'        => $symbol,
-                    'type'          => $sig['type'],
-                    'signal_time'   => $ts,
-                    'signal_candle' => $i,
-                    'fill_time'     => null,
-                    'fill_candle'   => null,
-                    'close_time'    => null,
-                    'entry'         => $entry,
-                    'tp'            => $tp,
-                    'sl'            => $sl,
-                    'rr'            => round($rr, 2),
-                    'trade_risk'    => $tradeRisk,
-                    'ai_score'      => $localSc,
-                    'filled'        => false,
-                    'outcome'       => 'PENDING',
-                    'exit_pnl'      => 0.0,
+                    'symbol'          => $symbol,
+                    'type'            => $sig['type'],
+                    'signal_time'     => $ts,
+                    'signal_candle'   => $i,
+                    'fill_time'       => null,
+                    'fill_candle'     => null,
+                    'close_time'      => null,
+                    'entry'           => $entry,
+                    'tp'              => $tp,
+                    'tp1'             => $tp1,
+                    'sl'              => $sl,
+                    'sl_original'     => $sl,
+                    'rr'              => round($rr, 2),
+                    'trade_risk'      => $tradeRisk,
+                    'ai_score'        => $localSc,
+                    'filled'          => false,
+                    'outcome'         => 'PENDING',
+                    'exit_pnl'        => 0.0,
+                    'partial_tp_hit'  => false,
+                    'partial_pnl'     => 0.0,
                 ];
             }
 
@@ -308,12 +347,13 @@ class BacktestPortfolioCommand extends Command
             }
 
             // Collect per-pair stats
-            $pWins   = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'WIN'));
-            $pLosses = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'LOSS'));
-            $pSE     = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
-            $pFilled = count(array_filter($pairSignals, fn($s) => $s['filled']));
-            $pClosed = $pWins + $pLosses;
-            $pWR     = $pClosed > 0 ? round($pWins / $pClosed * 100, 1) : 0.0;
+            $pWins      = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'WIN'));
+            $pLosses    = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'LOSS'));
+            $pPartial   = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'PARTIAL_WIN'));
+            $pSE        = count(array_filter($pairSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
+            $pFilled    = count(array_filter($pairSignals, fn($s) => $s['filled']));
+            $pClosed    = $pWins + $pLosses + $pPartial;
+            $pWR        = $pClosed > 0 ? round(($pWins + $pPartial) / $pClosed * 100, 1) : 0.0;
             $pPnl    = array_sum(array_column($pairSignals, 'exit_pnl'));
 
             $perPairStat[$symbol] = [
@@ -321,6 +361,7 @@ class BacktestPortfolioCommand extends Command
                 'filled'  => $pFilled,
                 'wins'    => $pWins,
                 'losses'  => $pLosses,
+                'partial' => $pPartial,
                 'se'      => $pSE,
                 'wr'      => $pWR,
                 'pnl'     => $pPnl,
@@ -366,12 +407,13 @@ class BacktestPortfolioCommand extends Command
         }
 
         // ── Output ───────────────────────────────────────────────────────
-        $totalFilled = count(array_filter($allSignals, fn($s) => $s['filled']));
-        $totalWins   = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'WIN'));
-        $totalLosses = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'LOSS'));
-        $totalSE     = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
-        $totalClosed = $totalWins + $totalLosses;
-        $portfolioWR = $totalClosed > 0 ? round($totalWins / $totalClosed * 100, 1) : 0.0;
+        $totalFilled  = count(array_filter($allSignals, fn($s) => $s['filled']));
+        $totalWins    = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'WIN'));
+        $totalLosses  = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'LOSS'));
+        $totalPartial = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'PARTIAL_WIN'));
+        $totalSE      = count(array_filter($allSignals, fn($s) => $s['outcome'] === 'STRUCT_EXIT'));
+        $totalClosed  = $totalWins + $totalLosses + $totalPartial;
+        $portfolioWR  = $totalClosed > 0 ? round(($totalWins + $totalPartial) / $totalClosed * 100, 1) : 0.0;
         $totalPnl    = round($currentCapital - $capital, 2);
         $pnlPct      = $capital > 0 ? round($totalPnl / $capital * 100, 1) : 0.0;
 
@@ -389,23 +431,25 @@ class BacktestPortfolioCommand extends Command
             . str_pad('Signals', 9)
             . str_pad('Filled', 8)
             . str_pad('W', 5)
+            . str_pad('PW', 5)
             . str_pad('L', 5)
             . str_pad('SE', 5)
             . str_pad('WR', 8)
             . 'P&L'
         );
-        $this->line(str_repeat('─', 60));
+        $this->line(str_repeat('─', 65));
 
         foreach ($perPairStat as $sym => $stat) {
             $pnlSign  = $stat['pnl'] >= 0 ? '+' : '';
             $seNote   = $stat['struct_exit'] ? '  [struct-exit]' : '';
-            $wrColor  = $stat['wr'] >= 50 ? 'green' : 'red';
+            $wrColor  = $stat['wr'] >= 50 ? 'green' : ($stat['wr'] >= 40 ? 'yellow' : 'red');
             $pnlColor = $stat['pnl'] >= 0 ? 'green' : 'red';
             $this->line(
                 str_pad($sym, 10)
                 . str_pad($stat['signals'], 9)
                 . str_pad($stat['filled'], 8)
                 . str_pad($stat['wins'], 5)
+                . str_pad($stat['partial'] ?? 0, 5)
                 . str_pad($stat['losses'], 5)
                 . str_pad($stat['se'], 5)
                 . '<fg=' . $wrColor . '>' . str_pad($stat['wr'] . '%', 8) . '</>'
@@ -418,7 +462,7 @@ class BacktestPortfolioCommand extends Command
         $this->line('  PORTFOLIO RESULT');
         $this->line(str_repeat('─', 60));
         $this->line('  Total trades:   ' . $totalFilled);
-        $this->line('  WIN:            ' . $totalWins . '   LOSS: ' . $totalLosses . '   STRUCT_EXIT: ' . $totalSE);
+        $this->line('  WIN: ' . $totalWins . '   PARTIAL_WIN: ' . $totalPartial . '   LOSS: ' . $totalLosses . '   STRUCT_EXIT: ' . $totalSE);
 
         $wrColor  = $portfolioWR >= 50 ? 'green' : 'red';
         $this->line('  Portfolio WR:   <fg=' . $wrColor . '>' . $portfolioWR . '%</>');
@@ -459,10 +503,11 @@ class BacktestPortfolioCommand extends Command
             foreach ($allSignals as $s) {
                 if (!$s['filled']) continue;
                 $outcomeColor = match($s['outcome']) {
-                    'WIN'         => 'green',
-                    'LOSS'        => 'red',
-                    'STRUCT_EXIT' => 'yellow',
-                    default       => 'gray',
+                    'WIN'          => 'green',
+                    'PARTIAL_WIN'  => 'cyan',
+                    'LOSS'         => 'red',
+                    'STRUCT_EXIT'  => 'yellow',
+                    default        => 'gray',
                 };
                 $pnlStr = $s['exit_pnl'] >= 0 ? '+$' . number_format($s['exit_pnl'], 2) : '-$' . number_format(abs($s['exit_pnl']), 2);
                 $this->line(

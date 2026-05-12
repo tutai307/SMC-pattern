@@ -19,6 +19,7 @@ class ScanSignalsCommand extends Command
     private int   $lastScanAt     = 0;
     private int   $lastMonitorAt  = 0;
     private int   $lastAiReviewAt = 0;
+    private int   $lastTrendAt    = 0;
 
     // Struct-exit per-pair: chỉ cancel khi CHoCH ngược chiều (backtest-validated)
     private array $structExitSymbols = ['SOLUSDT'];
@@ -76,6 +77,16 @@ class ScanSignalsCommand extends Command
                     \Log::error('ScanSignals ai_review: ' . $e->getMessage());
                 }
                 $this->lastAiReviewAt = $now;
+            }
+
+            // ── Báo cáo xu hướng mỗi 1 giờ ──
+            if ($now - $this->lastTrendAt >= 3600) {
+                try {
+                    \Illuminate\Support\Facades\Artisan::call('trend:hourly');
+                } catch (\Exception $e) {
+                    $this->warn('[' . now()->format('H:i:s') . '] Trend report lỗi: ' . $e->getMessage());
+                }
+                $this->lastTrendAt = $now;
             }
 
             // ── Scan setup mới theo interval ──
