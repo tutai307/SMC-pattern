@@ -427,9 +427,9 @@ class ScanSignalsCommand extends Command
         }
 
         $htf = match ($timeframe) {
-            '1m', '5m', '15m' => '1h',
-            '1h'              => '4h',
-            default           => '1d',
+            '1m', '5m'  => '1h',
+            '15m', '1h' => '4h',
+            default     => '1d',
         };
         $klinesHTF    = $this->binanceService->getKlines($symbol, $htf,  50);
         $klinesDaily  = $this->binanceService->getKlines($symbol, '1d',  60);
@@ -438,9 +438,9 @@ class ScanSignalsCommand extends Command
             ? $this->binanceService->getKlines('BTCUSDT', '1d', 30)
             : $klinesDaily;
 
-        // Session filter OFF — backtest data cho thấy tắt session filter cho WR tốt hơn
-        // skipAI = false — AI score dùng để điều chỉnh position size: ≥85→5%, <85→2%
-        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, false, $klinesDaily, false, $klinesWeekly);
+        // ADX=15, minConfidence=75 — backtest 1/1-13/5/2026: WR 46.7%, +131% với local-score ai-risk
+        $this->priceActionService->setThresholds(15, 75);
+        $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, true, $klinesDaily, false, $klinesWeekly);
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
@@ -470,11 +470,7 @@ class ScanSignalsCommand extends Command
             }
         }
 
-        $aiScore = (int) ($signal['ai_score'] ?? 0);
-        $aiRec   = strtoupper($signal['ai_recommendation'] ?? '');
-        $aiError = $signal['ai_error'] ?? null;
-
-        // Tính LocalScore để dùng làm fallback khi AI lỗi
+        // LocalScore thay AI — backtest 15m: ADX≥15, score≥75 → WR 46.7%, +131% với ai-risk
         $localScore = $this->priceActionService->computeConfidenceScore(
             $signal,
             array_slice($this->priceActionService->formatCandlesPublic($klines), -5),
@@ -484,17 +480,13 @@ class ScanSignalsCommand extends Command
             $analysis['orderBlocks']  ?? []
         );
 
-        // AI-RISK: ≥85 → risk 8% (backtest XAGUSDT +73% / 4th), <85 → risk 2%
-        if ($aiError) {
-            // Fallback sang LocalScore khi AI không khả dụng
-            $riskPct = $localScore >= 85 ? 8 : 2;
-            $this->warn('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI lỗi ({$aiError}), LocalScore={$localScore} → Risk {$riskPct}%");
-        } else {
-            $riskPct = $aiScore >= 85 ? 8 : 2;
-            if ($aiScore > 0) {
-                $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — AI {$aiScore}/100 LocalScore={$localScore} → Risk {$riskPct}%" . ($aiRec ? " | {$aiRec}" : ''));
-            }
+        if ($localScore < 75) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — LocalScore={$localScore} < 75, skip");
+            return false;
         }
+
+        $riskPct = $localScore >= 85 ? 8 : 2;
+        $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — LocalScore={$localScore} → Risk {$riskPct}%");
 
         // Override TP → 1:2.5 R:R (backtest Jan-Apr 2026: WR 39.4%, +73% với AI-risk vs +60% ở 1:3)
         $entry  = (float) $signal['entry'];
@@ -554,8 +546,8 @@ class ScanSignalsCommand extends Command
         ], now()->addHours(8));
 
         $methodLabel = strtoupper($method);
-        $riskLabel   = $aiScore >= 85 ? "⚡ HIGH ({$riskPct}%)" : "📊 NORMAL ({$riskPct}%)";
-        $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [AI:{$aiScore} {$riskLabel}]: {$symbol} {$signal['type']} @ {$signal['entry']}");
+        $riskLabel = $localScore >= 85 ? "⚡ HIGH ({$riskPct}%)" : "📊 NORMAL ({$riskPct}%)";
+        $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [Score:{$localScore} {$riskLabel}]: {$symbol} {$signal['type']} @ {$signal['entry']}");
         return true;
     }
 }

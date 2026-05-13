@@ -297,6 +297,10 @@ class BacktestCommand extends Command
                 );
                 $sig['ai_score'] = $localSc;
                 $this->line("  → LocalScore {$localSc}/100");
+                if ($localSc < $minConfidence) {
+                    $this->line("  → LocalScore {$localSc} < {$minConfidence}, skip");
+                    continue;
+                }
             }
 
             // Per-trade risk based on AI score
