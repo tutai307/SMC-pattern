@@ -419,6 +419,60 @@ class TelegramService
         );
     }
 
+    public function sendZoneApproachAlert(
+        string $symbol, string $timeframe,
+        bool $isDemand, float $high, float $low,
+        float $price, float $distPct, string $htfTrend
+    ): void {
+        $dir      = $isDemand ? 'DEMAND 🟢' : 'SUPPLY 🔴';
+        $bias     = $isDemand ? 'LONG' : 'SHORT';
+        $htfLabel = $htfTrend === 'TĂNG GIÁ' ? '📈 TĂNG' : ($htfTrend === 'GIẢM GIÁ' ? '📉 GIẢM' : '↔ NGANG');
+        $distLabel = number_format($distPct * 100, 2);
+        $sym      = str_replace('USDT', '/USDT', $symbol);
+
+        $text = "⚠️ <b>{$sym} {$timeframe} — TIẾP CẬN OB</b>\n"
+              . "📍 {$dir}: <code>" . number_format($low, 2) . " – " . number_format($high, 2) . "</code>\n"
+              . "💰 Giá hiện tại: <b>" . number_format($price, 2) . "</b> (cách <b>{$distLabel}%</b>)\n"
+              . "📊 HTF: {$htfLabel}\n"
+              . "⏳ Theo dõi: nếu giá vào vùng → chuẩn bị <b>{$bias}</b>";
+
+        $this->send($text);
+    }
+
+    public function sendZoneHitAlert(
+        string $symbol, string $timeframe,
+        bool $isDemand, float $entry, float $tp, float $sl,
+        int $score, int $riskPct, float $capital = 0
+    ): void {
+        $type      = $isDemand ? '🟢 LONG' : '🔴 SHORT';
+        $scoreIcon = $score >= 85 ? '⚡ HIGH' : '📊 NORMAL';
+        $tpPct     = number_format(abs($tp - $entry) / $entry * 100, 1);
+        $slPct     = number_format(abs($sl - $entry) / $entry * 100, 1);
+        $sym       = str_replace('USDT', '/USDT', $symbol);
+
+        $lotLine = '';
+        if ($capital > 0 && abs($sl - $entry) > 0) {
+            $slFrac   = abs($sl - $entry) / $entry;
+            $riskAmt  = round($capital * $riskPct / 100, 2);
+            $notional = $slFrac > 0 ? round($riskAmt / $slFrac, 2) : 0;
+            $leverage = $capital > 0 && $notional > 0 ? max(1, min(20, (int) ceil($notional / $capital))) : 1;
+            $margin   = $leverage > 0 ? round($notional / $leverage, 2) : 0;
+            if ($notional > 0) {
+                $lotLine = "📦 Vol: <b>\${$notional}</b> | x{$leverage} | Margin: <b>\${$margin}</b> | Risk: <b>\${$riskAmt}</b>\n";
+            }
+        }
+
+        $text = "🎯 <b>{$sym} {$timeframe} — CHẠM OB</b>\n"
+              . "📊 Score: <b>{$score}/100</b> {$scoreIcon}\n\n"
+              . "{$type} | <b>Entry: " . number_format($entry, 2) . "</b>\n"
+              . "🎯 TP: <code>" . number_format($tp, 2) . "</code> (+{$tpPct}%)\n"
+              . "🛡 SL: <code>" . number_format($sl, 2) . "</code> (-{$slPct}%) | R:R 1:2.5\n"
+              . "💰 Risk: <b>{$riskPct}%</b>\n"
+              . $lotLine;
+
+        $this->send($text);
+    }
+
     // --- Internal ---
 
     private function send(string $text): void

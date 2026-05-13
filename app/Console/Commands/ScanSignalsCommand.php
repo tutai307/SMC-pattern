@@ -441,6 +441,9 @@ class ScanSignalsCommand extends Command
         // ADX=15, minConfidence=75 — backtest 1/1-13/5/2026: WR 46.7%, +131% với local-score ai-risk
         $this->priceActionService->setThresholds(15, 75);
         $analysis = $this->priceActionService->analyze($klines, $klinesHTF, $method, $symbol, $timeframe, true, $klinesDaily, false, $klinesWeekly);
+        // Zone-based alerts — chạy kể cả khi không có signal
+        $this->checkZones($symbol, $timeframe, $analysis, (float) $currentPrice);
+
         $signal   = $analysis['signal'] ?? null;
 
         if (!$signal) {
@@ -549,5 +552,99 @@ class ScanSignalsCommand extends Command
         $riskLabel = $localScore >= 85 ? "⚡ HIGH ({$riskPct}%)" : "📊 NORMAL ({$riskPct}%)";
         $this->info('[' . now()->format('H:i:s') . "] ✅ {$methodLabel} Alert [Score:{$localScore} {$riskLabel}]: {$symbol} {$signal['type']} @ {$signal['entry']}");
         return true;
+    }
+
+    // ── Zone Alerts (predictive) ─────────────────────────────────────
+
+    private function checkZones(string $symbol, string $timeframe, array $analysis, float $price): void
+    {
+        $htfTrend = $analysis['htf_trend'] ?? '';
+        $obs      = $analysis['orderBlocks'] ?? [];
+
+        foreach ($obs as $ob) {
+            $high = (float) ($ob['high'] ?? $ob['top'] ?? 0);
+            $low  = (float) ($ob['low'] ?? $ob['bottom'] ?? 0);
+            if ($high <= 0 || $low <= 0 || $high <= $low) continue;
+
+            $isDemand = ($ob['type'] ?? '') === 'demand';
+
+            // HTF alignment
+            if ($isDemand && $htfTrend === 'GIẢM GIÁ') continue;
+            if (!$isDemand && $htfTrend === 'TĂNG GIÁ') continue;
+
+            // Zone Hit: giá trong OB
+            if ($price >= $low && $price <= $high) {
+                $this->fireZoneHit($symbol, $timeframe, $ob, $price, $analysis);
+                continue;
+            }
+
+            // Zone Approach: giá cách OB ≤ 0.5%
+            $dist = $isDemand
+                ? ($price > $high ? ($price - $high) / $price : -1)
+                : ($price < $low  ? ($low - $price) / $price  : -1);
+
+            if ($dist > 0 && $dist <= 0.005) {
+                $this->fireZoneApproach($symbol, $timeframe, $ob, $price, $dist, $htfTrend);
+            }
+        }
+    }
+
+    private function fireZoneHit(string $symbol, string $timeframe, array $ob, float $price, array $analysis): void
+    {
+        $high     = (float) ($ob['high'] ?? $ob['top']);
+        $low      = (float) ($ob['low'] ?? $ob['bottom']);
+        $isDemand = ($ob['type'] ?? '') === 'demand';
+
+        $buffer = $price * 0.001;
+        $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
+        $slDist = abs($price - $sl);
+        if ($slDist <= 0) return;
+        $tp = $isDemand
+            ? round($price + $slDist * 2.5, 4)
+            : round($price - $slDist * 2.5, 4);
+
+        $klines = $this->binanceService->getKlines($symbol, $timeframe, 200);
+        $sig = [
+            'type'    => $isDemand ? 'MUA' : 'BÁN',
+            'entry'   => $price,
+            'tp'      => $tp,
+            'sl'      => $sl,
+            'winrate' => 60,
+            'reason'  => '',
+            'ai_score' => 0,
+        ];
+        $score = $this->priceActionService->computeConfidenceScore(
+            $sig,
+            array_slice($this->priceActionService->formatCandlesPublic($klines), -5),
+            $analysis['structure']   ?? [],
+            ['trend' => $analysis['htf_trend'] ?? ''],
+            $analysis['indicators']  ?? [],
+            $analysis['orderBlocks'] ?? []
+        );
+
+        if ($score < 75) return;
+
+        $riskPct = $score >= 85 ? 8 : 5;
+        $dedupKey = "zone_hit_{$symbol}_{$timeframe}_{$ob['type']}_" . round($low, 2);
+        if (Cache::has($dedupKey)) return;
+        Cache::put($dedupKey, true, now()->addHours(2));
+
+        $capital = (float) $this->option('capital');
+        $this->telegramService->sendZoneHitAlert($symbol, $timeframe, $isDemand, $price, $tp, $sl, $score, $riskPct, $capital);
+        $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
+    }
+
+    private function fireZoneApproach(string $symbol, string $timeframe, array $ob, float $price, float $dist, string $htfTrend): void
+    {
+        $high     = (float) ($ob['high'] ?? $ob['top']);
+        $low      = (float) ($ob['low'] ?? $ob['bottom']);
+        $isDemand = ($ob['type'] ?? '') === 'demand';
+
+        $dedupKey = "zone_approach_{$symbol}_{$timeframe}_{$ob['type']}_" . round($low, 2);
+        if (Cache::has($dedupKey)) return;
+        Cache::put($dedupKey, true, now()->addHours(2));
+
+        $this->telegramService->sendZoneApproachAlert($symbol, $timeframe, $isDemand, $high, $low, $price, $dist, $htfTrend);
+        $this->line('[' . now()->format('H:i:s') . "] ⚠️ Zone Approach: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " cách " . round($dist * 100, 2) . "%");
     }
 }
