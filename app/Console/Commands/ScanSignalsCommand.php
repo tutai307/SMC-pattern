@@ -568,7 +568,8 @@ class ScanSignalsCommand extends Command
 
             $isDemand = ($ob['type'] ?? '') === 'demand';
 
-            // HTF alignment
+            // HTF alignment — chỉ alert khi HTF có xu hướng rõ, NGANG thì bỏ qua
+            if ($htfTrend === 'ĐI NGANG') continue;
             if ($isDemand && $htfTrend === 'GIẢM GIÁ') continue;
             if (!$isDemand && $htfTrend === 'TĂNG GIÁ') continue;
 
@@ -605,9 +606,13 @@ class ScanSignalsCommand extends Command
         // Bỏ qua nếu SL quá nhỏ so với ATR — tránh noise stopout
         if ($atr > 0 && $slDist < $atr * 1.0) return;
 
-        $tp = $isDemand
+        $tp    = $isDemand
             ? round($price + $slDist * 2.5, 4)
             : round($price - $slDist * 2.5, 4);
+        $tpPct = abs($tp - $price) / $price * 100;
+
+        // TP phải tối thiểu 1.5% — dưới đó không đáng trade
+        if ($tpPct < 1.5) return;
 
         $klines = $this->binanceService->getKlines($symbol, $timeframe, 200);
         $sig = [
@@ -669,6 +674,11 @@ class ScanSignalsCommand extends Command
 
         // Bỏ qua nếu SL quá nhỏ — zone không đủ rộng để trade thực tế
         if ($atr > 0 && $slDist < $atr * 1.0) return;
+
+        // TP phải tối thiểu 1.5%
+        $tp    = $isDemand ? $entry + $slDist * 2.5 : $entry - $slDist * 2.5;
+        $tpPct = abs($tp - $entry) / $entry * 100;
+        if ($tpPct < 1.5) return;
 
         $dedupKey = "zone_approach_{$symbol}_{$timeframe}_{$ob['type']}_" . round($low, 2);
         if (Cache::has($dedupKey)) return;
