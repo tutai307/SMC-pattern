@@ -431,9 +431,10 @@ class PriceActionService
             if ($type === 'demand' && $current['close'] >= $current['open']) continue;
             if ($type === 'supply' && $current['close'] <= $current['open']) continue;
 
-            // OB zone = body bounds, not full wick (body is the institutional level)
-            $obHigh = max($current['open'], $current['close']);
-            $obLow  = min($current['open'], $current['close']);
+            // OB zone: demand = candle low → body top (close), supply = body bottom (close) → candle high
+            // Dùng full wick làm boundary để zone đủ rộng cho pending order thực tế
+            $obHigh = ($type === 'demand') ? max($current['open'], $current['close']) : $current['high'];
+            $obLow  = ($type === 'demand') ? $current['low'] : min($current['open'], $current['close']);
 
             // ── Liquidity sweep check ────────────────────────────────────────
             $liquiditySwept = false;
