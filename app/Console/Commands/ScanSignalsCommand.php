@@ -584,7 +584,8 @@ class ScanSignalsCommand extends Command
                 : ($price < $low  ? ($low - $price) / $price  : -1);
 
             if ($dist > 0 && $dist <= 0.005) {
-                $this->fireZoneApproach($symbol, $timeframe, $ob, $price, $dist, $htfTrend);
+                $atr = (float) ($analysis['indicators']['atr'] ?? 0);
+                $this->fireZoneApproach($symbol, $timeframe, $ob, $price, $dist, $htfTrend, $atr);
             }
         }
     }
@@ -595,10 +596,15 @@ class ScanSignalsCommand extends Command
         $low      = (float) ($ob['low'] ?? $ob['bottom']);
         $isDemand = ($ob['type'] ?? '') === 'demand';
 
+        $atr    = (float) ($analysis['indicators']['atr'] ?? 0);
         $buffer = $price * 0.001;
         $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
         $slDist = abs($price - $sl);
         if ($slDist <= 0) return;
+
+        // Bỏ qua nếu SL quá nhỏ so với ATR — tránh noise stopout
+        if ($atr > 0 && $slDist < $atr * 1.0) return;
+
         $tp = $isDemand
             ? round($price + $slDist * 2.5, 4)
             : round($price - $slDist * 2.5, 4);
@@ -649,11 +655,20 @@ class ScanSignalsCommand extends Command
         $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit saved: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
     }
 
-    private function fireZoneApproach(string $symbol, string $timeframe, array $ob, float $price, float $dist, string $htfTrend): void
+    private function fireZoneApproach(string $symbol, string $timeframe, array $ob, float $price, float $dist, string $htfTrend, float $atr = 0): void
     {
         $high     = (float) ($ob['high'] ?? $ob['top']);
         $low      = (float) ($ob['low'] ?? $ob['bottom']);
         $isDemand = ($ob['type'] ?? '') === 'demand';
+
+        // Tính SL của approach alert để check ATR minimum
+        $entry  = $isDemand ? $high : $low;
+        $buffer = $entry * 0.001;
+        $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
+        $slDist = abs($entry - $sl);
+
+        // Bỏ qua nếu SL quá nhỏ — zone không đủ rộng để trade thực tế
+        if ($atr > 0 && $slDist < $atr * 1.0) return;
 
         $dedupKey = "zone_approach_{$symbol}_{$timeframe}_{$ob['type']}_" . round($low, 2);
         if (Cache::has($dedupKey)) return;
