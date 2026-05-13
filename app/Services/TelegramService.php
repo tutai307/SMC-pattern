@@ -425,16 +425,30 @@ class TelegramService
         float $price, float $distPct, string $htfTrend
     ): void {
         $dir      = $isDemand ? 'DEMAND 🟢' : 'SUPPLY 🔴';
-        $bias     = $isDemand ? 'LONG' : 'SHORT';
+        $type     = $isDemand ? '🟢 LONG' : '🔴 SHORT';
         $htfLabel = $htfTrend === 'TĂNG GIÁ' ? '📈 TĂNG' : ($htfTrend === 'GIẢM GIÁ' ? '📉 GIẢM' : '↔ NGANG');
         $distLabel = number_format($distPct * 100, 2);
         $sym      = str_replace('USDT', '/USDT', $symbol);
 
+        // Tính entry/SL/TP để đặt pending ngay
+        $entry  = $isDemand ? $high : $low;
+        $buffer = $entry * 0.001;
+        $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
+        $slDist = abs($entry - $sl);
+        $tp     = $isDemand
+            ? round($entry + $slDist * 2.5, 4)
+            : round($entry - $slDist * 2.5, 4);
+        $tpPct  = number_format(abs($tp - $entry) / $entry * 100, 1);
+        $slPct  = number_format(abs($sl - $entry) / $entry * 100, 1);
+
         $text = "⚠️ <b>{$sym} {$timeframe} — TIẾP CẬN OB</b>\n"
               . "📍 {$dir}: <code>" . number_format($low, 2) . " – " . number_format($high, 2) . "</code>\n"
               . "💰 Giá hiện tại: <b>" . number_format($price, 2) . "</b> (cách <b>{$distLabel}%</b>)\n"
-              . "📊 HTF: {$htfLabel}\n"
-              . "⏳ Theo dõi: nếu giá vào vùng → chuẩn bị <b>{$bias}</b>";
+              . "📊 HTF: {$htfLabel}\n\n"
+              . "{$type} | Đặt pending:\n"
+              . "📌 Entry: <code>" . number_format($entry, 2) . "</code>\n"
+              . "🎯 TP: <code>" . number_format($tp, 2) . "</code> (+{$tpPct}%)\n"
+              . "🛡 SL: <code>" . number_format($sl, 2) . "</code> (-{$slPct}%) | R:R 1:2.5";
 
         $this->send($text);
     }
