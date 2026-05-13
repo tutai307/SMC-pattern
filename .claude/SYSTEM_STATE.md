@@ -125,6 +125,12 @@ Không còn 2-bước confirm. "ok" lưu thẳng.
 | 2026-05-09 | /l dùng fresh=true → bypass cache, luôn data mới | TelegramBotCommand.php + PriceActionService.php |
 | 2026-05-09 | Fix AI cắt lỗ sớm: thêm slUsedPct calculation + hard rules (CẮT LỖ chỉ khi ≥60% SL, CHỐT LỜI chỉ khi ≥70% TP) | PriceActionService.php |
 | 2026-05-10 | Đổi scanner sang M15 cho 6 symbols (SOL/XAG/LINK/ETH/BTC/XAU), cập nhật backtestStats Jan-May 2026, thêm PnL 2% risk vào scan alert | ScanSignalsCommand.php, TelegramService.php |
+| 2026-05-11 | Tăng LocalScore weights trong computeConfidenceScore(): HTF 25→30, SIDEWAYS 12→15, ADX mid-range 14→18/20→23, Momentum max 20→22 (div by 4), OB SNIPER 15→18/HIGH 12→15, EMA200 10→12, BOS 5→8. Portfolio backtest $100→$497 (+397%) vs cũ $338 | PriceActionService.php L1239-L1282 |
+| 2026-05-11 | [F1] LocalScore fallback khi AI lỗi: scanPair() gọi computeConfidenceScore() sau analyze(), dùng localScore≥85→$8/dưới→$2 khi aiError; log cả AI+LocalScore khi AI OK | ScanSignalsCommand.php L427-L460 |
+| 2026-05-11 | [F1] Expose formatCandlesPublic() public wrapper trong PriceActionService | PriceActionService.php L145 |
+| 2026-05-11 | [F2] Unfilled expiry 8h: thêm checkUnfilledExpiry() + sendUnfilledExpiry() + migration notified_expiry | ScanSignalsCommand.php L157-L170, MonitorSignalsCommand.php L81-L93, TelegramService.php L154, TradingSignal.php, migration 2026_05_11_150230 |
+| 2026-05-12 | [F3] trend:hourly command: dự đoán xu hướng multi-TF (daily EMA20 + 4h RSI/ADX + 1h swing) cho XAGUSDT/XAUUSDT/BTCUSDT, schedule hourly, gửi Telegram qua sendRaw() | TrendHourlyCommand.php (mới), routes/console.php |
+| 2026-05-13 | [F4] Exness lot sizing: thêm calculateExnessLots() static method, thay USDT notional/leverage bằng lots display trong sendScanAlert() và sendNewSignal(), DashboardController tính exness_lots song song positionSize | PriceActionService.php L401-L441, TelegramService.php L42-L60+L402-L409, DashboardController.php L79-L96 |
 
 ---
 

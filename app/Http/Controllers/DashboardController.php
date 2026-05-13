@@ -83,6 +83,18 @@ class DashboardController extends Controller
                         stopLoss:   (float) $signal->sl_price,
                     );
                     $positionSize['risk_pct'] = $riskPct;
+
+                    // Exness lot sizing (CFD: XAUUSD, BTCUSD, etc.)
+                    $exnessLots = PriceActionService::calculateExnessLots(
+                        capital:     (float) $signal->capital,
+                        riskPercent: $riskPct,
+                        entry:       (float) $signal->entry_price,
+                        stopLoss:    (float) $signal->sl_price,
+                        symbol:      $signal->symbol,
+                    );
+                    if (!empty($exnessLots)) {
+                        $positionSize['exness_lots'] = $exnessLots;
+                    }
                 }
 
                 // Gửi chi tiết lệnh qua Telegram ngay khi đề xuất

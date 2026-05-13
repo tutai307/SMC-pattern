@@ -399,6 +399,50 @@ class PriceActionService
     }
 
     /**
+     * Calculate Exness lot size for CFD instruments (XAUUSD, BTCUSD, etc.)
+     *
+     * Formula: lots = risk_usd / (sl_distance × contract_size)
+     */
+    public static function calculateExnessLots(
+        float $capital,
+        float $riskPercent,
+        float $entry,
+        float $stopLoss,
+        string $symbol
+    ): array {
+        $contracts = [
+            'XAUUSDT'  => ['contract_size' => 100,  'symbol' => 'XAUUSD'],
+            'XAGUSDT'  => ['contract_size' => 5000, 'symbol' => 'XAGUSD'],
+            'BTCUSDT'  => ['contract_size' => 1,    'symbol' => 'BTCUSD'],
+            'ETHUSDT'  => ['contract_size' => 1,    'symbol' => 'ETHUSD'],
+            'SOLUSDT'  => ['contract_size' => 1,    'symbol' => 'SOLUSD'],
+            'LINKUSDT' => ['contract_size' => 1,    'symbol' => 'LINKUSD'],
+        ];
+
+        $spec         = $contracts[strtoupper($symbol)] ?? ['contract_size' => 1, 'symbol' => $symbol];
+        $contractSize = $spec['contract_size'];
+        $exnessSymbol = $spec['symbol'];
+        $minLot       = 0.01;
+
+        $riskUsd = $capital * $riskPercent / 100;
+        $slDist  = abs($entry - $stopLoss);
+        if ($slDist <= 0) return [];
+
+        $idealLots  = $riskUsd / ($slDist * $contractSize);
+        $lots       = max($minLot, round($idealLots, 2));
+        $actualRisk = round($lots * $contractSize * $slDist, 2);
+        $belowMin   = $idealLots < $minLot;
+
+        return [
+            'lots'          => $lots,
+            'exness_symbol' => $exnessSymbol,
+            'actual_risk'   => $actualRisk,
+            'ideal_lots'    => round($idealLots, 4),
+            'below_min'     => $belowMin,
+        ];
+    }
+
+    /**
      * Find Order Blocks with displacement, FVG, and Liquidity Sweep validation.
      * OBs with a preceding sweep are marked strength='SNIPER' — highest priority.
      */

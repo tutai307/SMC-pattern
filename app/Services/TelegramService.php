@@ -38,25 +38,25 @@ class TelegramService
             ? "⚡ <b>SNIPER SIGNAL</b> ⚡"
             : "🔔 <b>TÍN HIỆU MỚI — ĐANG THEO DÕI</b>";
 
-        // Position sizing block — dùng calculatePositionSize nếu có, fallback về cách cũ
+        // Position sizing block — hiển thị Exness lots
         $positionInfo = '';
-        if ($posSize && $posSize['volume'] > 0) {
-            $baseAsset    = str_replace('USDT', '', $signal->symbol);
-            $positionInfo = "\n━━━━━━━━━━━━━━━\n"
-                          . "💰 Vốn: <b>\${$signal->capital}</b> | Risk: <b>2% = \${$posSize['risk_usd']}</b>\n"
-                          . "📦 Khối lượng: <code>{$posSize['volume']} {$baseAsset}</code>\n"
-                          . "🔧 Đòn bẩy: <b>{$posSize['leverage']}x</b> | Ký quỹ: <code>\${$posSize['margin_usd']}</code>\n"
-                          . "💀 Lỗ tối đa tại SL: <code>\${$posSize['actual_risk_usd']}</code>";
-        } elseif ($signal->capital > 0 && $slPct > 0) {
-            // Fallback calculation
-            $riskAmt  = round($signal->capital * 0.02, 2);
-            $slFrac   = $slPct / 100;
-            $leverage = max(1, min(20, (int) ceil(($riskAmt / $slFrac) / $signal->capital)));
-            $volume   = round($riskAmt / $slFrac, 6);
-            $margin   = round($volume / $leverage / ((float)$signal->entry_price ?: 1), 4);
-            $positionInfo = "\n━━━━━━━━━━━━━━━\n"
-                          . "💰 Vốn: <b>\${$signal->capital}</b> | Risk: <b>2% = \${$riskAmt}</b>\n"
-                          . "📦 Khối lượng: <code>{$volume}</code> | 🔧 Đòn bẩy: <b>{$leverage}x</b>";
+        $riskPctDisplay = $posSize['risk_pct'] ?? 2.0;
+        if ($signal->capital > 0 && $slPct > 0) {
+            $lotInfo = \App\Services\PriceActionService::calculateExnessLots(
+                (float) $signal->capital,
+                (float) $riskPctDisplay,
+                (float) $signal->entry_price,
+                (float) $signal->sl_price,
+                $signal->symbol
+            );
+            if (!empty($lotInfo)) {
+                $riskAmt  = round($signal->capital * $riskPctDisplay / 100, 2);
+                $warn     = $lotInfo['below_min'] ? ' ⚠️ min lot' : '';
+                $positionInfo = "\n━━━━━━━━━━━━━━━\n"
+                              . "💰 Vốn: <b>\${$signal->capital}</b> | Risk: <b>{$riskPctDisplay}% = \${$riskAmt}</b>\n"
+                              . "📦 <b>{$lotInfo['exness_symbol']}</b>: <code>{$lotInfo['lots']} lots</code>{$warn}\n"
+                              . "💀 Risk thực tại SL: <code>\${$lotInfo['actual_risk']}</code>";
+            }
         }
 
         $text = "{$header}\n\n"
@@ -399,12 +399,13 @@ class TelegramService
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
             . "💵 Risk {$riskPct}%: WIN <b>+" . round($riskPct * $rr, 1) . "%</b> vốn | LOSS <b>-{$riskPct}%</b> vốn\n"
-            . ($capital > 0 && $slPct > 0 ? (function() use ($capital, $riskPct, $slPct) {
-                $riskAmt  = round($capital * $riskPct / 100, 2);
-                $notional = round($riskAmt / ($slPct / 100), 2);
-                $leverage = max(1, min(20, (int) ceil($notional / $capital)));
-                $margin   = round($notional / $leverage, 2);
-                return "📦 Vol: <b>\${$notional} USDT</b> | x{$leverage} | Margin: <b>\${$margin}</b> | Risk: <b>\${$riskAmt}</b>\n";
+            . ($capital > 0 && $slPct > 0 ? (function() use ($capital, $riskPct, $entry, $sl, $symbol) {
+                $lotInfo = \App\Services\PriceActionService::calculateExnessLots(
+                    $capital, $riskPct, (float) $entry, (float) $sl, $symbol
+                );
+                if (empty($lotInfo)) return '';
+                $warn = $lotInfo['below_min'] ? ' ⚠️ min lot' : '';
+                return "📦 <b>{$lotInfo['exness_symbol']}</b>: <code>{$lotInfo['lots']} lots</code>{$warn} | Risk thực: <b>\${$lotInfo['actual_risk']}</b>\n";
             })() : '')
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
