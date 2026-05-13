@@ -10,5 +10,5 @@ Artisan::command('inspire', function () {
 
 // signals:monitor chạy như daemon qua supervisord (không dùng scheduler)
 
-// Gửi báo cáo xu hướng mỗi giờ cho XAGUSDT, XAUUSDT, BTCUSDT
-Schedule::command('trend:hourly')->hourly();
+// Gửi báo cáo xu hướng mỗi 2 tiếng cho XAGUSDT, XAUUSDT, BTCUSDT
+Schedule::command('trend:hourly')->everyTwoHours();

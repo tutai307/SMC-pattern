@@ -328,7 +328,7 @@ class TelegramService
         'ETHUSDT'  => ['wr' => 32.1, 'ev' => 0.28, 'signals' => 29, 'pnl' => '+16%'],
     ];
 
-    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc', int $riskPct = 2): void
+    public function sendScanAlert(string $symbol, string $timeframe, array $signal, float $currentPrice, string $method = 'smc', int $riskPct = 2, float $capital = 0): void
     {
         $type     = $signal['type'] ?? 'N/A';
         $entry    = $signal['entry'] ?? 0;
@@ -399,6 +399,13 @@ class TelegramService
             . "🛑 SL    : <code>{$sl}</code> (-{$slPct}%)\n"
             . "📐 R:R   : 1:{$rr} | ⭐ Confluence: {$conf}%\n"
             . "💵 Risk {$riskPct}%: WIN <b>+" . round($riskPct * $rr, 1) . "%</b> vốn | LOSS <b>-{$riskPct}%</b> vốn\n"
+            . ($capital > 0 && $slPct > 0 ? (function() use ($capital, $riskPct, $slPct) {
+                $riskAmt  = round($capital * $riskPct / 100, 2);
+                $notional = round($riskAmt / ($slPct / 100), 2);
+                $leverage = max(1, min(20, (int) ceil($notional / $capital)));
+                $margin   = round($notional / $leverage, 2);
+                return "📦 Vol: <b>\${$notional} USDT</b> | x{$leverage} | Margin: <b>\${$margin}</b> | Risk: <b>\${$riskAmt}</b>\n";
+            })() : '')
             . "━━━━━━━━━━━━━━━\n"
             . "💰 Giá hiện tại: <code>{$currentPrice}</code>\n"
             . "📍 {$proximity}\n"

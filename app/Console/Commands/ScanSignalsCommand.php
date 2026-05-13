@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Cache;
 
 class ScanSignalsCommand extends Command
 {
-    protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)}';
+    protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)} {--capital=0 : Vốn hiện tại (USDT) để tính vol/margin}';
     protected $description = 'Quét setup SMC mới + theo dõi lệnh đang mở trong cùng 1 vòng lặp';
 
     private array $watchlist      = [];
@@ -80,7 +80,7 @@ class ScanSignalsCommand extends Command
             }
 
             // ── Báo cáo xu hướng mỗi 1 giờ ──
-            if ($now - $this->lastTrendAt >= 3600) {
+            if ($now - $this->lastTrendAt >= 7200) {
                 try {
                     \Illuminate\Support\Facades\Artisan::call('trend:hourly');
                 } catch (\Exception $e) {
@@ -535,7 +535,8 @@ class ScanSignalsCommand extends Command
         }
 
         Cache::put($dedupKey, true, now()->addHours(6));
-        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method, $riskPct);
+        $scanCapital = (float) $this->option('capital');
+        $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method, $riskPct, $scanCapital);
 
         $isLong = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long';
         $chatId = config('services.telegram.chat_id');
