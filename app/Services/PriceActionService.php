@@ -205,8 +205,8 @@ class PriceActionService
 
             if ($trend === 'TĂNG GIÁ' && $lastPrice > $lastHigh) $bos   = true;
             if ($trend === 'GIẢM GIÁ' && $lastPrice < $lastLow)  $bos   = true;
-            if ($trend === 'GIẢM GIÁ' && $lastPrice > $lastHigh) $choch = true;
-            if ($trend === 'TĂNG GIÁ' && $lastPrice < $lastLow)  $choch = true;
+            if ($trend === 'GIẢM GIÁ' && $lastPrice > $lastHigh) { $choch = true; $trend = 'TĂNG GIÁ'; }
+            if ($trend === 'TĂNG GIÁ' && $lastPrice < $lastLow)  { $choch = true; $trend = 'GIẢM GIÁ'; }
         }
 
         return [
@@ -455,6 +455,8 @@ class PriceActionService
                 'type'            => $type,
                 'top'             => $obHigh,
                 'bottom'          => $obLow,
+                'high'            => $obHigh,   // alias for top — consistent field naming
+                'low'             => $obLow,    // alias for bottom — consistent field naming
                 'price'           => ($obHigh + $obLow) / 2,
                 'label'           => $liquiditySwept
                     ? ($type === 'demand' ? 'SNIPER DEMAND' : 'SNIPER SUPPLY')
