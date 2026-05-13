@@ -631,7 +631,22 @@ class ScanSignalsCommand extends Command
 
         $capital = (float) $this->option('capital');
         $this->telegramService->sendZoneHitAlert($symbol, $timeframe, $isDemand, $price, $tp, $sl, $score, $riskPct, $capital);
-        $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
+
+        // Lưu vào DB để hệ thống tự theo dõi TP/SL
+        \App\Models\TradingSignal::create([
+            'symbol'      => $symbol,
+            'timeframe'   => $timeframe,
+            'type'        => $isDemand ? 'LONG' : 'SHORT',
+            'entry_price' => $price,
+            'tp_price'    => $tp,
+            'sl_price'    => $sl,
+            'winrate'     => $score,
+            'status'      => 'PENDING',
+            'reason'      => 'Zone Hit — OB ' . ($isDemand ? 'demand' : 'supply') . ' ' . number_format($low, 2) . '-' . number_format($high, 2),
+            'capital'     => $capital,
+        ]);
+
+        $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit saved: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
     }
 
     private function fireZoneApproach(string $symbol, string $timeframe, array $ob, float $price, float $dist, string $htfTrend): void
