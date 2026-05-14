@@ -787,7 +787,8 @@ PROMPT;
             $currentPrice = (float) $this->binance->getPrice($signal->symbol);
 
             if (empty($klines)) {
-                $this->telegram->reply("❌ Không lấy được dữ liệu #{$signal->id} {$signal->symbol}.");
+                \Log::warning("reviewUnfilledSignal: Binance API timeout for #{$signal->id} {$signal->symbol} — skipping");
+                $this->telegram->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
                 return;
             }
 
@@ -844,7 +845,8 @@ PROMPT;
             $currentPrice = (float) $this->binance->getPrice($signal->symbol);
 
             if (empty($klines)) {
-                $this->telegram->reply("❌ Không lấy được klines cho #{$signal->id} {$signal->symbol}.");
+                \Log::warning("reviewRunningSignal: Binance API timeout for #{$signal->id} {$signal->symbol} — skipping");
+                $this->telegram->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
                 return;
             }
 

@@ -39,7 +39,7 @@ class BinanceService
         $lastError = '';
         for ($attempt = 1; $attempt <= 3; $attempt++) {
             try {
-                $response = Http::timeout(10)->get("{$this->baseUrl}/klines", $params);
+                $response = Http::timeout(6)->get("{$this->baseUrl}/klines", $params);
 
                 if ($response->successful()) {
                     $data = $response->json();
@@ -52,10 +52,10 @@ class BinanceService
                 $lastError = $e->getMessage();
             }
 
-            if ($attempt < 3) usleep(500000);
+            if ($attempt < 3) usleep(300000);
         }
 
-        Log::error("Binance getKlines failed after 3 attempts [{$symbol} {$interval}]: {$lastError}");
+        Log::warning("Binance getKlines failed after 3 attempts [{$symbol} {$interval}]: {$lastError}");
         return [];
     }
 
