@@ -506,4 +506,50 @@ class TelegramService
             \Log::error('Telegram send failed: ' . $e->getMessage());
         }
     }
+
+    public function sendCryptoSignalAlert(
+        string $symbol,
+        string $timeframe,
+        array  $signal,
+        float  $currentPrice,
+        float  $capital = 0,
+        float  $fundingRate = 0,
+        float  $lsRatio = 0.5
+    ): void {
+        $type      = $signal['type'] === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+        $entry     = $signal['entry'] ?? $currentPrice;
+        $tp        = $signal['tp'] ?? 0;
+        $sl        = $signal['sl'] ?? 0;
+        $tpPct     = $entry > 0 ? round(abs($tp - $entry) / $entry * 100, 2) : 0;
+        $slPct     = $entry > 0 ? round(abs($sl - $entry) / $entry * 100, 2) : 0;
+        $rr        = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
+
+        $fundingStr   = ($fundingRate >= 0 ? '+' : '') . round($fundingRate * 100, 4) . '%';
+        $lsPct        = round($lsRatio * 100, 1);
+        $fundingEmoji = $fundingRate > 0.0003 ? '🔴' : ($fundingRate < -0.0001 ? '🟢' : '⚪');
+        $lsEmoji      = $lsRatio > 0.55 ? '🟢' : ($lsRatio < 0.45 ? '🔴' : '⚪');
+
+        $msg  = "📡 <b>{$symbol} {$timeframe} — CRYPTO SIGNAL</b>\n";
+        $msg .= "━━━━━━━━━━━━━━━\n";
+        $msg .= "{$type} | Entry: <b>{$entry}</b>\n";
+        $msg .= "🎯 TP: <b>{$tp}</b> (+{$tpPct}%)\n";
+        $msg .= "🛡 SL: <b>{$sl}</b> (-{$slPct}%) | R:R 1:{$rr}\n";
+        $msg .= "━━━━━━━━━━━━━━━\n";
+        $msg .= "{$fundingEmoji} Funding: <b>{$fundingStr}</b>\n";
+        $msg .= "{$lsEmoji} Top Traders Long: <b>{$lsPct}%</b>\n";
+
+        if ($capital > 0) {
+            $risk   = $capital * 0.02;
+            $slDist = abs($entry - $sl);
+            $vol    = $slDist > 0 ? round($risk / $slDist, 2) : 0;
+            $margin = round($entry * $vol / 20, 2);
+            $msg .= "━━━━━━━━━━━━━━━\n";
+            $msg .= "💰 Risk 2%: <b>\${$risk}</b> | Vol: <b>{$vol}</b> | Margin x20: <b>\${$margin}</b>\n";
+        }
+
+        $reason = $signal['reason'] ?? '';
+        if ($reason) $msg .= "📝 <i>{$reason}</i>\n";
+
+        $this->sendRaw($msg);
+    }
 }

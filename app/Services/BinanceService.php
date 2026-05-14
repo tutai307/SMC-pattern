@@ -220,4 +220,42 @@ class BinanceService
             return [];
         }
     }
+
+    public function getFundingRate(string $symbol): float
+    {
+        return (float) \Illuminate\Support\Facades\Cache::remember("funding_{$symbol}", 30, function () use ($symbol) {
+            try {
+                $response = Http::timeout(8)->get("{$this->baseUrl}/premiumIndex", [
+                    'symbol' => strtoupper($symbol),
+                ]);
+                if ($response->successful()) {
+                    return (float) ($response->json()['lastFundingRate'] ?? 0);
+                }
+            } catch (\Exception $e) {
+                Log::warning("getFundingRate {$symbol}: " . $e->getMessage());
+            }
+            return 0.0;
+        });
+    }
+
+    public function getTopLSRatio(string $symbol, string $period = '1h'): float
+    {
+        // Returns longAccount ratio (0-1). > 0.5 means more longs, < 0.5 means more shorts.
+        return (float) \Illuminate\Support\Facades\Cache::remember("ls_ratio_{$symbol}_{$period}", 60, function () use ($symbol, $period) {
+            try {
+                $response = Http::timeout(8)->get("{$this->baseUrl}/topLongShortPositionRatio", [
+                    'symbol' => strtoupper($symbol),
+                    'period' => $period,
+                    'limit'  => 1,
+                ]);
+                if ($response->successful()) {
+                    $data = $response->json();
+                    return (float) ($data[0]['longAccount'] ?? 0.5);
+                }
+            } catch (\Exception $e) {
+                Log::warning("getTopLSRatio {$symbol}: " . $e->getMessage());
+            }
+            return 0.5;
+        });
+    }
 }
