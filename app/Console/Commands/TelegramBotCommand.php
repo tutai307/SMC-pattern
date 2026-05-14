@@ -1001,6 +1001,11 @@ PROMPT;
 
         foreach ($symbols as $symbol) {
             try {
+                // Force-clear price cache để lấy tick mới nhất
+                Cache::forget("price_{$symbol}");
+                Cache::forget("binance_klines_{$symbol}_15m_22_now");
+                $fetchedAt = now()->format('H:i:s');
+
                 $price = $this->binance->getPrice($symbol);
                 $k15   = $this->binance->getKlines($symbol, '15m', 22);
                 $k4h   = $this->binance->getKlines($symbol, '4h', 16);
@@ -1029,14 +1034,18 @@ PROMPT;
                 if (end($highs) > $highs[0] && end($lows) > $lows[0]) $trend = 'TĂNG';
                 elseif (end($highs) < $highs[0] && end($lows) < $lows[0]) $trend = 'GIẢM';
 
-                // Last 6 candles 15m
+                // Last 6 candles 15m — mark last one as [đang chạy]
                 $candleStr = '';
-                foreach (array_slice($k15, -6) as $k) {
-                    $dir = (float)$k[4] >= (float)$k[1] ? '▲' : '▼';
-                    $candleStr .= date('H:i', (int)($k[0]/1000)) . " $dir H:{$k[2]} L:{$k[3]} C:{$k[4]}\n";
+                $k15Slice  = array_slice($k15, -6);
+                foreach ($k15Slice as $idx => $k) {
+                    $dir    = (float)$k[4] >= (float)$k[1] ? '▲' : '▼';
+                    $label  = ($idx === count($k15Slice) - 1) ? ' [đang chạy]' : '';
+                    $candleStr .= date('H:i', (int)($k[0]/1000)) . " $dir H:{$k[2]} L:{$k[3]} C:{$k[4]}{$label}\n";
                 }
 
-                $blocks[] = "=== {$symbol} ===\nGiá hiện tại: {$price} | ATR(4h): {$atr} | Trend 15m: {$trend}\nNến 15m gần nhất:\n{$candleStr}";
+                $blocks[] = "=== {$symbol} (fetch lúc {$fetchedAt}) ===\n"
+                          . "⚡ Giá LIVE: {$price} | ATR(4h): {$atr} | Trend 15m: {$trend}\n"
+                          . "Nến 15m gần nhất (nến cuối chưa đóng):\n{$candleStr}";
             } catch (\Exception $e) {
                 // skip symbol on error
             }
