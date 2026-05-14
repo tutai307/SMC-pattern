@@ -195,7 +195,22 @@ class TelegramBotCommand extends Command
         $total  = $wins + $losses;
         $wrStr  = $total > 0 ? round($wins / $total * 100) . "% ({$wins}W/{$losses}L)" : "Chưa có dữ liệu";
 
-        // Inject metals news nếu query liên quan vàng/bạc hoặc có lệnh metals đang chạy
+        // ── MỚI: Detect symbols + fetch real-time market data ──
+        $historyKey = "tg_ai_history_{$this->chatId}";
+        $history    = Cache::get($historyKey, []);
+
+        $detectedSymbols = $this->detectSymbolsInContext($userMessage, $history);
+        $marketBlock     = $this->fetchMarketContext($detectedSymbols);
+        $userPositionStr = $this->detectAndSaveUserPosition($userMessage);
+
+        $marketSection = $marketBlock
+            ? "\n\n=== DỮ LIỆU THỊ TRƯỜNG THỰC TẾ ===\n{$marketBlock}"
+            : '';
+        $positionSection = $userPositionStr
+            ? "\n\nVỊ THẾ USER ĐANG GIỮ (user tự khai):\n{$userPositionStr}"
+            : '';
+
+        // Inject metals news nếu query liên quan vàng/bạc
         $metalsKeywords = ['xauusdt', 'xagusdt', 'gold', 'silver', 'vàng', 'bạc', 'xau', 'xag', 'vang', 'bac'];
         $isMetalsQuery  = false;
         $lowerMsg       = mb_strtolower($userMessage);
@@ -216,36 +231,26 @@ class TelegramBotCommand extends Command
         }
 
         $systemPrompt = <<<PROMPT
-Bạn là Felix — AI trading assistant của hệ thống TOM AI. Nhiệm vụ chính:
-1. Theo dõi và cảnh báo tín hiệu SMC cho {$watchlist}
-2. Quản lý lệnh đang mở, báo P&L, cảnh báo SL/TP
-3. Trả lời câu hỏi về thị trường và tín hiệu
+Bạn là Felix — AI trading assistant chuyên SMC. Bạn BIẾT GIÁ THỰC TẾ vì được cung cấp dữ liệu live từ Binance.
 
-TÍNH CÁCH: Thân thiện, ngắn gọn, chuyên nghiệp. Nói chuyện như người thật, không như chatbot.
-Dùng tiếng Việt. Dùng emoji phù hợp nhưng đừng lạm dụng.
-KHÔNG bịa số liệu. Nếu không biết → nói thẳng.
+TÍNH CÁCH: Thẳng thắn, ngắn gọn, như trader thực thụ. KHÔNG nói "tôi không có dữ liệu thực tế" — bạn CÓ dữ liệu rồi.
+Dùng tiếng Việt. Emoji vừa đủ. KHÔNG bịa số liệu ngoài data được cung cấp.
 
-=== TRẠNG THÁI HỆ THỐNG ({$now}) ===
-Watchlist đang scan: {$watchlist}
-Lịch sử thắng/thua: {$wrStr}
+=== TRẠNG THÁI ({$now}) ===
+Watchlist: {$watchlist} | Winrate: {$wrStr}
 
-LỆNH ĐANG CHẠY:
+LỆNH DB ĐANG CHẠY:
 {$runningStr}
-LỆNH PENDING:
-{$pendingStr}
+LỆNH DB PENDING:
+{$pendingStr}{$positionSection}{$marketSection}{$newsBlock}
 
-=== KHẢ NĂNG ===
-- Phân tích coin: user nhắn "kèo xagusdt scalp" hoặc "phân tích btcusdt"
-- Xem lệnh: /list, /status, /signal <id>
-- Quản lý: /cancel <id>, /filled <id>
-- Bot tự động scan {$watchlist} mỗi 5 phút và sẽ báo ngay khi có setup
-
-Trả lời NGẮN GỌN (tối đa 4-5 câu). Nếu user hỏi về setup cụ thể thì bảo họ nhắn "kèo [coin] [loại]".{$newsBlock}
+=== HƯỚNG DẪN TRẢ LỜI ===
+- Có data thực tế → dùng luôn để phân tích, đừng bảo user "nhắn lại"
+- Câu hỏi về xu hướng/giá → đọc từ DỮ LIỆU THỊ TRƯỜNG THỰC TẾ phía trên
+- Đánh giá lệnh → kết hợp VỊ THẾ USER + giá hiện tại
+- Tối đa 5-6 câu, dùng bảng nếu cần so sánh số liệu
+- Nếu cần phân tích sâu hơn (OB, FVG, SMC) → bảo nhắn "kèo [coin]"
 PROMPT;
-
-        // Lịch sử hội thoại (rolling 8 messages)
-        $historyKey = "tg_ai_history_{$this->chatId}";
-        $history    = Cache::get($historyKey, []);
 
         // Thêm tin nhắn user mới vào history
         $history[] = ['role' => 'user', 'content' => $userMessage];
@@ -266,7 +271,7 @@ PROMPT;
                 'json' => [
                     'model'       => 'openai/gpt-4o-mini',
                     'temperature' => 0.7,
-                    'max_tokens'  => 300,
+                    'max_tokens'  => 500,
                     'messages'    => array_merge(
                         [['role' => 'system', 'content' => $systemPrompt]],
                         $history
@@ -961,5 +966,127 @@ PROMPT;
         }
 
         $this->telegram->reply(implode("\n", $lines));
+    }
+
+    private function detectSymbolsInContext(string $message, array $history): array
+    {
+        $allText = $message;
+        foreach (array_slice($history, -4) as $h) {
+            $allText .= ' ' . ($h['content'] ?? '');
+        }
+        $lower = mb_strtolower($allText);
+
+        $found = [];
+        // Pattern: XYZusdt
+        preg_match_all('/\b([a-zA-Z]{2,8}usdt)\b/i', $allText, $matches);
+        foreach ($matches[1] as $s) $found[] = strtoupper($s);
+
+        // Aliases
+        $aliases = [
+            'xag' => 'XAGUSDT', 'xau' => 'XAUUSDT', 'btc' => 'BTCUSDT',
+            'eth' => 'ETHUSDT', 'sol' => 'SOLUSDT', 'bạc' => 'XAGUSDT',
+            'vàng' => 'XAUUSDT', 'vang' => 'XAUUSDT', 'bac' => 'XAGUSDT',
+        ];
+        foreach ($aliases as $alias => $full) {
+            if (str_contains($lower, $alias)) $found[] = $full;
+        }
+
+        return array_values(array_unique(array_slice($found, 0, 3)));
+    }
+
+    private function fetchMarketContext(array $symbols): string
+    {
+        if (empty($symbols)) return '';
+        $blocks = [];
+
+        foreach ($symbols as $symbol) {
+            try {
+                $price = $this->binance->getPrice($symbol);
+                $k15   = $this->binance->getKlines($symbol, '15m', 22);
+                $k4h   = $this->binance->getKlines($symbol, '4h', 16);
+
+                if (!$price || empty($k15)) continue;
+
+                // ATR(14) from 4h
+                $atr = 0;
+                if (count($k4h) >= 15) {
+                    $trs = [];
+                    for ($i = 1; $i < count($k4h); $i++) {
+                        $trs[] = max(
+                            (float)$k4h[$i][2] - (float)$k4h[$i][3],
+                            abs((float)$k4h[$i][2] - (float)$k4h[$i-1][4]),
+                            abs((float)$k4h[$i][3] - (float)$k4h[$i-1][4])
+                        );
+                    }
+                    $atr = round(array_sum(array_slice($trs, -14)) / 14, 3);
+                }
+
+                // Quick trend from 15m (last 10 candles: higher highs+lows = TĂNG)
+                $last10 = array_slice($k15, -10);
+                $highs  = array_column($last10, 2);
+                $lows   = array_column($last10, 3);
+                $trend  = 'ĐI NGANG';
+                if (end($highs) > $highs[0] && end($lows) > $lows[0]) $trend = 'TĂNG';
+                elseif (end($highs) < $highs[0] && end($lows) < $lows[0]) $trend = 'GIẢM';
+
+                // Last 6 candles 15m
+                $candleStr = '';
+                foreach (array_slice($k15, -6) as $k) {
+                    $dir = (float)$k[4] >= (float)$k[1] ? '▲' : '▼';
+                    $candleStr .= date('H:i', (int)($k[0]/1000)) . " $dir H:{$k[2]} L:{$k[3]} C:{$k[4]}\n";
+                }
+
+                $blocks[] = "=== {$symbol} ===\nGiá hiện tại: {$price} | ATR(4h): {$atr} | Trend 15m: {$trend}\nNến 15m gần nhất:\n{$candleStr}";
+            } catch (\Exception $e) {
+                // skip symbol on error
+            }
+        }
+
+        return implode("\n", $blocks);
+    }
+
+    private function detectAndSaveUserPosition(string $message): string
+    {
+        $lower  = mb_strtolower($message);
+        $posKey = "tg_position_{$this->chatId}";
+        $positions = Cache::get($posKey, []);
+
+        // Detect: "short/long/bán/mua [symbol] [price]" or "[symbol] short/long [price]"
+        $pattern = '/(?:(short|long|bán|mua)\s+(?:' .
+            '([a-zA-Z]{2,8}usdt|xag|xau|btc|eth|sol|bạc|vàng)' .
+            ')?\s*(?:ở|at|@|entry)?\s*(\d+(?:[.,]\d+)?))' .
+            '|(?:' .
+            '([a-zA-Z]{2,8}usdt|xag|xau|btc|eth|sol|bạc|vàng)' .
+            ')\s+(short|long|bán|mua)\s*(?:ở|at|@|entry)?\s*(\d+(?:[.,]\d+)?)/ui';
+
+        if (preg_match($pattern, $message, $m)) {
+            $dir    = strtolower($m[1] ?: $m[5]);
+            $sym    = strtoupper($m[2] ?: $m[4] ?: '');
+            $price  = (float) str_replace(',', '.', $m[3] ?: $m[6]);
+
+            $aliasMap = ['XAG' => 'XAGUSDT', 'XAU' => 'XAUUSDT', 'BTC' => 'BTCUSDT',
+                         'ETH' => 'ETHUSDT', 'SOL' => 'SOLUSDT', 'BẠC' => 'XAGUSDT', 'VÀNG' => 'XAUUSDT'];
+            if (isset($aliasMap[$sym])) $sym = $aliasMap[$sym];
+            if (!str_ends_with($sym, 'USDT')) $sym .= 'USDT';
+
+            if ($sym && $price > 0) {
+                $dirLabel = in_array($dir, ['short', 'bán']) ? 'SHORT' : 'LONG';
+                $positions[$sym] = ['dir' => $dirLabel, 'entry' => $price, 'time' => now()->format('H:i d/m')];
+                Cache::put($posKey, $positions, now()->addHours(6));
+            }
+        }
+
+        if (empty($positions)) return '';
+
+        $lines = [];
+        foreach ($positions as $sym => $p) {
+            $currentPrice = $this->binance->getPrice($sym) ?? $p['entry'];
+            $pnl = $p['dir'] === 'LONG'
+                ? round($currentPrice - $p['entry'], 3)
+                : round($p['entry'] - $currentPrice, 3);
+            $sign = $pnl >= 0 ? '+' : '';
+            $lines[] = "- {$sym} {$p['dir']} entry={$p['entry']} giá_hiện_tại={$currentPrice} P&L={$sign}{$pnl} (vào lúc {$p['time']})";
+        }
+        return implode("\n", $lines);
     }
 }
