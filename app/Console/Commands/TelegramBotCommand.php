@@ -269,9 +269,9 @@ PROMPT;
                     'HTTP-Referer'  => 'https://tomai.app',
                 ],
                 'json' => [
-                    'model'       => 'openai/gpt-4o-mini',
+                    'model'       => 'anthropic/claude-sonnet-4-5',
                     'temperature' => 0.7,
-                    'max_tokens'  => 500,
+                    'max_tokens'  => 600,
                     'messages'    => array_merge(
                         [['role' => 'system', 'content' => $systemPrompt]],
                         $history
