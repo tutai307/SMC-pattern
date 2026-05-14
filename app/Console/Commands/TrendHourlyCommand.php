@@ -63,10 +63,16 @@ class TrendHourlyCommand extends Command
         $h1Klines    = $this->binance->getKlines($symbol, '1h', 50);
 
         if (empty($dailyKlines) || empty($h4Klines) || empty($h1Klines)) {
+            $missing = implode(', ', array_filter([
+                empty($dailyKlines) ? '1D' : null,
+                empty($h4Klines)    ? '4H' : null,
+                empty($h1Klines)    ? '1H' : null,
+            ]));
+            Log::warning("TrendHourly: no data for {$symbol} (missing: {$missing})");
             return "━━━━━━━━━━━━━━━\n"
                  . "{$emoji} <b>{$symbol}</b>\n"
                  . "━━━━━━━━━━━━━━━\n"
-                 . "Lỗi: Không lấy được dữ liệu Binance.";
+                 . "⚠️ Không lấy được dữ liệu ({$missing}) — Binance API lỗi hoặc timeout.";
         }
 
         $dailyCandles = $this->formatCandles($dailyKlines);

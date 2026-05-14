@@ -19,34 +19,44 @@ class BinanceService
      */
     public function getKlines(string $symbol = 'BTCUSDT', string $interval = '1h', int $limit = 100, $startTime = null)
     {
-        $cacheKey = "binance_klines_{$symbol}_{$interval}_{$limit}_" . ($startTime ?? 'now');
+        $cacheKey      = "binance_klines_{$symbol}_{$interval}_{$limit}_" . ($startTime ?? 'now');
         $cacheDuration = in_array($interval, ['1m', '5m', '15m']) ? 10 : 60;
 
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $cacheDuration, function () use ($symbol, $interval, $limit, $startTime) {
+        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $params = [
+            'symbol'   => strtoupper($symbol),
+            'interval' => $interval,
+            'limit'    => $limit,
+        ];
+        if ($startTime) {
+            $params['startTime'] = $startTime;
+        }
+
+        $lastError = '';
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
             try {
-                $params = [
-                    'symbol' => strtoupper($symbol),
-                    'interval' => $interval,
-                    'limit' => $limit,
-                ];
-
-                if ($startTime) {
-                    $params['startTime'] = $startTime;
-                }
-
-                $response = Http::get("{$this->baseUrl}/klines", $params);
+                $response = Http::timeout(10)->get("{$this->baseUrl}/klines", $params);
 
                 if ($response->successful()) {
-                    return $response->json();
+                    $data = $response->json();
+                    \Illuminate\Support\Facades\Cache::put($cacheKey, $data, $cacheDuration);
+                    return $data;
                 }
 
-                Log::error("Binance API Error: " . $response->body());
-                return [];
+                $lastError = "HTTP {$response->status()}: " . substr($response->body(), 0, 200);
             } catch (\Exception $e) {
-                Log::error("Binance Service Exception: " . $e->getMessage());
-                return [];
+                $lastError = $e->getMessage();
             }
-        });
+
+            if ($attempt < 3) usleep(500000);
+        }
+
+        Log::error("Binance getKlines failed after 3 attempts [{$symbol} {$interval}]: {$lastError}");
+        return [];
     }
 
     /**
