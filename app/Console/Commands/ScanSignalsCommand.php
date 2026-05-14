@@ -710,8 +710,9 @@ class ScanSignalsCommand extends Command
     ): ?array {
         $isLong = $type === 'LONG';
 
-        // ── Điều kiện 1: ≥4 nến liên tiếp ngược chiều + đang âm ──
-        $candles = array_slice($klines, -8);
+        // ── Điều kiện 1: ≥5 nến LTF liên tiếp ngược chiều + đang âm ──
+        // Nâng từ 4 → 5 để tránh cắt lỗ khi rung lắc ngắn hạn
+        $candles = array_slice($klines, -9);
         $consecutive = 0;
         foreach (array_reverse($candles) as $c) {
             $isBull = (float)$c[4] > (float)$c[1];
@@ -720,16 +721,18 @@ class ScanSignalsCommand extends Command
             else break;
         }
 
-        if ($consecutive >= 4 && $pnlPct < 0) {
+        if ($consecutive >= 5 && $pnlPct < 0) {
             return [
                 'verdict'  => 'CẮT LỖ NGAY',
-                'analysis' => "{$consecutive} nến liên tiếp ngược chiều lệnh {$type} — momentum đã đổi chiều rõ ràng. P&L {$pnlPct}%, cắt lỗ để bảo vệ vốn.",
+                'analysis' => "{$consecutive} nến LTF liên tiếp ngược chiều lệnh {$type} — momentum đã đổi chiều rõ ràng. P&L {$pnlPct}%, cắt lỗ để bảo vệ vốn.",
                 'sl_advice' => null,
                 'tp_advice' => null,
             ];
         }
 
         // ── Điều kiện 2: HTF trend ngược chiều lệnh ──
+        // Yêu cầu đồng thời: (a) swing structure ngược + (b) 3 candles HTF liên tiếp ngược + (c) P&L < -2%
+        // Trước đây chỉ cần swing ngược + P&L < -1% — quá nhạy, 1 cây tăng tạm là kích hoạt
         if (!empty($klinesHTF) && count($klinesHTF) >= 10) {
             $htfCandles = array_slice($klinesHTF, -10);
             $htfHighs   = array_map(fn($k) => (float)$k[2], $htfCandles);
@@ -737,18 +740,28 @@ class ScanSignalsCommand extends Command
             $htfBull    = end($htfHighs) > $htfHighs[0] && end($htfLows) > $htfLows[0];
             $htfBear    = end($htfHighs) < $htfHighs[0] && end($htfLows) < $htfLows[0];
 
-            if ($isLong && $htfBear && $pnlPct < -1.0) {
+            // Đếm candles HTF liên tiếp ngược chiều (3 cây liên tiếp)
+            $htfConsecutive = 0;
+            foreach (array_reverse($htfCandles) as $c) {
+                $isBull = (float)$c[4] > (float)$c[1];
+                if ($isLong && !$isBull) $htfConsecutive++;
+                elseif (!$isLong && $isBull) $htfConsecutive++;
+                else break;
+            }
+            $htfMomentumConfirmed = $htfConsecutive >= 3;
+
+            if ($isLong && $htfBear && $htfMomentumConfirmed && $pnlPct < -2.0) {
                 return [
                     'verdict'  => 'CẮT LỖ NGAY',
-                    'analysis' => "HTF đang GIẢM trong khi lệnh LONG — bias ngược chiều. P&L {$pnlPct}%, cắt lỗ.",
+                    'analysis' => "HTF đang GIẢM ({$htfConsecutive} nến liên tiếp xuống) trong khi lệnh LONG — bias ngược chiều xác nhận. P&L {$pnlPct}%, cắt lỗ.",
                     'sl_advice' => null,
                     'tp_advice' => null,
                 ];
             }
-            if (!$isLong && $htfBull && $pnlPct < -1.0) {
+            if (!$isLong && $htfBull && $htfMomentumConfirmed && $pnlPct < -2.0) {
                 return [
                     'verdict'  => 'CẮT LỖ NGAY',
-                    'analysis' => "HTF đang TĂNG trong khi lệnh SHORT — bias ngược chiều. P&L {$pnlPct}%, cắt lỗ.",
+                    'analysis' => "HTF đang TĂNG ({$htfConsecutive} nến liên tiếp lên) trong khi lệnh SHORT — bias ngược chiều xác nhận. P&L {$pnlPct}%, cắt lỗ.",
                     'sl_advice' => null,
                     'tp_advice' => null,
                 ];
