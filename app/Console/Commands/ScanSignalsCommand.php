@@ -326,7 +326,14 @@ class ScanSignalsCommand extends Command
                 $klinesHTF = $this->binanceService->getKlines($signal->symbol, $htf, 100);
                 if (empty($klines)) continue;
 
-                $advice = $this->priceActionService->adviseOpenPosition(
+                // ── Pre-check cứng trước khi gọi AI ──
+                $hardAdvice = $this->hardReviewCheck(
+                    $klines, $klinesHTF,
+                    $signal->type, (float) $signal->entry_price,
+                    (float) $signal->sl_price, $currentPrice, $pnlPct
+                );
+
+                $advice = $hardAdvice ?? $this->priceActionService->adviseOpenPosition(
                     $klines, $klinesHTF,
                     $signal->symbol, $signal->timeframe, $signal->type,
                     (float) $signal->entry_price,
@@ -727,5 +734,84 @@ class ScanSignalsCommand extends Command
 
         $this->telegramService->sendZoneApproachAlert($symbol, $timeframe, $isDemand, $high, $low, $price, $dist, $htfTrend);
         $this->line('[' . now()->format('H:i:s') . "] ⚠️ Zone Approach: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " cách " . round($dist * 100, 2) . "%");
+    }
+
+    /**
+     * Hard pre-check trước khi gọi AI review.
+     * Trả về verdict cứng nếu có điều kiện rõ ràng, null nếu cần AI quyết định.
+     */
+    private function hardReviewCheck(
+        array  $klines,
+        array  $klinesHTF,
+        string $type,
+        float  $entry,
+        ?float $sl,
+        float  $currentPrice,
+        float  $pnlPct
+    ): ?array {
+        $isLong = $type === 'LONG';
+
+        // ── Điều kiện 1: ≥4 nến liên tiếp ngược chiều + đang âm ──
+        $candles = array_slice($klines, -8);
+        $consecutive = 0;
+        foreach (array_reverse($candles) as $c) {
+            $isBull = (float)$c[4] > (float)$c[1];
+            if ($isLong && !$isBull) $consecutive++;
+            elseif (!$isLong && $isBull) $consecutive++;
+            else break;
+        }
+
+        if ($consecutive >= 4 && $pnlPct < 0) {
+            return [
+                'verdict'  => 'CẮT LỖ NGAY',
+                'analysis' => "{$consecutive} nến liên tiếp ngược chiều lệnh {$type} — momentum đã đổi chiều rõ ràng. P&L {$pnlPct}%, cắt lỗ để bảo vệ vốn.",
+                'sl_advice' => null,
+                'tp_advice' => null,
+            ];
+        }
+
+        // ── Điều kiện 2: HTF trend ngược chiều lệnh ──
+        if (!empty($klinesHTF) && count($klinesHTF) >= 10) {
+            $htfCandles = array_slice($klinesHTF, -10);
+            $htfHighs   = array_map(fn($k) => (float)$k[2], $htfCandles);
+            $htfLows    = array_map(fn($k) => (float)$k[3], $htfCandles);
+            $htfBull    = end($htfHighs) > $htfHighs[0] && end($htfLows) > $htfLows[0];
+            $htfBear    = end($htfHighs) < $htfHighs[0] && end($htfLows) < $htfLows[0];
+
+            if ($isLong && $htfBear && $pnlPct < -1.0) {
+                return [
+                    'verdict'  => 'CẮT LỖ NGAY',
+                    'analysis' => "HTF đang GIẢM trong khi lệnh LONG — bias ngược chiều. P&L {$pnlPct}%, cắt lỗ.",
+                    'sl_advice' => null,
+                    'tp_advice' => null,
+                ];
+            }
+            if (!$isLong && $htfBull && $pnlPct < -1.0) {
+                return [
+                    'verdict'  => 'CẮT LỖ NGAY',
+                    'analysis' => "HTF đang TĂNG trong khi lệnh SHORT — bias ngược chiều. P&L {$pnlPct}%, cắt lỗ.",
+                    'sl_advice' => null,
+                    'tp_advice' => null,
+                ];
+            }
+        }
+
+        // ── Điều kiện 3: SL đã dùng ≥70% ──
+        if ($sl && $entry > 0 && $pnlPct < 0) {
+            $slDist   = abs($entry - $sl);
+            $usedDist = abs($currentPrice - $entry);
+            $usedPct  = $slDist > 0 ? ($usedDist / $slDist * 100) : 0;
+
+            if ($usedPct >= 70) {
+                return [
+                    'verdict'  => 'CẮT LỖ NGAY',
+                    'analysis' => "Đã dùng " . round($usedPct) . "% quãng đường đến SL. Cắt lỗ theo kỷ luật.",
+                    'sl_advice' => null,
+                    'tp_advice' => null,
+                ];
+            }
+        }
+
+        return null; // Không có tín hiệu cứng → để AI quyết định
     }
 }
