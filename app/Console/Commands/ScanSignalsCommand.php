@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Events\SignalStatusChanged;
 use App\Models\TradingSignal;
 use App\Services\BinanceService;
-use App\Services\CryptoSignalService;
 use App\Services\PriceActionService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -29,7 +28,6 @@ class ScanSignalsCommand extends Command
         private BinanceService     $binanceService,
         private PriceActionService $priceActionService,
         private TelegramService    $telegramService,
-        private CryptoSignalService $cryptoSignalService,
     ) {
         parent::__construct();
 
@@ -399,51 +397,12 @@ class ScanSignalsCommand extends Command
     // PHẦN 2: SCAN SETUP MỚI
     // ══════════════════════════════════════════════════════════════
 
-    private const METALS = ['XAGUSDT', 'XAUUSDT'];
-
     private function scan(): void
     {
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
-            if (in_array($symbol, self::METALS)) {
-                $this->scanPair($symbol, $timeframe, 'smc');
-            } else {
-                $this->scanCrypto($symbol);
-            }
+            $this->scanPair($symbol, $timeframe, 'smc');
         }
-    }
-
-    private function scanCrypto(string $symbol): bool
-    {
-        $currentPrice = $this->binanceService->getPrice($symbol);
-        if (!$currentPrice) {
-            $this->warn("[{$symbol}] Không lấy được giá");
-            return false;
-        }
-
-        $signal = $this->cryptoSignalService->analyze($symbol, (float) $currentPrice);
-
-        if (!$signal) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/4h/crypto — không có setup");
-            return false;
-        }
-
-        // Dedup: không gửi cùng signal trong 2h
-        $dedupKey = 'crypto_signal_' . $symbol . '_' . $signal['type'];
-        if (\Illuminate\Support\Facades\Cache::has($dedupKey)) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol} dedup — skip");
-            return false;
-        }
-        \Illuminate\Support\Facades\Cache::put($dedupKey, true, now()->addHours(2));
-
-        $capital  = (float) $this->option('capital');
-        $funding  = $signal['funding_rate'] ?? 0;
-        $lsRatio  = $signal['ls_ratio'] ?? 0.5;
-
-        $this->telegramService->sendCryptoSignalAlert($symbol, '4h', $signal, $currentPrice, $capital, $funding, $lsRatio);
-        $this->info('[' . now()->format('H:i:s') . "] {$symbol}/4h/crypto — {$signal['type']} signal sent");
-
-        return true;
     }
 
     private function getGoldTrend(): array

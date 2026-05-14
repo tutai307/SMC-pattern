@@ -344,10 +344,7 @@ class TelegramService
         $rr    = $slPct > 0 ? round($tpPct / $slPct, 1) : 0;
 
         $dir      = str_contains(strtolower($type), 'mua') ? '📈 LONG' : '📉 SHORT';
-        $isElliot = $method === 'elliot';
-        $header   = $isElliot
-            ? '🌊 <b>SÓNG ELLIOTT — AUTO SCAN</b>'
-            : ($isSniper ? '⚡ <b>SNIPER SETUP DETECTED</b> ⚡' : '🔍 <b>SETUP MỚI — AUTO SCAN</b>');
+        $header   = $isSniper ? '⚡ <b>SNIPER SETUP DETECTED</b> ⚡' : '🔍 <b>SETUP MỚI — AUTO SCAN</b>';
 
         $priceDiff = $entry > 0 ? round(abs($currentPrice - $entry) / $entry * 100, 2) : 0;
         $proximity = $currentPrice <= $entry
@@ -389,7 +386,7 @@ class TelegramService
 
         $this->send(
             $header . "\n"
-            . "📊 Method: <b>" . ($isElliot ? '🌊 Elliott Wave' : '📐 SMC Smart Money') . "</b>\n"
+            . "📊 Method: <b>📐 SMC Smart Money</b>\n"
             . "━━━━━━━━━━━━━━━\n"
             . "💎 <b>{$symbol}</b> · {$timeframe} · {$dir}\n"
             . "🏷 Pattern: <code>{$pattern}</code>\n"

@@ -150,10 +150,9 @@
                     <span class="hidden sm:inline">Chart</span>
                 </h2>
                 <div class="flex flex-wrap gap-1.5 justify-end">
-                    <!-- Method Toggle -->
+                    <!-- Method: SMC only -->
                     <div class="flex bg-white/5 p-1 rounded-lg">
-                        <button data-method="smc" class="method-btn px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'smc' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">SMC</button>
-                        <button data-method="elliot" class="method-btn px-3 py-1 rounded-md text-[10px] font-bold transition-all {{ ($method ?? 'smc') == 'elliot' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300' }}">ELLIOT</button>
+                        <span class="px-3 py-1 rounded-md text-[10px] font-bold bg-blue-600 text-white shadow-md">SMC</span>
                     </div>
 
                     <button data-tf="15m" class="tf-btn px-3 md:px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all {{ $timeframe == '15m' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-400 hover:bg-white/10' }}">M15</button>
@@ -508,41 +507,6 @@
                 </div>
             </div>
 
-            @if($method === 'elliot' && !empty($analysis['waves']) && !empty($analysis['fibonacci']))
-            @php $fib = $analysis['fibonacci']; @endphp
-            <div class="glass-card p-3 md:p-4 border border-purple-500/20">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider">🌊 Fibonacci Elliott</h3>
-                    <span class="text-[10px] px-2 py-0.5 rounded-full font-bold {{ $fib['is_bullish'] ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400' }}">
-                        {{ $fib['is_bullish'] ? '▲ TĂNG' : '▼ GIẢM' }}
-                    </span>
-                </div>
-                <div class="grid grid-cols-2 gap-1 text-[10px] mb-3">
-                    <div class="text-slate-500">Swing High</div>
-                    <div class="text-right font-mono text-red-400">${{ number_format($fib['swing_high'], 4) }}</div>
-                    <div class="text-slate-500">Swing Low</div>
-                    <div class="text-right font-mono text-green-400">${{ number_format($fib['swing_low'], 4) }}</div>
-                </div>
-                <div class="text-[9px] text-slate-600 font-bold uppercase mb-1">Retracement</div>
-                <div class="space-y-1 mb-3">
-                    @foreach($fib['retracement_levels'] as $lvl)
-                    <div class="flex justify-between text-[10px]">
-                        <span class="text-slate-500">{{ $lvl['ratio'] }}</span>
-                        <span class="font-mono {{ $fib['is_bullish'] ? 'text-green-400/80' : 'text-red-400/80' }}">${{ number_format($lvl['price'], 4) }}</span>
-                    </div>
-                    @endforeach
-                </div>
-                <div class="text-[9px] text-slate-600 font-bold uppercase mb-1">Extension (Target)</div>
-                <div class="space-y-1">
-                    @foreach(array_slice($fib['extension_levels'], 0, 3) as $lvl)
-                    <div class="flex justify-between text-[10px]">
-                        <span class="text-slate-500">{{ $lvl['ratio'] }}</span>
-                        <span class="font-mono text-blue-400/80">${{ number_format($lvl['price'], 4) }}</span>
-                    </div>
-                    @endforeach
-                </div>
-            </div>
-            @endif
 
             <div class="glass-card p-3 md:p-6">
                 <h3 class="text-slate-400 text-xs font-bold uppercase mb-3 md:mb-4 tracking-wider">Phân tích Thị trường</h3>
@@ -1007,123 +971,6 @@
                     });
                 }
 
-                // Draw Elliot Waves (ZigZag) với animation mượt mà
-                if (analysis.method === 'elliot' && analysis.waves.length > 0) {
-                    // Màu theo loại sóng
-                    const impulseLabels  = ['1','3','5'];
-                    const correctLabels  = ['2','4'];
-                    const abcLabels      = ['A','B','C'];
-
-                    const wavePointColor = (label) => {
-                        if (impulseLabels.includes(label)) return '#22c55e';  // Xanh lá — sóng đẩy
-                        if (correctLabels.includes(label)) return '#ef4444';  // Đỏ — sóng điều chỉnh
-                        return '#a78bfa';                                       // Tím — A-B-C
-                    };
-
-                    const waveSeries = chart.addLineSeries({
-                        color: 'rgba(245, 158, 11, 0.85)',
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        lastValueVisible: false,
-                        priceLineVisible: false,
-                        crosshairMarkerVisible: false,
-                    });
-
-                    // Sắp xếp theo time để đảm bảo LightweightCharts không lỗi
-                    const waveData = analysis.waves
-                        .map(w => ({ time: Math.floor(w.time / 1000), value: w.price, label: w.label, type: w.type }))
-                        .sort((a, b) => a.time - b.time);
-
-                    // Tập hợp tất cả markers một lần — FIX bug setMarkers trong loop
-                    const allMarkers = waveData.map(w => ({
-                        time: w.time,
-                        position: w.type === 'high' ? 'aboveBar' : 'belowBar',
-                        color: wavePointColor(w.label),
-                        shape: 'circle',
-                        text: w.label,
-                        size: abcLabels.includes(w.label) ? 1.5 : 2,
-                    }));
-
-                    // Price lines tại các điểm chốt quan trọng
-                    waveData.forEach(w => {
-                        if (['1','3','5'].includes(w.label)) {
-                            candleSeries.createPriceLine({
-                                price: w.value,
-                                color: 'rgba(34, 197, 94, 0.25)',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dashed,
-                                axisLabelVisible: true,
-                                title: `W${w.label}`,
-                            });
-                        }
-                        if (w.label === 'C') {
-                            candleSeries.createPriceLine({
-                                price: w.value,
-                                color: 'rgba(167, 139, 250, 0.35)',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dashed,
-                                axisLabelVisible: true,
-                                title: 'WC',
-                            });
-                        }
-                    });
-
-                    // Animation: vẽ từng điểm một với delay 80ms
-                    let step = 0;
-                    function animateWave() {
-                        if (step >= waveData.length) {
-                            waveSeries.setMarkers(allMarkers);
-                            return;
-                        }
-                        waveSeries.setData(waveData.slice(0, step + 1).map(d => ({ time: d.time, value: d.value })));
-                        step++;
-                        setTimeout(animateWave, 80);
-                    }
-                    // Delay nhỏ để chờ candles render xong
-                    setTimeout(animateWave, 200);
-
-                    // Draw Fibonacci levels
-                    const fib = analysis.fibonacci;
-                    if (fib && fib.swing_high) {
-                        const isUp = fib.is_bullish;
-
-                        (fib.retracement_levels || []).forEach(level => {
-                            candleSeries.createPriceLine({
-                                price: level.price,
-                                color: isUp ? 'rgba(34, 197, 94, 0.55)' : 'rgba(239, 68, 68, 0.55)',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dashed,
-                                axisLabelVisible: true,
-                                title: 'Fib ' + level.ratio,
-                            });
-                        });
-
-                        (fib.extension_levels || []).forEach(level => {
-                            candleSeries.createPriceLine({
-                                price: level.price,
-                                color: 'rgba(59, 130, 246, 0.45)',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dotted,
-                                axisLabelVisible: true,
-                                title: 'Ext ' + level.ratio,
-                            });
-                        });
-
-                        // Projected direction arrow at the last wave point
-                        const lastWd = waveData[waveData.length - 1];
-                        if (lastWd) {
-                            allMarkers.push({
-                                time: lastWd.time,
-                                position: isUp ? 'belowBar' : 'aboveBar',
-                                color: isUp ? '#22c55e' : '#ef4444',
-                                shape: isUp ? 'arrowUp' : 'arrowDown',
-                                text: isUp ? '▲ Kỳ vọng tăng' : '▼ Kỳ vọng giảm',
-                                size: 2,
-                            });
-                        }
-                    }
-                }
-
                 chart.timeScale().fitContent();
 
             } catch (err) {
@@ -1273,14 +1120,6 @@
                     if (dot) { dot.className = dot.className.replace(/bg-blue-400|bg-slate-600|bg-slate-700/g,'').trim() + (active ? ' bg-blue-400' : ' bg-slate-600'); }
                 });
 
-                document.querySelectorAll('.method-btn').forEach(b => {
-                    const active = b.dataset.method === currentMethod;
-                    b.className = b.className
-                        .replace(/bg-blue-600 text-white shadow-md/g, '')
-                        .replace(/text-slate-500 hover:text-slate-300/g, '')
-                        .trim();
-                    b.classList.add(...(active ? ['bg-blue-600','text-white','shadow-md'] : ['text-slate-500','hover:text-slate-300']));
-                });
             }
 
             function reconnectPriceFeed(sym) {
@@ -1497,10 +1336,6 @@
                 btn.addEventListener('click', () => navigate(currentSymbol, btn.dataset.tf, currentMethod));
             });
 
-            // ── Intercept method buttons ──
-            document.querySelectorAll('.method-btn').forEach(btn => {
-                btn.addEventListener('click', () => navigate(currentSymbol, currentTimeframe, btn.dataset.method));
-            });
 
             // ── Intercept symbol autocomplete ──
             document.addEventListener('spa:navigate', e => {

@@ -19,7 +19,7 @@ class BacktestCommand extends Command
         {--risk=2 : Risk per trade in USD}
         {--capital=100 : Starting capital in USD}
         {--session : Apply London/NY session filter (07-10 & 13-17 UTC)}
-        {--method=smc : Analysis method (smc/elliot)}
+        {--method=smc : Analysis method (smc)}
         {--rr=2 : Risk:Reward target multiplier (e.g. 2 = 1:2, 3 = 1:3)}
         {--min-rr=1.4 : Minimum signal R:R to accept (filter weak setups)}
         {--adx=25 : Minimum ADX threshold (default 25, lower=more signals)}
@@ -36,7 +36,9 @@ class BacktestCommand extends Command
         {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}
         {--vision : Tải dữ liệu từ data.binance.vision thay Binance API (cho backtest dài ngày, cache local)}';
 
-    protected $description = 'Walk-forward backtest SMC/Elliott signals on historical Binance klines (no AI scoring)';
+
+
+    protected $description = 'Walk-forward backtest SMC signals on historical Binance klines (no AI scoring)';
 
     public function handle(BinanceService $binance, PriceActionService $service): int
     {
@@ -155,6 +157,8 @@ class BacktestCommand extends Command
         $scanned      = 0;
         // OB cooldown: [entry_price => candle_index_cooldown_until]
         $obCooldown   = [];
+        // Dedup: track candle index of last signal per direction
+        $lastSignalCandle = ['LONG' => -999, 'SHORT' => -999];
 
         for ($i = $startIdx; $i < count($klines1h); $i++) {
             $candle = $klines1h[$i];
@@ -169,7 +173,7 @@ class BacktestCommand extends Command
 
             // ── Check active signal ──────────────────────────────────────
             if ($activeSignal) {
-                $isLong = str_contains($activeSignal['type'], 'MUA');
+                $isLong = str_contains($activeSignal['type'], 'MUA') || $activeSignal['type'] === 'LONG';
                 // Check fill first
                 if (!$activeSignal['filled']) {
                     $filled = $isLong
@@ -316,7 +320,7 @@ class BacktestCommand extends Command
             $slDist = abs($entry - $sl);
             if ($slDist <= 0) continue;
 
-            $isLongEntry = str_contains(strtolower($sig['type'] ?? ''), 'mua');
+            $isLongEntry = str_contains(strtolower($sig['type'] ?? ''), 'mua') || ($sig['type'] ?? '') === 'LONG';
             $tp = $overrideTp
                 ? ($isLongEntry
                     ? round($entry + $slDist * $rrTarget, 8)
@@ -336,6 +340,11 @@ class BacktestCommand extends Command
                 }
             }
             if ($cooledDown) continue;
+
+            // Dedup: không tạo signal cùng hướng trong 20 candles
+            $dir = $isLongEntry ? 'LONG' : 'SHORT';
+            if ($i - ($lastSignalCandle[$dir] ?? -999) < 20) continue;
+            $lastSignalCandle[$dir] = $i;
 
             $activeSignal = [
                 'id'           => count($signals) + 1,

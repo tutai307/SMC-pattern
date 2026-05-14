@@ -78,23 +78,16 @@ class PriceActionService
         // Last candle timestamp — dùng cho session filter
         $lastCandleTs = (int)(end($candles)['time'] ?? 0);
 
-        // 4. Analysis by Method
-        $waves = [];
+        // 4. SMC Analysis
         $orderBlocks = [];
-        $fvgs = [];
 
-        if ($method === 'elliot') {
-            $waves = $this->detectElliotWaves($candles);
-            $signal = $this->generateElliotSignal($waves, end($candles)['close'], end($atr), end($adx), $structure, $htfStructure);
-        } else {
-            $fvgs = $this->detectFVG($candles);
-            $orderBlocks = $this->findHighQualityOB($candles, $fvgs);
-            $htfOBs = !empty($candlesHTF) ? $this->findHighQualityOB($candlesHTF, $this->detectFVG($candlesHTF)) : [];
-            foreach ($htfOBs as &$ob) { $ob['label'] = 'HTF ' . $ob['label']; }
-            $orderBlocks = array_merge($orderBlocks, array_slice($htfOBs, -2));
+        $fvgs = $this->detectFVG($candles);
+        $orderBlocks = $this->findHighQualityOB($candles, $fvgs);
+        $htfOBs = !empty($candlesHTF) ? $this->findHighQualityOB($candlesHTF, $this->detectFVG($candlesHTF)) : [];
+        foreach ($htfOBs as &$ob) { $ob['label'] = 'HTF ' . $ob['label']; }
+        $orderBlocks = array_merge($orderBlocks, array_slice($htfOBs, -2));
 
-            $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend);
-        }
+        $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend);
 
         // 5. Advanced AI Scoring + LocalScore
         $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
@@ -133,8 +126,8 @@ class PriceActionService
             'macro_trend' => $macroTrend,
             'orderBlocks' => $orderBlocks,
             'fvgs' => array_slice($fvgs, -5),
-            'waves' => $waves,
-            'fibonacci' => ($method === 'elliot' && !empty($waves)) ? $this->calculateElliotFibonacci($waves) : [],
+            'waves' => [],
+            'fibonacci' => [],
             'volumeProfile' => $volumeProfile,
             'signal' => $signal,
             'indicators' => [
@@ -784,260 +777,6 @@ class PriceActionService
         return ['bins' => $bins, 'poc' => $bins[0]['price'] ?? 0];
     }
 
-    /**
-     * Detect Elliot Waves with Rule Validation.
-     */
-    private function detectElliotWaves(array $candles): array
-    {
-        $count = count($candles);
-        if ($count < 50) return [];
-
-        // Adaptive window: đủ lớn để lọc noise nhưng không cắt quá nhiều dữ liệu gần nhất
-        $window = max(5, min(12, (int)($count / 40)));
-
-        $rawPivots = [];
-        for ($i = $window; $i < $count - $window; $i++) {
-            $isHigh = true; $isLow = true;
-            for ($j = $i - $window; $j <= $i + $window; $j++) {
-                if ($candles[$j]['high'] > $candles[$i]['high']) $isHigh = false;
-                if ($candles[$j]['low']  < $candles[$i]['low'])  $isLow  = false;
-            }
-            if ($isHigh) $rawPivots[] = ['type' => 'high', 'price' => $candles[$i]['high'], 'time' => $candles[$i]['time']];
-            if ($isLow)  $rawPivots[] = ['type' => 'low',  'price' => $candles[$i]['low'],  'time' => $candles[$i]['time']];
-        }
-
-        // FIX Bug#1: Enforce alternation — consecutive same-type pivots: keep the more extreme one
-        $pivots = [];
-        foreach ($rawPivots as $p) {
-            if (empty($pivots)) { $pivots[] = $p; continue; }
-            $last = end($pivots);
-            if ($last['type'] === $p['type']) {
-                if ($p['type'] === 'high' && $p['price'] >= $last['price']) {
-                    array_pop($pivots); $pivots[] = $p;
-                } elseif ($p['type'] === 'low' && $p['price'] <= $last['price']) {
-                    array_pop($pivots); $pivots[] = $p;
-                }
-            } else {
-                $pivots[] = $p;
-            }
-        }
-
-        $waves = [];
-
-        // Thử nhận dạng 5-sóng đẩy + A-B-C từ 9 pivot gần nhất
-        if (count($pivots) >= 9) {
-            $p = array_slice($pivots, -9);
-
-            // p[0]=origin, p[1]=W1, p[2]=W2, p[3]=W3, p[4]=W4, p[5]=W5, p[6]=A, p[7]=B, p[8]=C
-            $bullish = ($p[0]['type'] === 'low');
-
-            // Kiểm tra xen kẽ đúng chuẩn (low-high-low-high-...)
-            $validAlt = true;
-            for ($i = 0; $i < 9; $i++) {
-                $expected = (($bullish && $i % 2 === 0) || (!$bullish && $i % 2 === 1)) ? 'low' : 'high';
-                if ($p[$i]['type'] !== $expected) { $validAlt = false; break; }
-            }
-
-            if ($validAlt) {
-                // FIX Bug#2: Đo đúng độ dài sóng đẩy (1, 3, 5) — không phải sóng điều chỉnh
-                $len1 = abs($p[1]['price'] - $p[0]['price']);
-                $len3 = abs($p[3]['price'] - $p[2]['price']);
-                $len5 = abs($p[5]['price'] - $p[4]['price']);
-
-                // Elliott Rule: Sóng 3 không được là sóng ngắn nhất trong 1, 3, 5
-                $wave3NotShortest = ($len3 >= $len1 && $len3 >= $len5);
-
-                // FIX Bug#3: No-overlap rule đúng — đáy Sóng 4 không được xâm phạm đỉnh Sóng 1
-                $noOverlap = $bullish
-                    ? ($p[4]['price'] > $p[1]['price'])
-                    : ($p[4]['price'] < $p[1]['price']);
-
-                if ($wave3NotShortest && $noOverlap) {
-                    $labels = ['', '1', '2', '3', '4', '5', 'A', 'B', 'C'];
-                    foreach ($p as $idx => $pivot) {
-                        if ($labels[$idx] === '') continue;
-                        $waves[] = ['label' => $labels[$idx], 'price' => $pivot['price'], 'time' => $pivot['time'], 'type' => $pivot['type']];
-                    }
-                    return $waves;
-                }
-            }
-        }
-
-        // Fallback: chỉ gán A-B-C từ 3 pivot gần nhất
-        if (count($pivots) >= 3) {
-            $p      = array_slice($pivots, -3);
-            $labels = ['A', 'B', 'C'];
-            foreach ($p as $idx => $pivot) {
-                $waves[] = ['label' => $labels[$idx], 'price' => $pivot['price'], 'time' => $pivot['time'], 'type' => $pivot['type']];
-            }
-        }
-
-        return $waves;
-    }
-
-    private function calculateElliotFibonacci(array $waves): array
-    {
-        if (count($waves) < 3) return [];
-
-        $prices    = array_column($waves, 'price');
-        $swingHigh = max($prices);
-        $swingLow  = min($prices);
-        $range     = $swingHigh - $swingLow;
-
-        if ($range <= 0) return [];
-
-        $lastWave  = end($waves);
-        $firstWave = $waves[0];
-        $isBullish = $lastWave['price'] > $firstWave['price'];
-
-        $retracementLevels = [];
-        foreach ([0.236, 0.382, 0.5, 0.618, 0.786] as $r) {
-            $price = $isBullish
-                ? $swingHigh - $range * $r
-                : $swingLow  + $range * $r;
-            $retracementLevels[] = ['price' => round($price, 8), 'ratio' => round($r * 100, 1) . '%'];
-        }
-
-        $extensionLevels = [];
-        foreach ([1.0, 1.272, 1.618, 2.618] as $r) {
-            $price = $isBullish
-                ? $swingLow  + $range * $r
-                : $swingHigh - $range * $r;
-            $extensionLevels[] = ['price' => round($price, 8), 'ratio' => $r . 'x'];
-        }
-
-        return [
-            'swing_high'         => $swingHigh,
-            'swing_low'          => $swingLow,
-            'is_bullish'         => $isBullish,
-            'retracement_levels' => $retracementLevels,
-            'extension_levels'   => $extensionLevels,
-        ];
-    }
-
-    private function generateElliotSignal(array $waves, float $currentPrice, float $atr, float $adx = 0, array $structure = [], array $htfStructure = []): ?array
-    {
-        if (count($waves) < 3) return null;
-
-        // FIX Bug#7: Lọc thị trường đi ngang — Elliott Wave không có ý nghĩa khi ADX thấp
-        if ($adx > 0 && $adx < 20) return null;
-
-        $lastWave  = end($waves);
-        $firstWave = $waves[0];
-
-        // FIX Bug#4: isBullishImpulse xác định từ label '1' — sóng 1 tăng thì kết thúc tại đỉnh
-        $isBullishImpulse = ($firstWave['label'] === '1' && $firstWave['type'] === 'high');
-
-        // --- SÓNG ĐẨY 3 ---
-        $w1 = null; $w2 = null;
-        foreach ($waves as $w) {
-            if ($w['label'] === '1') $w1 = $w;
-            if ($w['label'] === '2') $w2 = $w;
-        }
-
-        if ($w1 && $w2) {
-            // FIX Bug#5: Kiểm tra proximity — chỉ vào lệnh khi giá vừa phá vỡ, không chase xa
-            $breakDist = abs($currentPrice - $w1['price']);
-
-            if ($isBullishImpulse && $currentPrice > $w1['price'] && $breakDist <= $atr * 1.5) {
-                $htfBull     = ($htfStructure['trend'] ?? '') === 'TĂNG GIÁ';
-                $sl          = $w2['price'] - ($atr * 0.3);
-                $tp          = $currentPrice + ($currentPrice - $sl) * 2.5;
-
-                // FIX Bug#6: Winrate động — tính theo điều kiện thực tế
-                $winrate = 58;
-                if ($adx >= 30) $winrate += 14;
-                elseif ($adx >= 25) $winrate += 9;
-                elseif ($adx >= 20) $winrate += 4;
-                if ($htfBull) $winrate += 12;
-                if ($structure['bos'] ?? false) $winrate += 8;
-
-                return [
-                    'type'             => 'MUA (SÓNG 3)',
-                    'entry'            => round($currentPrice, 2),
-                    'tp'               => round($tp, 2),
-                    'sl'               => round($sl, 2),
-                    'winrate'          => min(85, $winrate),
-                    'reason'           => "ELLIOT: Phá vỡ đỉnh Sóng 1 (ADX={$adx}). Bắt đầu Sóng 3 tăng. " . ($htfBull ? 'HTF xác nhận tăng.' : 'Cảnh báo: HTF chưa đồng thuận.'),
-                    'is_counter_trend' => !$htfBull,
-                ];
-            }
-
-            if (!$isBullishImpulse && $currentPrice < $w1['price'] && $breakDist <= $atr * 1.5) {
-                $htfBear     = ($htfStructure['trend'] ?? '') === 'GIẢM GIÁ';
-                $sl          = $w2['price'] + ($atr * 0.3);
-                $tp          = $currentPrice - ($sl - $currentPrice) * 2.5;
-
-                $winrate = 58;
-                if ($adx >= 30) $winrate += 14;
-                elseif ($adx >= 25) $winrate += 9;
-                elseif ($adx >= 20) $winrate += 4;
-                if ($htfBear) $winrate += 12;
-                if ($structure['bos'] ?? false) $winrate += 8;
-
-                return [
-                    'type'             => 'BÁN (SÓNG 3)',
-                    'entry'            => round($currentPrice, 2),
-                    'tp'               => round($tp, 2),
-                    'sl'               => round($sl, 2),
-                    'winrate'          => min(85, $winrate),
-                    'reason'           => "ELLIOT: Phá vỡ đáy Sóng 1 (ADX={$adx}). Bắt đầu Sóng 3 giảm. " . ($htfBear ? 'HTF xác nhận giảm.' : 'Cảnh báo: HTF chưa đồng thuận.'),
-                    'is_counter_trend' => !$htfBear,
-                ];
-            }
-        }
-
-        // --- SAU SÓNG C (kết thúc điều chỉnh) ---
-        if ($lastWave['label'] === 'C') {
-            $distFromC = abs($currentPrice - $lastWave['price']);
-            if ($distFromC > $atr * 2) return null; // Đã rời quá xa sóng C, không còn setup tốt
-
-            if ($lastWave['type'] === 'low') { // Sóng C kết thúc tại đáy → MUA
-                $htfBull = ($htfStructure['trend'] ?? '') !== 'GIẢM GIÁ';
-                $sl      = $lastWave['price'] - ($atr * 0.3);
-                $tp      = $currentPrice + ($currentPrice - $sl) * 2.5;
-
-                $winrate = 52;
-                if ($adx >= 20) $winrate += 8;
-                if ($htfBull) $winrate += 12;
-                if ($structure['choch'] ?? false) $winrate += 10;
-
-                return [
-                    'type'             => 'MUA (HỒI SAU C)',
-                    'entry'            => round($currentPrice, 2),
-                    'tp'               => round($tp, 2),
-                    'sl'               => round($sl, 2),
-                    'winrate'          => min(80, $winrate),
-                    'reason'           => "ELLIOT: Kết thúc sóng C giảm (ADX={$adx}). Kỳ vọng chu kỳ tăng mới.",
-                    'is_counter_trend' => !$htfBull,
-                ];
-            }
-
-            if ($lastWave['type'] === 'high') { // Sóng C kết thúc tại đỉnh → BÁN
-                $htfBear = ($htfStructure['trend'] ?? '') !== 'TĂNG GIÁ';
-                $sl      = $lastWave['price'] + ($atr * 0.3);
-                $tp      = $currentPrice - ($sl - $currentPrice) * 2.5;
-
-                $winrate = 52;
-                if ($adx >= 20) $winrate += 8;
-                if ($htfBear) $winrate += 12;
-                if ($structure['choch'] ?? false) $winrate += 10;
-
-                return [
-                    'type'             => 'BÁN (HỒI SAU C)',
-                    'entry'            => round($currentPrice, 2),
-                    'tp'               => round($tp, 2),
-                    'sl'               => round($sl, 2),
-                    'winrate'          => min(80, $winrate),
-                    'reason'           => "ELLIOT: Kết thúc sóng C tăng (ADX={$adx}). Kỳ vọng tiếp tục xu hướng giảm.",
-                    'is_counter_trend' => !$htfBear,
-                ];
-            }
-        }
-
-        return null;
-    }
-
     private function enrichWithAIScore(
         array $signal,
         array $recentCandles,
@@ -1128,7 +867,7 @@ class PriceActionService
                 $isSniper  = str_contains($signal['reason'] ?? '', 'SNIPER');
                 $patternStr = $signal['pattern'] ?? ($isSniper ? 'SNIPER ENTRY' : 'STANDARD');
 
-                $methodName = $method === 'elliot' ? 'Elliott Wave' : 'SMC';
+                $methodName = 'SMC';
 
                 $prompt = <<<PROMPT
 SYMBOL: {$symbol} | TF: {$timeframe} | METHOD: {$methodName}
