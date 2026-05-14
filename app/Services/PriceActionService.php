@@ -1392,6 +1392,18 @@ PROMPT;
         $bullCount = count(array_filter($last5, fn($c) => $c['close'] > $c['open']));
         $momentumStr = "{$bullCount} xanh / " . (5 - $bullCount) . " đỏ";
 
+        // Nến liên tiếp ngược chiều lệnh (consecutive candles against position)
+        $consecutiveAgainst = 0;
+        foreach (array_reverse(array_slice($candles, -8)) as $c) {
+            $isBull = $c['close'] > $c['open'];
+            if ($type === 'SHORT' && $isBull) $consecutiveAgainst++;
+            elseif ($type === 'LONG' && !$isBull) $consecutiveAgainst++;
+            else break;
+        }
+        $consecutiveStr = $consecutiveAgainst > 0
+            ? "⚠️ {$consecutiveAgainst} nến liên tiếp NGƯỢC chiều lệnh"
+            : "Không có chuỗi nến ngược chiều đáng lo";
+
         $prompt = <<<PROMPT
 SYMBOL: {$symbol} | TF: {$timeframe}
 
@@ -1409,6 +1421,7 @@ Trend HTF: {$htfStructure['trend']}
 ADX: {$adx} ({$this->adxDesc($adx)})
 ATR: {$atr}
 Momentum 5 nến: {$momentumStr}
+Chuỗi nến ngược chiều: {$consecutiveStr}
 Swing High 50 nến: {$swingH} (cách {$distToSwingH}%)
 Swing Low  50 nến: {$swingL} (cách {$distToSwingL}%)
 Order Blocks: {$obStr}
@@ -1418,9 +1431,13 @@ Với tư cách senior trader, hãy tư vấn trader này nên làm gì với l�
 YÊU CẦU: cite giá thực, không dùng câu chung chung. Phán quyết phải là 1 trong: GIỮ LỆNH / DI CHUYỂN SL / ĐIỀU CHỈNH TP / CHỐT LỜI NGAY / CẮT LỖ NGAY / CHỐT 50% + GIỮ 50%.
 
 NGUYÊN TẮC CỨNG — vi phạm là sai hoàn toàn:
-1. CẮT LỖ NGAY chỉ khi: giá đã dùng ≥ 60% quãng đường đến SL HOẶC có CHoCH ngược chiều rõ ràng trên LTF. Nếu chỉ âm nhẹ (<60% SL) mà không có CHoCH → GIỮ LỆNH hoặc DI CHUYỂN SL, KHÔNG cắt lỗ sớm.
+1. CẮT LỖ NGAY khi MỘT TRONG CÁC điều kiện sau:
+   a) Giá đã dùng ≥ 60% quãng đường đến SL
+   b) Có CHoCH ngược chiều rõ ràng trên LTF
+   c) ≥ 4 nến liên tiếp ngược chiều lệnh VÀ đang âm (P&L < 0) — momentum đã đổi chiều thực sự
+   d) HTF trend đã đổi ngược chiều lệnh (SHORT mà HTF TĂNG, hoặc LONG mà HTF GIẢM)
 2. CHỐT LỜI NGAY chỉ khi: giá đã đạt ≥ 70% quãng đường đến TP HOẶC có BOS ngược chiều. Không chốt lời sớm vì "sợ mất lợi nhuận".
-3. GIỮ LỆNH khi: SL chưa bị đe dọa nghiêm trọng (<60% quãng đường) và không có tín hiệu đảo chiều cấu trúc.
+3. GIỮ LỆNH khi: không thỏa bất kỳ điều kiện nào ở (1) và SL chưa bị đe dọa.
 
 Trả về JSON:
 {
