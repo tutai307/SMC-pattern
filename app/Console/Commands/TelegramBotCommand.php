@@ -308,11 +308,14 @@ PROMPT;
         }
 
         // Detect loại giao dịch → timeframe (regex ưu tiên hơn keyword check)
+        $explicitTf = preg_match('/\b(4h|h4|swing|1d|d1|1h|h1|intraday|day|scalp|15m|m15|5m|m5)\b/i', $lower);
         $tradeType = 'intraday'; // default 1h
         if (preg_match('/\b(4h|h4|swing|1d|d1)\b/i', $lower)) {
             $tradeType = 'swing';
         } elseif (preg_match('/\b(1h|h1|intraday|day)\b/i', $lower)) {
             $tradeType = 'intraday';
+        } elseif (preg_match('/\b(scalp|15m|m15|5m|m5)\b/i', $lower)) {
+            $tradeType = 'scalp';
         }
 
         // Detect symbol (ưu tiên pattern XYZusdt, sau đó alias)
@@ -330,6 +333,11 @@ PROMPT;
             foreach ($aliases as $alias => $full) {
                 if (preg_match('/\b' . $alias . '\b/i', $lower)) { $symbol = $full; break; }
             }
+        }
+
+        // Metals mặc định 15m nếu user không chỉ định timeframe
+        if (!$explicitTf && in_array($symbol, ['XAGUSDT', 'XAUUSDT'])) {
+            $tradeType = 'scalp';
         }
 
         if (!$symbol) return null;
