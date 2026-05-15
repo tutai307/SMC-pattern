@@ -243,6 +243,7 @@ NGUYÊN TẮC CỨNG:
 - KHÔNG hỏi clarifying questions — tự suy luận từ context và data
 - Trả lời THẲNG: giá bao nhiêu, nên làm gì, tại sao — xong
 - Tối đa 4-5 dòng. Emoji ít thôi. Tiếng Việt.
+- KHÔNG dùng bảng markdown (|col|col|). KHÔNG dùng header (---). Chỉ text thuần + bullet.
 
 === DỮ LIỆU THỰC TẾ ({$now}) ===
 Watchlist: {$watchlist} | Winrate: {$wrStr}
@@ -276,7 +277,7 @@ PROMPT;
                 'json' => [
                     'model'       => 'anthropic/claude-sonnet-4-5',
                     'temperature' => 0.7,
-                    'max_tokens'  => 600,
+                    'max_tokens'  => 350,
                     'messages'    => array_merge(
                         [['role' => 'system', 'content' => $systemPrompt]],
                         $history

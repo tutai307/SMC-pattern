@@ -491,18 +491,37 @@ class TelegramService
     {
         if (!$this->isConfigured()) return;
 
-        try {
-            (new Client())->post("{$this->baseUrl}/sendMessage", [
-                'json' => [
-                    'chat_id'    => $this->chatId,
-                    'text'       => $text,
-                    'parse_mode' => 'HTML',
-                ],
-                'timeout' => 10,
-            ]);
-        } catch (\Exception $e) {
-            \Log::error('Telegram send failed: ' . $e->getMessage());
+        // Telegram max 4096 chars — split nếu dài hơn
+        $chunks = $this->splitMessage($text, 4000);
+        foreach ($chunks as $chunk) {
+            try {
+                (new Client())->post("{$this->baseUrl}/sendMessage", [
+                    'json' => [
+                        'chat_id'    => $this->chatId,
+                        'text'       => $chunk,
+                        'parse_mode' => 'HTML',
+                    ],
+                    'timeout' => 10,
+                ]);
+            } catch (\Exception $e) {
+                \Log::error('Telegram send failed: ' . $e->getMessage());
+            }
         }
+    }
+
+    private function splitMessage(string $text, int $maxLen): array
+    {
+        if (mb_strlen($text) <= $maxLen) return [$text];
+
+        $chunks = [];
+        while (mb_strlen($text) > $maxLen) {
+            // Split tại newline gần nhất trước maxLen
+            $pos = mb_strrpos(mb_substr($text, 0, $maxLen), "\n") ?: $maxLen;
+            $chunks[] = mb_substr($text, 0, $pos);
+            $text = mb_substr($text, $pos + 1);
+        }
+        if ($text !== '') $chunks[] = $text;
+        return $chunks;
     }
 
     public function sendCryptoSignalAlert(
