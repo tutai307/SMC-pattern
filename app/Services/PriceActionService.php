@@ -4,13 +4,19 @@ namespace App\Services;
 
 class PriceActionService
 {
-    private int $adxThreshold    = 25;
-    private int $minConfidence   = 60;
+    private int    $adxThreshold    = 25;
+    private int    $minConfidence   = 60;
+    private string $slMode         = 'new';
 
     public function setThresholds(int $adx, int $minConfidence): void
     {
         $this->adxThreshold  = $adx;
         $this->minConfidence = $minConfidence;
+    }
+
+    public function setSLMode(string $mode): void
+    {
+        $this->slMode = $mode;
     }
 
     /**
@@ -569,9 +575,17 @@ class PriceActionService
 
                 if ($confidence < $this->minConfidence) continue;
 
-                $sl = $zone['bottom'] - ($lastAtr * 0.8);
-                // SL tối thiểu 1.5% dưới entry — tránh bị quét bởi noise
-                $sl = min($sl, $entry * 0.985);
+                // SL calculation — mode-aware
+                if ($this->slMode === 'old') {
+                    // Old logic: OB bottom + tiny 0.1% buffer
+                    $sl = $zone['bottom'] - ($entry * 0.001);
+                } else {
+                    // New (ATR-based): wider of OB-based and ATR×1.5
+                    $atrSl = $entry - ($lastAtr * 1.5);
+                    $obSl  = $zone['bottom'] - ($lastAtr * 0.8);
+                    $sl    = min($atrSl, $obSl);
+                    $sl    = min($sl, $entry * 0.985);
+                }
                 $slDist = $entry - $sl;
                 // TP = next swing high (liquidity pool), fallback to 2x R:R
                 $swingHighPrices = array_column($structure['swing_highs'] ?? [], 'price');
@@ -658,9 +672,17 @@ class PriceActionService
 
                 if ($confidence < $this->minConfidence) continue;
 
-                $sl = $zone['top'] + ($lastAtr * 0.8);
-                // SL tối thiểu 1.5% trên entry — tránh bị quét bởi noise
-                $sl = max($sl, $entry * 1.015);
+                // SL calculation — mode-aware
+                if ($this->slMode === 'old') {
+                    // Old logic: OB top + tiny 0.1% buffer
+                    $sl = $zone['top'] + ($entry * 0.001);
+                } else {
+                    // New (ATR-based): wider of OB-based and ATR×1.5
+                    $atrSl = $entry + ($lastAtr * 1.5);
+                    $obSl  = $zone['top'] + ($lastAtr * 0.8);
+                    $sl    = max($atrSl, $obSl);
+                    $sl    = max($sl, $entry * 1.015);
+                }
                 $slDist = $sl - $entry;
                 // TP = next swing low (liquidity pool), fallback to 2x R:R
                 $swingLowPrices = array_column($structure['swing_lows'] ?? [], 'price');

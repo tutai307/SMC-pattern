@@ -34,7 +34,8 @@ class BacktestCommand extends Command
         {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}
         {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}
         {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}
-        {--vision : Tải dữ liệu từ data.binance.vision thay Binance API (cho backtest dài ngày, cache local)}';
+        {--vision : Tải dữ liệu từ data.binance.vision thay Binance API (cho backtest dài ngày, cache local)}
+        {--sl-mode=new : SL calculation mode: "old" (OB edge + 0.1% buffer) or "new" (ATR×1.5 adaptive)}';
 
 
 
@@ -62,8 +63,9 @@ class BacktestCommand extends Command
         $aiHigh        = (int)   $this->option('ai-high');
         $riskHigh      = (float) $this->option('risk-high');
         $overrideTp    = (bool)  $this->option('override-tp');
-        $localScore    = (bool)  $this->option('local-score');
-        $useVision     = (bool)  $this->option('vision');
+        $localScore    = (bool)   $this->option('local-score');
+        $useVision     = (bool)   $this->option('vision');
+        $slMode        = (string) $this->option('sl-mode');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -82,7 +84,8 @@ class BacktestCommand extends Command
             : ($useAI ? "AI≥{$aiMin}" : ($localScore ? 'AI: OFF | LOCAL-SCORE: ON' : 'AI: OFF'));
         $structLabel  = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
         $tpLabel      = $overrideTp ? "TP=override(1:{$rrTarget})" : "TP=signal";
-        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}  |  {$tpLabel}");
+        $slLabel      = "SL=" . strtoupper($slMode);
+        $this->info("  ADX≥{$adxThreshold}  |  Confidence≥{$minConfidence}  |  Min R:R {$minRR}  |  {$aiLabel}  |  {$structLabel}  |  {$tpLabel}  |  {$slLabel}");
         $this->info("═══════════════════════════════════════════════════");
 
         // ── 1. Fetch klines ──────────────────────────────────────────────
@@ -148,8 +151,9 @@ class BacktestCommand extends Command
             $this->line('  Cache MISS — chạy mới...');
         }
 
-        // Apply custom thresholds for backtest exploration
+        // Apply custom thresholds and SL mode for backtest exploration
         $service->setThresholds($adxThreshold, $minConfidence);
+        $service->setSLMode($slMode);
 
         // ── 3. Walk-forward simulation ───────────────────────────────────
         $signals      = [];

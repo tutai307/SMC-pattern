@@ -479,7 +479,8 @@ class TelegramService
               . "🎯 TP: <code>" . number_format($tp, 2) . "</code> (+{$tpPct}%)\n"
               . "🛡 SL: <code>" . number_format($sl, 2) . "</code> (-{$slPct}%) | R:R 1:2.5\n"
               . "💰 Risk: <b>{$riskPct}%</b>\n"
-              . $lotLine;
+              . $lotLine
+              . "\n✅ Gõ <b>ok</b> để vào lệnh | ❌ Bỏ qua để huỷ";
 
         $this->send($text);
     }

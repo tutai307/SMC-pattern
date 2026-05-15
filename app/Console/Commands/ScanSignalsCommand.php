@@ -69,7 +69,7 @@ class ScanSignalsCommand extends Command
             }
 
             // ── AI review lệnh đang chạy mỗi 10 phút ──
-            if ($now - $this->lastAiReviewAt >= 600) {
+            if ($now - $this->lastAiReviewAt >= 300) {
                 try {
                     $this->autoReviewRunningSignals();
                 } catch (\Exception $e) {
@@ -606,7 +606,12 @@ class ScanSignalsCommand extends Command
 
         $atr    = (float) ($analysis['indicators']['atr'] ?? 0);
         $buffer = $price * 0.001;
-        $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
+        $obSl   = $isDemand ? ($low - $buffer) : ($high + $buffer);
+        // ATR-based SL: wider of OB-edge vs ATR*1.5 — SL never narrower than before
+        $atrSl  = $atr > 0
+            ? ($isDemand ? ($price - $atr * 1.5) : ($price + $atr * 1.5))
+            : $obSl;
+        $sl     = $isDemand ? round(min($obSl, $atrSl), 4) : round(max($obSl, $atrSl), 4);
         $slDist = abs($price - $sl);
         if ($slDist <= 0) return;
 
@@ -650,21 +655,21 @@ class ScanSignalsCommand extends Command
         $capital = (float) $this->option('capital');
         $this->telegramService->sendZoneHitAlert($symbol, $timeframe, $isDemand, $price, $tp, $sl, $score, $riskPct, $capital);
 
-        // Lưu vào DB để hệ thống tự theo dõi TP/SL
-        \App\Models\TradingSignal::create([
-            'symbol'      => $symbol,
-            'timeframe'   => $timeframe,
-            'type'        => $isDemand ? 'LONG' : 'SHORT',
-            'entry_price' => $price,
-            'tp_price'    => $tp,
-            'sl_price'    => $sl,
-            'winrate'     => $score,
-            'status'      => 'PENDING',
-            'reason'      => 'Zone Hit — OB ' . ($isDemand ? 'demand' : 'supply') . ' ' . number_format($low, 2) . '-' . number_format($high, 2),
-            'capital'     => $capital,
-        ]);
+        // Lưu pending vào cache — chờ user reply "ok" mới lưu DB
+        $chatId = config('services.telegram.chat_id');
+        Cache::put("scan_pending_{$chatId}", [
+            'symbol'    => $symbol,
+            'timeframe' => $timeframe,
+            'type'      => $isDemand ? 'LONG' : 'SHORT',
+            'entry'     => $price,
+            'tp'        => $tp,
+            'sl'        => $sl,
+            'winrate'   => $score,
+            'reason'    => 'Zone Hit — OB ' . ($isDemand ? 'demand' : 'supply') . ' ' . number_format($low, 2) . '-' . number_format($high, 2),
+            'capital'   => $capital,
+        ], now()->addHours(2));
 
-        $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit saved: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
+        $this->info('[' . now()->format('H:i:s') . "] 🎯 Zone Hit pending (chờ ok): {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " @ {$price} Score:{$score}");
     }
 
     private function fireZoneApproach(string $symbol, string $timeframe, array $ob, float $price, float $dist, string $htfTrend, float $atr = 0): void
@@ -676,7 +681,12 @@ class ScanSignalsCommand extends Command
         // Tính SL của approach alert để check ATR minimum
         $entry  = $isDemand ? $high : $low;
         $buffer = $entry * 0.001;
-        $sl     = $isDemand ? round($low - $buffer, 4) : round($high + $buffer, 4);
+        $obSl   = $isDemand ? ($low - $buffer) : ($high + $buffer);
+        // ATR-based SL: wider of OB-edge vs ATR*1.5 — SL never narrower than before
+        $atrSl  = $atr > 0
+            ? ($isDemand ? ($entry - $atr * 1.5) : ($entry + $atr * 1.5))
+            : $obSl;
+        $sl     = $isDemand ? round(min($obSl, $atrSl), 4) : round(max($obSl, $atrSl), 4);
         $slDist = abs($entry - $sl);
 
         // Bỏ qua nếu SL quá nhỏ — zone không đủ rộng để trade thực tế
