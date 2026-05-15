@@ -751,6 +751,22 @@ class ScanSignalsCommand extends Command
             ], now()->addMinutes($cooldownMinutes));
 
             \Log::warning("Circuit breaker [{$symbol} {$timeframe}]: range {$lastRange} = " . round($lastRange / $atr, 1) . "x ATR — pause {$cooldownMinutes}min");
+
+            // Cancel tất cả PENDING signals của symbol này
+            $cancelled = TradingSignal::where('symbol', $symbol)
+                ->where('status', 'PENDING')
+                ->update(['status' => 'CANCELLED']);
+
+            if ($cancelled > 0) {
+                \Log::warning("Circuit breaker cancelled {$cancelled} PENDING signal(s) for {$symbol}");
+                $ratio = round($lastRange / $atr, 1);
+                $this->telegramService->sendRaw(
+                    "⚡ <b>Circuit Breaker — {$symbol}</b>\n"
+                    . "Nến vừa đóng: range <b>{$ratio}x ATR</b> (black swan)\n"
+                    . "Đã huỷ <b>{$cancelled}</b> lệnh PENDING — tạm dừng scan <b>{$cooldownMinutes} phút</b>"
+                );
+            }
+
             return true;
         }
 
