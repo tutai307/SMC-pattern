@@ -14,8 +14,10 @@ class TelegramBotCommand extends Command
     protected $signature   = 'telegram:bot';
     protected $description = 'Long polling Telegram bot — chat tự nhiên để lấy và theo dõi lệnh';
 
-    private int    $offset = 0;
-    private string $chatId = '';
+    private int    $offset       = 0;
+    private string $chatId       = '';   // primary (personal)
+    private array  $allowedIds   = [];   // tất cả IDs được phép nhắn
+    private string $activeChatId = '';   // chat ID của message đang xử lý
 
     // Timeframe mapping theo loại giao dịch
     private array $tfMap = [
@@ -44,7 +46,10 @@ class TelegramBotCommand extends Command
             return;
         }
 
-        $this->chatId = (string) config('services.telegram.chat_id');
+        $raw              = (string) config('services.telegram.chat_id');
+        $ids              = array_values(array_filter(array_map('trim', explode(',', $raw))));
+        $this->chatId     = $ids[0] ?? '';
+        $this->allowedIds = $ids;
         $this->info('Telegram bot đang lắng nghe...');
 
         while (true) {
@@ -65,6 +70,11 @@ class TelegramBotCommand extends Command
         }
     }
 
+    private function reply(string $text): void
+    {
+        $this->reply($text, $this->activeChatId ?: $this->chatId);
+    }
+
     // ─── Router ────────────────────────────────────────────────────────────────
 
     private function processUpdate(array $update): void
@@ -72,7 +82,9 @@ class TelegramBotCommand extends Command
         $message = $update['message'] ?? null;
         if (!$message || !isset($message['text'])) return;
 
-        if ((string) ($message['chat']['id'] ?? '') !== $this->chatId) return;
+        $incomingId = (string) ($message['chat']['id'] ?? '');
+        if (!in_array($incomingId, $this->allowedIds)) return;
+        $this->activeChatId = $incomingId;
 
         $text = trim($message['text']);
 
@@ -98,7 +110,7 @@ class TelegramBotCommand extends Command
             $command === '/filled'                    => $this->cmdFilled($args),
             in_array($command, ['/cancel', '/c'])     => $this->cmdCancel($args),
             in_array($command, ['/status', '/s'])     => $this->cmdStatus(),
-            default                                   => $this->telegram->reply("Lệnh không hợp lệ. Gõ /help."),
+            default                                   => $this->reply("Lệnh không hợp lệ. Gõ /help."),
         };
     }
 
@@ -119,7 +131,7 @@ class TelegramBotCommand extends Command
                 if ($hasPending && preg_match('/(?<![a-zA-Z])' . preg_quote($w, '/') . '(?![a-zA-Z])/ui', $lower)) {
                     Cache::forget($pendingKey);
                     Cache::forget($scanPendingKey);
-                    $this->telegram->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
+                    $this->reply("Ok, bỏ qua. Nhắn lại bất cứ lúc nào.");
                     return;
                 }
             }
@@ -142,7 +154,7 @@ class TelegramBotCommand extends Command
                     }
                     $this->confirmPendingSignal($capital);
                 } else {
-                    $this->telegram->reply("Không có lệnh nào đang chờ.\n\nNhắn tên coin để phân tích, vd: <code>xag</code> hoặc <code>btcusdt 1h</code>");
+                    $this->reply("Không có lệnh nào đang chờ.\n\nNhắn tên coin để phân tích, vd: <code>xag</code> hoặc <code>btcusdt 1h</code>");
                 }
                 return;
             }
@@ -215,9 +227,9 @@ class TelegramBotCommand extends Command
                  . "HTF ({$htf}): <b>{$htfTrend}</b> | LTF (15m): <b>{$ltfTrend}</b>\n"
                  . "Nhắn <code>kèo " . strtolower(str_replace('USDT', '', $symbol)) . "</code> để phân tích SMC đầy đủ.";
 
-            $this->telegram->reply($msg);
+            $this->reply($msg);
         } catch (\Exception $e) {
-            $this->telegram->reply("Không lấy được giá {$symbol}: " . $e->getMessage());
+            $this->reply("Không lấy được giá {$symbol}: " . $e->getMessage());
             \Log::warning('quickPriceReply: ' . $e->getMessage());
         }
     }
@@ -249,7 +261,7 @@ class TelegramBotCommand extends Command
     {
         $apiKey = env('OPENROUTER_API_KEY');
         if (!$apiKey) {
-            $this->telegram->reply("AI chưa cấu hình (thiếu OPENROUTER_API_KEY).");
+            $this->reply("AI chưa cấu hình (thiếu OPENROUTER_API_KEY).");
             return;
         }
 
@@ -373,7 +385,7 @@ PROMPT;
             $reply   = trim($result['choices'][0]['message']['content'] ?? '');
 
             if (!$reply) {
-                $this->telegram->reply("Hmm, tôi không hiểu lắm. Thử nói lại nhé.");
+                $this->reply("Hmm, tôi không hiểu lắm. Thử nói lại nhé.");
                 return;
             }
 
@@ -392,11 +404,11 @@ PROMPT;
             $history[] = ['role' => 'assistant', 'content' => $reply];
             Cache::put($historyKey, array_slice($history, -8), now()->addHours(1));
 
-            $this->telegram->reply($reply);
+            $this->reply($reply);
 
         } catch (\Exception $e) {
             \Log::warning('TelegramBot AI: ' . $e->getMessage());
-            $this->telegram->reply("Xin lỗi, AI đang bận. Thử lại sau hoặc dùng /help để xem lệnh.");
+            $this->reply("Xin lỗi, AI đang bận. Thử lại sau hoặc dùng /help để xem lệnh.");
         }
     }
 
@@ -473,12 +485,12 @@ PROMPT;
     {
         ['symbol' => $symbol, 'tf' => $tf, 'htf' => $htf, 'label' => $label, 'capital' => $capital] = $parsed;
 
-        $this->telegram->reply("🔍 Đang phân tích <b>{$symbol}</b> — {$label}...\nVui lòng chờ ~15 giây.");
+        $this->reply("🔍 Đang phân tích <b>{$symbol}</b> — {$label}...\nVui lòng chờ ~15 giây.");
 
         try {
             $klines = $this->binance->getKlines($symbol, $tf, 500);
             if (empty($klines)) {
-                $this->telegram->reply("❌ Không lấy được dữ liệu <b>{$symbol}</b>. Kiểm tra lại tên coin.");
+                $this->reply("❌ Không lấy được dữ liệu <b>{$symbol}</b>. Kiểm tra lại tên coin.");
                 return;
             }
 
@@ -501,7 +513,7 @@ PROMPT;
             if (!$analysis['signal']) {
                 $adx   = round($analysis['indicators']['adx'] ?? 0, 1);
                 $trend = $analysis['structure']['trend'] ?? 'không rõ';
-                $this->telegram->reply(
+                $this->reply(
                     "📊 <b>{$symbol}</b> | {$label}\n"
                     . "━━━━━━━━━━━━━━━\n"
                     . "Xu hướng: <b>{$trend}</b> | ADX: {$adx}\n"
@@ -584,7 +596,7 @@ PROMPT;
                  . "📝 <i>{$sig['reason']}</i>";
 
             if ($aiSaysSkip) {
-                $this->telegram->reply($baseMsg . "\n\n⛔ <b>{$skipReason}</b> Chờ cơ hội tốt hơn.");
+                $this->reply($baseMsg . "\n\n⛔ <b>{$skipReason}</b> Chờ cơ hội tốt hơn.");
                 $this->info("  [{$symbol}] Phân tích xong → {$type}, skip: {$skipReason}");
                 return;
             }
@@ -592,7 +604,7 @@ PROMPT;
             $msg = $baseMsg . "\n\n"
                  . "❓ Vào lệnh? Gõ <b>ok</b> (hoặc <b>ok 500</b> kèm vốn) / <b>không</b>";
 
-            $this->telegram->reply($msg);
+            $this->reply($msg);
 
             // Lưu pending vào cache 10 phút (pre-flight thêm 1 bước)
             Cache::put("tg_pending_{$this->chatId}", [
@@ -610,7 +622,7 @@ PROMPT;
             $this->info("  [{$symbol}] Phân tích xong → {$type}, chờ xác nhận từ user.");
 
         } catch (\Exception $e) {
-            $this->telegram->reply("❌ Lỗi phân tích: " . $e->getMessage());
+            $this->reply("❌ Lỗi phân tích: " . $e->getMessage());
             \Log::error('Telegram analysis: ' . $e->getMessage());
         }
     }
@@ -627,7 +639,7 @@ PROMPT;
         $isScanSig = !Cache::has($pendingKey) && Cache::has($scanPendingKey);
 
         if (!$p) {
-            $this->telegram->reply("Không có lệnh nào đang chờ xác nhận. Nhắn tôi tên coin và loại lệnh để phân tích mới.");
+            $this->reply("Không có lệnh nào đang chờ xác nhận. Nhắn tôi tên coin và loại lệnh để phân tích mới.");
             return;
         }
 
@@ -640,7 +652,7 @@ PROMPT;
         if ($slHit) {
             Cache::forget($pendingKey);
             Cache::forget($scanPendingKey);
-            $this->telegram->reply(
+            $this->reply(
                 "⚠️ <b>Setup đã vô hiệu!</b>\n\n"
                 . "Giá hiện tại <code>{$currentPrice}</code> đã vượt qua SL <code>{$p['sl']}</code>.\n"
                 . "Lệnh bị huỷ tự động — không nên vào. Phân tích lại."
@@ -660,7 +672,7 @@ PROMPT;
         if ($htfBroken) {
             Cache::forget($pendingKey);
             Cache::forget($scanPendingKey);
-            $this->telegram->reply(
+            $this->reply(
                 "🚨 <b>HTF đảo chiều!</b>\n\n"
                 . "Xu hướng HTF ({$htf}): <b>{$htfStr['trend']}</b> — ngược chiều lệnh {$p['type']}.\n"
                 . "Setup không còn hợp lệ. Không vào lệnh."
@@ -671,7 +683,7 @@ PROMPT;
         // Cảnh báo nếu giá đã di chuyển xa entry (> 1%)
         $distPct = $p['entry'] > 0 ? round(abs($currentPrice - $p['entry']) / $p['entry'] * 100, 2) : 0;
         if ($distPct > 1) {
-            $this->telegram->reply(
+            $this->reply(
                 "⚠️ Giá đã cách entry <b>{$distPct}%</b> kể từ khi phân tích.\n"
                 . "Entry: <code>{$p['entry']}</code> | Giá hiện tại: <code>{$currentPrice}</code>\n"
                 . "Vẫn tiếp tục ghi lệnh..."
@@ -731,7 +743,7 @@ PROMPT;
                       . "💀 Rủi ro tối đa: <code>\${$riskAmt}</code> (2%) | R:R = 1:{$rr}";
         }
 
-        $this->telegram->reply(
+        $this->reply(
             "✅ <b>Đã ghi vào hệ thống!</b>\n\n"
             . "{$dir} <b>{$signal->symbol}</b> | {$signal->timeframe}\n"
             . "━━━━━━━━━━━━━━━\n"
@@ -808,7 +820,7 @@ PROMPT;
 
     private function cmdHelp(): void
     {
-        $this->telegram->reply(
+        $this->reply(
             "🤖 <b>Felix Bot</b>\n\n"
             . "<b>Phân tích:</b>\n"
             . "• <code>xag</code> — phân tích XAGUSDT 1h\n"
@@ -830,7 +842,7 @@ PROMPT;
         $signals = TradingSignal::where('status', 'PENDING')->orderBy('created_at', 'desc')->limit(10)->get();
 
         if ($signals->isEmpty()) {
-            $this->telegram->reply("Không có lệnh PENDING nào.");
+            $this->reply("Không có lệnh PENDING nào.");
             return;
         }
 
@@ -868,7 +880,7 @@ PROMPT;
             $lines[] = "   Entry: <code>{$s->entry_price}</code> | TP: <code>{$s->tp_price}</code> | SL: <code>{$s->sl_price}</code>";
             $lines[] = "";
         }
-        $this->telegram->reply(implode("\n", $lines));
+        $this->reply(implode("\n", $lines));
 
         // Đánh giá lệnh chưa khớp (không dùng AI, chỉ check HTF + khoảng cách)
         foreach ($unfilled as $s) {
@@ -889,7 +901,7 @@ PROMPT;
 
             if (empty($klines)) {
                 \Log::warning("reviewUnfilledSignal: Binance API timeout for #{$signal->id} {$signal->symbol} — skipping");
-                $this->telegram->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
+                $this->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
                 return;
             }
 
@@ -927,10 +939,10 @@ PROMPT;
                 $msg .= "\n🗑 Gõ <b>/cancel {$signal->id}</b> để huỷ.";
             }
 
-            $this->telegram->reply($msg);
+            $this->reply($msg);
 
         } catch (\Exception $e) {
-            $this->telegram->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
+            $this->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
             \Log::error('reviewUnfilledSignal: ' . $e->getMessage());
         }
     }
@@ -947,7 +959,7 @@ PROMPT;
 
             if (empty($klines)) {
                 \Log::warning("reviewRunningSignal: Binance API timeout for #{$signal->id} {$signal->symbol} — skipping");
-                $this->telegram->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
+                $this->reply("⚠️ #{$signal->id} {$signal->symbol} — Binance API tạm thời không phản hồi, bỏ qua lần này.");
                 return;
             }
 
@@ -994,10 +1006,10 @@ PROMPT;
                 $msg .= "\n🎯 TP: {$advice['tp_advice']}";
             }
 
-            $this->telegram->reply($msg);
+            $this->reply($msg);
 
         } catch (\Exception $e) {
-            $this->telegram->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
+            $this->reply("❌ Lỗi đánh giá #{$signal->id}: " . $e->getMessage());
             \Log::error('reviewRunningSignal: ' . $e->getMessage());
         }
     }
@@ -1005,11 +1017,11 @@ PROMPT;
     private function cmdSignal(array $args): void
     {
         if (empty($args[0]) || !is_numeric($args[0])) {
-            $this->telegram->reply("Cú pháp: /signal &lt;id&gt;\nVí dụ: /signal 42");
+            $this->reply("Cú pháp: /signal &lt;id&gt;\nVí dụ: /signal 42");
             return;
         }
         $signal = TradingSignal::find((int) $args[0]);
-        if (!$signal) { $this->telegram->reply("Không tìm thấy lệnh #{$args[0]}."); return; }
+        if (!$signal) { $this->reply("Không tìm thấy lệnh #{$args[0]}."); return; }
 
         $currentPrice = (float) $this->binance->getPrice($signal->symbol);
         $this->telegram->sendSignalDetail($signal, $currentPrice);
@@ -1018,26 +1030,26 @@ PROMPT;
     private function cmdFilled(array $args): void
     {
         if (empty($args[0]) || !is_numeric($args[0])) {
-            $this->telegram->reply("Cú pháp: /filled &lt;id&gt;"); return;
+            $this->reply("Cú pháp: /filled &lt;id&gt;"); return;
         }
         $signal = TradingSignal::where('id', (int) $args[0])->where('status', 'PENDING')->first();
-        if (!$signal) { $this->telegram->reply("Không tìm thấy lệnh PENDING #{$args[0]}."); return; }
-        if ($signal->filled_at) { $this->telegram->reply("Lệnh #{$signal->id} đã khớp rồi."); return; }
+        if (!$signal) { $this->reply("Không tìm thấy lệnh PENDING #{$args[0]}."); return; }
+        if ($signal->filled_at) { $this->reply("Lệnh #{$signal->id} đã khớp rồi."); return; }
 
         $signal->update(['filled_at' => now()]);
-        $this->telegram->reply("✅ Lệnh #{$signal->id} {$signal->symbol} đã khớp. Bot bắt đầu theo dõi.");
+        $this->reply("✅ Lệnh #{$signal->id} {$signal->symbol} đã khớp. Bot bắt đầu theo dõi.");
     }
 
     private function cmdCancel(array $args): void
     {
         if (empty($args[0]) || !is_numeric($args[0])) {
-            $this->telegram->reply("Cú pháp: /cancel &lt;id&gt;"); return;
+            $this->reply("Cú pháp: /cancel &lt;id&gt;"); return;
         }
         $signal = TradingSignal::where('id', (int) $args[0])->where('status', 'PENDING')->first();
-        if (!$signal) { $this->telegram->reply("Không tìm thấy lệnh PENDING #{$args[0]}."); return; }
+        if (!$signal) { $this->reply("Không tìm thấy lệnh PENDING #{$args[0]}."); return; }
 
         $signal->update(['status' => 'CANCELLED']);
-        $this->telegram->reply("🚫 Lệnh #{$signal->id} {$signal->symbol} đã bị huỷ.");
+        $this->reply("🚫 Lệnh #{$signal->id} {$signal->symbol} đã bị huỷ.");
     }
 
     private function cmdStatus(): void
@@ -1045,7 +1057,7 @@ PROMPT;
         $filled = TradingSignal::where('status', 'PENDING')->whereNotNull('filled_at')->get();
 
         if ($filled->isEmpty()) {
-            $this->telegram->reply("Không có lệnh nào đang chạy.\n\nNhắn tên coin + loại lệnh để phân tích mới.");
+            $this->reply("Không có lệnh nào đang chạy.\n\nNhắn tên coin + loại lệnh để phân tích mới.");
             return;
         }
 
@@ -1068,7 +1080,7 @@ PROMPT;
             $lines[] = "";
         }
 
-        $this->telegram->reply(implode("\n", $lines));
+        $this->reply(implode("\n", $lines));
     }
 
     private function detectSymbolsInContext(string $message, array $history): array

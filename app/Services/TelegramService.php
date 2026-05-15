@@ -311,14 +311,33 @@ class TelegramService
         }
     }
 
-    public function reply(string $text): void
+    public function reply(string $text, ?string $targetChatId = null): void
     {
-        $this->send($text);
+        $this->sendTo($targetChatId ?? $this->chatId, $text);
     }
 
     public function sendRaw(string $text): void
     {
         $this->send($text);
+    }
+
+    private function sendTo(string $chatId, string $text): void
+    {
+        $chunks = $this->splitMessage($text, 4000);
+        foreach ($chunks as $chunk) {
+            try {
+                (new Client())->post("{$this->baseUrl}/sendMessage", [
+                    'json' => [
+                        'chat_id'    => $chatId,
+                        'text'       => $chunk,
+                        'parse_mode' => 'HTML',
+                    ],
+                    'timeout' => 10,
+                ]);
+            } catch (\Exception $e) {
+                \Log::error("Telegram sendTo [{$chatId}] failed: " . $e->getMessage());
+            }
+        }
     }
 
     // Backtest stats Jan-Apr 2026 — 15m, 1:2.5 RR, AI-risk ($8 nếu AI≥85, $2 nếu <85)
