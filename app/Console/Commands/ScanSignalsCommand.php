@@ -767,6 +767,30 @@ class ScanSignalsCommand extends Command
                 );
             }
 
+            // Alert khan cho RUNNING signals — khong the auto-close, chi canh bao de user dong thu cong
+            $running = TradingSignal::where('symbol', $symbol)
+                ->where('status', 'RUNNING')
+                ->get();
+
+            foreach ($running as $sig) {
+                $currentPrice = $this->binanceService->getPrice($symbol);
+                $pnl = $sig->type === 'LONG'
+                    ? round(($currentPrice - $sig->entry_price) / $sig->entry_price * 100, 2)
+                    : round(($sig->entry_price - $currentPrice) / $sig->entry_price * 100, 2);
+                $pnlEmoji = $pnl >= 0 ? '&#x1F7E2;' : '&#x1F534;';
+                $ratio    = round($lastRange / $atr, 1);
+
+                $msg = "&#x26A1; <b>BIEN DONG CUC MANH — {$symbol}</b>\n"
+                     . "Nen vua dong: " . round($lastRange, 2) . "$ = {$ratio}x ATR binh thuong\n\n"
+                     . "&#x1F6A8; <b>LENH #{$sig->id} {$sig->type} dang chay</b>\n"
+                     . "Entry: {$sig->entry_price} | Gia: {$currentPrice}\n"
+                     . "P&amp;L: {$pnlEmoji} {$pnl}%\n\n"
+                     . "&#x26A0;&#xFE0F; <b>Xem xet dong lenh ngay — OB cu khong con hieu luc</b>";
+
+                $this->telegramService->sendRaw($msg);
+                \Log::warning("Circuit breaker RUNNING alert #{$sig->id} {$symbol} {$sig->type} pnl={$pnl}%");
+            }
+
             return true;
         }
 
