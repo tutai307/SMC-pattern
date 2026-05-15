@@ -433,6 +433,11 @@ class ScanSignalsCommand extends Command
             return false;
         }
 
+        if ($this->isVolatilityCircuitBreakerActive($symbol, $timeframe, $klines)) {
+            $this->line('[' . now()->format('H:i:s') . "] [{$symbol}] Circuit breaker active — skip signal");
+            return false;
+        }
+
         $htf = match ($timeframe) {
             '1m', '5m'  => '1h',
             '15m', '1h' => '4h',
@@ -709,6 +714,48 @@ class ScanSignalsCommand extends Command
 
         $this->telegramService->sendZoneApproachAlert($symbol, $timeframe, $isDemand, $high, $low, $price, $dist, $htfTrend);
         $this->line('[' . now()->format('H:i:s') . "] ⚠️ Zone Approach: {$symbol} " . ($isDemand ? 'DEMAND' : 'SUPPLY') . " cách " . round($dist * 100, 2) . "%");
+    }
+
+    /**
+     * Kiểm tra volatility circuit breaker.
+     * Kích hoạt khi nến vừa đóng có range > 2.5x ATR(14) — dấu hiệu black swan.
+     * Cooldown = 3 candles (set qua Cache).
+     */
+    private function isVolatilityCircuitBreakerActive(string $symbol, string $timeframe, array $klines): bool
+    {
+        if (count($klines) < 15) return false;
+
+        // ATR(14) từ 14 nến trước (index -15 đến -2, không tính nến đang chạy)
+        $ranges = [];
+        for ($i = count($klines) - 15; $i < count($klines) - 1; $i++) {
+            $ranges[] = (float)$klines[$i][2] - (float)$klines[$i][3];
+        }
+        $atr = array_sum($ranges) / 14;
+
+        // Nến vừa đóng (index -2, không phải nến đang chạy index -1)
+        $lastClosed = $klines[count($klines) - 2];
+        $lastRange  = (float)$lastClosed[2] - (float)$lastClosed[3];
+
+        $cacheKey = "volatility_breaker_{$symbol}_{$timeframe}";
+
+        if ($atr > 0 && $lastRange > $atr * 2.5) {
+            $candleMinutes = match($timeframe) {
+                '15m' => 15, '1h' => 60, '4h' => 240, default => 15
+            };
+            $cooldownMinutes = $candleMinutes * 3;
+            Cache::put($cacheKey, [
+                'triggered_at' => now()->toDateTimeString(),
+                'last_range'   => $lastRange,
+                'atr'          => $atr,
+                'ratio'        => round($lastRange / $atr, 1),
+            ], now()->addMinutes($cooldownMinutes));
+
+            \Log::warning("Circuit breaker [{$symbol} {$timeframe}]: range {$lastRange} = " . round($lastRange / $atr, 1) . "x ATR — pause {$cooldownMinutes}min");
+            return true;
+        }
+
+        // Kiểm tra cooldown từ lần kích hoạt trước
+        return Cache::has($cacheKey);
     }
 
     /**
