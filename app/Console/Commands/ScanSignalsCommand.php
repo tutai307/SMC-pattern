@@ -485,8 +485,9 @@ class ScanSignalsCommand extends Command
             }
         }
 
-        // Weekly reversal pattern filter — block signals against weekly shooting star / hammer
-        if (!empty($klinesWeekly) && count($klinesWeekly) >= 2) {
+        // Weekly reversal pattern filter — chỉ áp dụng cho swing (4h+), scalp 15m/1h bỏ qua
+        $isSwingTF = in_array($timeframe, ['4h', '1d', '3d', '1w']);
+        if ($isSwingTF && !empty($klinesWeekly) && count($klinesWeekly) >= 2) {
             $sigType = strtoupper($signal['type'] ?? '');
             $isSignalLong  = str_contains($sigType, 'LONG')  || str_contains(strtolower($sigType), 'mua');
             $isSignalShort = str_contains($sigType, 'SHORT') || str_contains(strtolower($sigType), 'bán');
