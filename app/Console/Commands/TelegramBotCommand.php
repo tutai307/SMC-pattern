@@ -72,7 +72,7 @@ class TelegramBotCommand extends Command
 
     private function reply(string $text): void
     {
-        $this->reply($text, $this->activeChatId ?: $this->chatId);
+        $this->telegram->reply($text, $this->activeChatId ?: $this->chatId);
     }
 
     // ─── Router ────────────────────────────────────────────────────────────────
