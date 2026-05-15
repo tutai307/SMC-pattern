@@ -81,7 +81,7 @@ class BacktestCommand extends Command
         $this->info("  HTF bias: {$htf}  |  Risk/trade: \${$risk}  |  Capital: \${$capital}{$sessionLabel}");
         $aiLabel     = $aiRisk
             ? "AI-RISK ≥{$aiHigh}→\${$riskHigh} / <{$aiHigh}→\${$risk}"
-            : ($useAI ? "AI≥{$aiMin}" : ($localScore ? 'AI: OFF | LOCAL-SCORE: ON' : 'AI: OFF'));
+            : ($useAI ? "AI≥{$aiMin}" : ($localScore ? "LOCAL-SCORE: ≥{$aiHigh}→\${$riskHigh} / <{$aiHigh}→\${$risk}" : 'AI: OFF'));
         $structLabel  = $useStructExit ? 'StructExit: ON' : 'StructExit: OFF';
         $tpLabel      = $overrideTp ? "TP=override(1:{$rrTarget})" : "TP=signal";
         $slLabel      = "SL=" . strtoupper($slMode);
@@ -311,12 +311,13 @@ class BacktestCommand extends Command
                 }
             }
 
-            // Per-trade risk based on AI score
+            // Per-trade risk based on AI score or LocalScore
             $tradeRisk  = $risk;
             $sigAiScore = (int)($sig['ai_score'] ?? 0);
-            if ($aiRisk) {
+            if ($aiRisk || $localScore) {
                 $tradeRisk = ($sigAiScore >= $aiHigh) ? $riskHigh : $risk;
-                $this->line("  → AI {$sigAiScore}/100 → Risk: \${$tradeRisk}");
+                $label = $localScore ? 'LocalScore' : 'AI';
+                $this->line("  → {$label} {$sigAiScore}/100 → Risk: \${$tradeRisk}");
             }
 
             $entry  = (float)$sig['entry'];
@@ -463,10 +464,11 @@ class BacktestCommand extends Command
         $this->line("  Winrate:        <fg=" . ($wr >= 50 ? 'green' : 'red') . ">{$wr}%</> ({$closed} closed)");
         $pnlColor = $pnl >= 0 ? 'green' : 'red';
         $pnlSign  = $pnl >= 0 ? '+' : '';
-        if ($aiRisk) {
+        if ($aiRisk || $localScore) {
             $highCount = count(array_filter($signals, fn($s) => $s['filled'] && ($s['trade_risk'] ?? 0) >= $riskHigh));
             $lowCount  = count(array_filter($signals, fn($s) => $s['filled'] && ($s['trade_risk'] ?? 0) < $riskHigh));
-            $this->line("  P&L (\${$capital}, AI-RISK \${$riskHigh}/\${$risk}, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>  ({$highCount}×\${$riskHigh} + {$lowCount}×\${$risk})");
+            $label = $localScore ? 'LOCAL-RISK' : 'AI-RISK';
+            $this->line("  P&L (\${$capital}, {$label} \${$riskHigh}/\${$risk}, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>  ({$highCount}×\${$riskHigh} + {$lowCount}×\${$risk})");
         } else {
             $this->line("  P&L (\${$capital}, {$risk}\$/trade, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>");
         }
