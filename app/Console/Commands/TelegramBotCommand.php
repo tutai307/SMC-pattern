@@ -148,7 +148,34 @@ class TelegramBotCommand extends Command
             }
         }
 
-        // Yêu cầu phân tích coin cụ thể → dùng parser nhanh
+        // ── Route 1: "kèo/phân tích/setup/check [coin]" hoặc "[coin] kèo/setup/..." → full SMC analysis ──
+        $analysisKeywords = 'kèo|phân tích|phan tich|setup|check';
+        $coinAliases      = 'xag|xau|btc|eth|sol|silver|gold|bitcoin|xagusdt|xauusdt|btcusdt|ethusdt|solusdt|link|linkusdt|bnb|bnbusdt';
+        if (preg_match(
+            '/(?:' . $analysisKeywords . ').*(?:' . $coinAliases . ')|(?:' . $coinAliases . ').*(?:' . $analysisKeywords . ')/ui',
+            $lower
+        )) {
+            $parsed = $this->parseSignalRequest($text);
+            if ($parsed) {
+                $this->runAnalysis($parsed);
+                return;
+            }
+        }
+
+        // ── Route 2: "[coin] giá/bao nhiêu/như nào/sao rồi/price" → quick price + trend, không qua AI ──
+        $priceKeywords = 'giá|bao nhiêu|bao nhieu|như nào|nhu nao|sao rồi|sao roi|price|như thế nào|nhu the nao|đang đứng|dang dung';
+        if (preg_match(
+            '/(?:' . $coinAliases . ').*(?:' . $priceKeywords . ')|(?:' . $priceKeywords . ').*(?:' . $coinAliases . ')/ui',
+            $lower
+        )) {
+            $symbol = $this->extractSymbolFromText($lower);
+            if ($symbol) {
+                $this->quickPriceReply($symbol);
+                return;
+            }
+        }
+
+        // ── Route 3: tên coin đơn thuần (không có keyword) → full analysis ──
         $parsed = $this->parseSignalRequest($text);
         if ($parsed) {
             $this->runAnalysis($parsed);
@@ -157,6 +184,63 @@ class TelegramBotCommand extends Command
 
         // Mọi thứ còn lại → AI trả lời tự nhiên
         $this->askAI($text);
+    }
+
+    // ─── Quick price reply (không qua AI) ───────────────────────────────────────
+
+    private function quickPriceReply(string $symbol): void
+    {
+        try {
+            $price  = (float) $this->binance->getPrice($symbol);
+            $klines = $this->binance->getKlines($symbol, '15m', 50);
+            $htfMap = ['XAGUSDT' => '1h', 'XAUUSDT' => '1h', 'BTCUSDT' => '4h', 'ETHUSDT' => '4h',
+                       'SOLUSDT' => '1h', 'LINKUSDT' => '1h'];
+            $htf    = $htfMap[$symbol] ?? '1h';
+
+            $ltfTrend = 'N/A';
+            if (!empty($klines)) {
+                $str = $this->priceAction->getStructure($klines);
+                $ltfTrend = $str['trend'] ?? 'N/A';
+            }
+
+            $klinesHTF = $this->binance->getKlines($symbol, $htf, 50);
+            $htfTrend  = 'N/A';
+            if (!empty($klinesHTF)) {
+                $str      = $this->priceAction->getStructure($klinesHTF);
+                $htfTrend = $str['trend'] ?? 'N/A';
+            }
+
+            $priceFormatted = number_format($price, $price > 100 ? 2 : 4);
+            $msg = "<b>{$symbol}</b>: <code>{$priceFormatted}</code>\n"
+                 . "HTF ({$htf}): <b>{$htfTrend}</b> | LTF (15m): <b>{$ltfTrend}</b>\n"
+                 . "Nhắn <code>kèo " . strtolower(str_replace('USDT', '', $symbol)) . "</code> để phân tích SMC đầy đủ.";
+
+            $this->telegram->reply($msg);
+        } catch (\Exception $e) {
+            $this->telegram->reply("Không lấy được giá {$symbol}: " . $e->getMessage());
+            \Log::warning('quickPriceReply: ' . $e->getMessage());
+        }
+    }
+
+    // ─── Extract single symbol from free text ───────────────────────────────────
+
+    private function extractSymbolFromText(string $lower): ?string
+    {
+        if (preg_match('/\b([a-zA-Z]{2,8}usdt)\b/i', $lower, $m)) {
+            return strtoupper($m[1]);
+        }
+        $aliases = [
+            'xag' => 'XAGUSDT', 'xau' => 'XAUUSDT', 'btc' => 'BTCUSDT',
+            'eth' => 'ETHUSDT', 'sol' => 'SOLUSDT', 'silver' => 'XAGUSDT',
+            'gold' => 'XAUUSDT', 'bitcoin' => 'BTCUSDT', 'link' => 'LINKUSDT',
+            'bnb' => 'BNBUSDT',
+        ];
+        foreach ($aliases as $alias => $full) {
+            if (preg_match('/\b' . preg_quote($alias, '/') . '\b/i', $lower)) {
+                return $full;
+            }
+        }
+        return null;
     }
 
     // ─── AI conversational brain ─────────────────────────────────────────────────
