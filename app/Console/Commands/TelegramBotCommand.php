@@ -59,11 +59,11 @@ class TelegramBotCommand extends Command
                     $this->offset = ($update['update_id'] ?? 0) + 1;
                     try {
                         $this->processUpdate($update);
-                    } catch (\Exception $inner) {
+                    } catch (\Throwable $inner) {
                         $this->warn('Lỗi xử lý update: ' . $inner->getMessage());
                     }
                 }
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $this->warn('Lỗi polling: ' . $e->getMessage());
                 sleep(5);
             }
