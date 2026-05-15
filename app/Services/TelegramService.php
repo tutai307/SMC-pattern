@@ -8,13 +8,16 @@ use GuzzleHttp\Client;
 class TelegramService
 {
     private string $token;
-    private string $chatId;
+    private string $chatId;   // primary (dùng cho reply() 1:1 với bot)
+    private array  $chatIds;  // tất cả IDs (dùng cho send() broadcast)
     private string $baseUrl;
 
     public function __construct()
     {
         $this->token   = (string) config('services.telegram.token', '');
-        $this->chatId  = (string) config('services.telegram.chat_id', '');
+        $raw           = (string) config('services.telegram.chat_id', '');
+        $this->chatId  = trim(explode(',', $raw)[0]);
+        $this->chatIds = array_filter(array_map('trim', explode(',', $raw)));
         $this->baseUrl = "https://api.telegram.org/bot{$this->token}";
     }
 
@@ -493,18 +496,20 @@ class TelegramService
 
         // Telegram max 4096 chars — split nếu dài hơn
         $chunks = $this->splitMessage($text, 4000);
-        foreach ($chunks as $chunk) {
-            try {
-                (new Client())->post("{$this->baseUrl}/sendMessage", [
-                    'json' => [
-                        'chat_id'    => $this->chatId,
-                        'text'       => $chunk,
-                        'parse_mode' => 'HTML',
-                    ],
-                    'timeout' => 10,
-                ]);
-            } catch (\Exception $e) {
-                \Log::error('Telegram send failed: ' . $e->getMessage());
+        foreach ($this->chatIds as $chatId) {
+            foreach ($chunks as $chunk) {
+                try {
+                    (new Client())->post("{$this->baseUrl}/sendMessage", [
+                        'json' => [
+                            'chat_id'    => $chatId,
+                            'text'       => $chunk,
+                            'parse_mode' => 'HTML',
+                        ],
+                        'timeout' => 10,
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error("Telegram send failed [{$chatId}]: " . $e->getMessage());
+                }
             }
         }
     }
