@@ -287,6 +287,16 @@ PROMPT;
                 return;
             }
 
+            // Strip markdown → plain text (tránh ký tự lạ khi Telegram dùng HTML mode)
+            $reply = preg_replace('/\*\*(.+?)\*\*/s', '$1', $reply);   // **bold**
+            $reply = preg_replace('/\*(.+?)\*/s', '$1', $reply);        // *italic*
+            $reply = preg_replace('/__(.+?)__/s', '$1', $reply);        // __underline__
+            $reply = preg_replace('/_(.+?)_/s', '$1', $reply);          // _italic_
+            $reply = preg_replace('/```[\w]*\n?(.+?)```/s', '$1', $reply); // ```code```
+            $reply = preg_replace('/`(.+?)`/s', '$1', $reply);          // `inline code`
+            $reply = preg_replace('/#{1,6}\s+/m', '', $reply);          // ### headers
+            $reply = preg_replace('/^\s*[-*]\s+/m', '• ', $reply);      // bullet points
+
             // Lưu reply của AI vào history
             $history[] = ['role' => 'assistant', 'content' => $reply];
             Cache::put($historyKey, array_slice($history, -8), now()->addHours(1));
