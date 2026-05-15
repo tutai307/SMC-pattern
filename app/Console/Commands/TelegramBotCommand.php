@@ -51,8 +51,12 @@ class TelegramBotCommand extends Command
             try {
                 $updates = $this->telegram->getUpdates($this->offset);
                 foreach ($updates as $update) {
-                    $this->processUpdate($update);
-                    $this->offset = $update['update_id'] + 1;
+                    $this->offset = ($update['update_id'] ?? 0) + 1;
+                    try {
+                        $this->processUpdate($update);
+                    } catch (\Exception $inner) {
+                        $this->warn('Lỗi xử lý update: ' . $inner->getMessage());
+                    }
                 }
             } catch (\Exception $e) {
                 $this->warn('Lỗi polling: ' . $e->getMessage());
@@ -1029,13 +1033,14 @@ PROMPT;
                 if (count($k4h) >= 15) {
                     $trs = [];
                     for ($i = 1; $i < count($k4h); $i++) {
+                        if (!isset($k4h[$i][3], $k4h[$i-1][4])) continue;
                         $trs[] = max(
                             (float)$k4h[$i][2] - (float)$k4h[$i][3],
                             abs((float)$k4h[$i][2] - (float)$k4h[$i-1][4]),
                             abs((float)$k4h[$i][3] - (float)$k4h[$i-1][4])
                         );
                     }
-                    $atr = round(array_sum(array_slice($trs, -14)) / 14, 3);
+                    $atr = count($trs) >= 14 ? round(array_sum(array_slice($trs, -14)) / 14, 3) : 0;
                 }
 
                 // Quick trend from 15m (last 10 candles: higher highs+lows = TĂNG)
@@ -1081,9 +1086,9 @@ PROMPT;
             ')\s+(short|long|bán|mua)\s*(?:ở|at|@|entry)?\s*(\d+(?:[.,]\d+)?)/ui';
 
         if (preg_match($pattern, $message, $m)) {
-            $dir    = strtolower($m[1] ?: $m[5]);
-            $sym    = strtoupper($m[2] ?: $m[4] ?: '');
-            $price  = (float) str_replace(',', '.', $m[3] ?: $m[6]);
+            $dir    = strtolower(($m[1] ?? '') ?: ($m[5] ?? ''));
+            $sym    = strtoupper(($m[2] ?? '') ?: ($m[4] ?? '') ?: '');
+            $price  = (float) str_replace(',', '.', ($m[3] ?? '') ?: ($m[6] ?? ''));
 
             $aliasMap = ['XAG' => 'XAGUSDT', 'XAU' => 'XAUUSDT', 'BTC' => 'BTCUSDT',
                          'ETH' => 'ETHUSDT', 'SOL' => 'SOLUSDT', 'BẠC' => 'XAGUSDT', 'VÀNG' => 'XAUUSDT'];
