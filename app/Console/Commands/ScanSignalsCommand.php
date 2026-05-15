@@ -767,23 +767,43 @@ class ScanSignalsCommand extends Command
                 );
             }
 
-            // FOMO opportunity alert — gửi trước alert lệnh đang chạy để user thấy cơ hội trước
-            $currentPrice = $this->binanceService->getPrice($symbol);
+            // FOMO opportunity alert — tính entry/TP/SL từ black swan candle
+            $currentPrice    = (float)$this->binanceService->getPrice($symbol);
             $lastCandleOpen  = (float)$lastClosed[1];
             $lastCandleClose = (float)$lastClosed[4];
-            $isBearish = $lastCandleClose < $lastCandleOpen;
+            $lastCandleHigh  = (float)$lastClosed[2];
+            $lastCandleLow   = (float)$lastClosed[3];
+            $isBearish       = $lastCandleClose < $lastCandleOpen;
+            $movePct         = round(abs($lastCandleClose - $lastCandleOpen) / $lastCandleOpen * 100, 2);
 
-            $direction  = $isBearish ? '🔴 SHORT' : '🟢 LONG';
-            $movePct    = round(abs($lastCandleClose - $lastCandleOpen) / $lastCandleOpen * 100, 2);
-            $suggestion = $isBearish
-                ? "Chờ pullback lên để SHORT, hoặc SHORT ngay nếu momentum mạnh"
-                : "Chờ pullback xuống để LONG, hoặc LONG ngay nếu momentum mạnh";
+            if ($isBearish) {
+                // SHORT: entry = current price (momentum), SL = candle high + 0.2%, TP = R:R 2.5
+                $entry  = $currentPrice;
+                $sl     = round($lastCandleHigh * 1.002, 2);
+                $slDist = $sl - $entry;
+                $tp     = round($entry - $slDist * 2.5, 2);
+                $type   = 'SHORT';
+                $tpPct  = round(($entry - $tp) / $entry * 100, 2);
+                $slPct  = round(($sl - $entry) / $entry * 100, 2);
+            } else {
+                // LONG: entry = current price, SL = candle low - 0.2%, TP = R:R 2.5
+                $entry  = $currentPrice;
+                $sl     = round($lastCandleLow * 0.998, 2);
+                $slDist = $entry - $sl;
+                $tp     = round($entry + $slDist * 2.5, 2);
+                $type   = 'LONG';
+                $tpPct  = round(($tp - $entry) / $entry * 100, 2);
+                $slPct  = round(($entry - $sl) / $entry * 100, 2);
+            }
 
-            $msg = "⚡ <b>BLACK SWAN — {$symbol}</b>\n"
-                 . "Nến vừa di chuyển <b>{$movePct}%</b> ({$direction})\n"
-                 . "Giá hiện tại: <b>{$currentPrice}</b>\n\n"
-                 . "🎯 <b>Cơ hội FOMO:</b> {$suggestion}\n"
-                 . "⚠️ High risk — không có OB/FVG confirm, thuần momentum";
+            $arrow = $isBearish ? '🔴' : '🟢';
+
+            $msg = "⚡ <b>BLACK SWAN — {$symbol}</b> ({$movePct}%)\n\n"
+                 . "{$arrow} <b>{$type} MOMENTUM</b>\n"
+                 . "📌 Entry: <code>{$entry}</code>\n"
+                 . "🎯 TP: <code>{$tp}</code> (+{$tpPct}%)\n"
+                 . "🛡 SL: <code>{$sl}</code> (-{$slPct}%) | R:R 1:2.5\n\n"
+                 . "⚠️ Thuần momentum — không có OB/FVG confirm. High risk.";
 
             $this->telegramService->sendRaw($msg);
 
