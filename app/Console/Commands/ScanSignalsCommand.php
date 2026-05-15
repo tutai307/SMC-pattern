@@ -568,15 +568,27 @@ class ScanSignalsCommand extends Command
             $signal['reason'] = "🥇 XAU/USD {$goldLabel} @ " . number_format($gold['price'], 2) . " — bạc align\n" . ($signal['reason'] ?? '');
         }
 
-        $entryKey = round((float) $signal['entry'], 4);
-        $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$method}_{$signal['type']}_{$entryKey}";
+        // Dedup: nếu đã có PENDING cùng symbol/TF/type trong 4h qua → skip
+        $sigType  = str_contains(strtolower($signal['type'] ?? ''), 'mua') || strtolower($signal['type'] ?? '') === 'long' ? 'LONG' : 'SHORT';
+        $hasPending = TradingSignal::where('symbol', $symbol)
+            ->where('timeframe', $timeframe)
+            ->where('type', $sigType)
+            ->where('status', 'PENDING')
+            ->where('created_at', '>=', now()->subHours(4))
+            ->exists();
 
-        if (Cache::has($dedupKey)) {
-            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — setup đã thông báo, chờ hết hạn");
-            return true; // đã gửi trước đó → vẫn tính là "có setup"
+        if ($hasPending) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — đã có PENDING {$sigType}, skip");
+            return true;
         }
 
-        Cache::put($dedupKey, true, now()->addHours(6));
+        // Cache dedup phụ — tránh double-fire trong cùng 1 scan cycle
+        $dedupKey = "scan_sent_{$symbol}_{$timeframe}_{$sigType}";
+        if (Cache::has($dedupKey)) {
+            $this->line('[' . now()->format('H:i:s') . "] {$symbol}/{$timeframe}/{$method} — setup đã thông báo, chờ hết hạn");
+            return true;
+        }
+        Cache::put($dedupKey, true, now()->addHours(4));
         $scanCapital = (float) $this->option('capital');
         $this->telegramService->sendScanAlert($symbol, $timeframe, $signal, (float) $currentPrice, $method, $riskPct, $scanCapital);
 
