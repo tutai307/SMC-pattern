@@ -93,7 +93,7 @@ class PriceActionService
         foreach ($htfOBs as &$ob) { $ob['label'] = 'HTF ' . $ob['label']; }
         $orderBlocks = array_merge($orderBlocks, array_slice($htfOBs, -2));
 
-        $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend);
+        $signal = $this->generateSMCSignal($candles, $structure, $orderBlocks, $fvgs, $htfStructure, $htfOBs ?? [], $volumeProfile['poc'], $adx, $atr, $ema200, $dailyStructure, $lastCandleTs, $applySessionFilter, $weeklyStructure, $macroTrend, $timeframe);
 
         // 5. Advanced AI Scoring + LocalScore
         $indicators = ['adx' => end($adx), 'atr' => end($atr), 'ema200' => end($ema200)];
@@ -435,6 +435,9 @@ class PriceActionService
             $obHigh = ($type === 'demand') ? max($current['open'], $current['close']) : $current['high'];
             $obLow  = ($type === 'demand') ? $current['low'] : min($current['open'], $current['close']);
 
+            // ── OB width filter: bỏ OB quá hẹp (< 0.3% của giá) ────────────
+            if ($obLow > 0 && ($obHigh - $obLow) / $obLow < 0.003) continue;
+
             // ── Liquidity sweep check ────────────────────────────────────────
             $liquiditySwept = false;
             $sweptLevel     = null;
@@ -470,7 +473,7 @@ class PriceActionService
         return array_slice($obs, -5);
     }
 
-    private function generateSMCSignal($candles, $structure, $zones, $fvgs, $htfStructure, $htfZones, $poc, $adx, $atr, $ema200 = [], array $dailyStructure = [], int $candleTs = 0, bool $applySessionFilter = false, array $weeklyStructure = [], string $macroTrend = 'không rõ')
+    private function generateSMCSignal($candles, $structure, $zones, $fvgs, $htfStructure, $htfZones, $poc, $adx, $atr, $ema200 = [], array $dailyStructure = [], int $candleTs = 0, bool $applySessionFilter = false, array $weeklyStructure = [], string $macroTrend = 'không rõ', string $timeframe = '')
     {
         $lastPrice    = $structure['last_price'];
         $lastAdx      = end($adx);
@@ -592,6 +595,10 @@ class PriceActionService
                 $liquidityTps    = array_filter($swingHighPrices, fn($h) => $h > $entry + $slDist * 1.5);
                 $tp = !empty($liquidityTps) ? (float) min($liquidityTps) : $entry + $slDist * 2.0;
 
+                // TP distance filter: loại signal khi TP quá gần theo timeframe
+                $tpMinPct = match ($timeframe) { '15m' => 0.4, '1h' => 0.8, '4h' => 1.5, default => 0.4 };
+                if ($entry > 0 && abs($tp - $entry) / $entry * 100 < $tpMinPct) continue;
+
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');
                     $reason  = "🎯 SNIPER: Liquidity sweep @ " . round($zone['swept_level'] ?? 0, 4)
@@ -688,6 +695,10 @@ class PriceActionService
                 $swingLowPrices = array_column($structure['swing_lows'] ?? [], 'price');
                 $liquidityTps   = array_filter($swingLowPrices, fn($l) => $l < $entry - $slDist * 1.5);
                 $tp = !empty($liquidityTps) ? (float) max($liquidityTps) : $entry - $slDist * 2.0;
+
+                // TP distance filter: loại signal khi TP quá gần theo timeframe
+                $tpMinPct = match ($timeframe) { '15m' => 0.4, '1h' => 0.8, '4h' => 1.5, default => 0.4 };
+                if ($entry > 0 && abs($tp - $entry) / $entry * 100 < $tpMinPct) continue;
 
                 if ($isSniper && $choch) {
                     $pattern = 'OB + CHoCH' . ($inHtfPoi ? ' + HTF POI' : '');

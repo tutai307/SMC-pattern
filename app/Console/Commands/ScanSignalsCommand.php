@@ -692,10 +692,16 @@ class ScanSignalsCommand extends Command
         // Bỏ qua nếu SL quá nhỏ — zone không đủ rộng để trade thực tế
         if ($atr > 0 && $slDist < $atr * 1.0) return;
 
-        // TP phải tối thiểu 1.5%
+        // TP minimum threshold theo timeframe — loại bỏ alert khi TP quá gần
+        $tpMinPct = match ($timeframe) {
+            '15m'   => 0.4,
+            '1h'    => 0.8,
+            '4h'    => 1.5,
+            default => 0.4,
+        };
         $tp    = $isDemand ? $entry + $slDist * 2.5 : $entry - $slDist * 2.5;
         $tpPct = abs($tp - $entry) / $entry * 100;
-        if ($tpPct < 1.5) return;
+        if ($tpPct < $tpMinPct) return;
 
         $dedupKey = "zone_approach_{$symbol}_{$timeframe}_{$ob['type']}_" . round($low, 2);
         if (Cache::has($dedupKey)) return;
