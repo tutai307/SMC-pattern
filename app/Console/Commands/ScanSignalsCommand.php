@@ -485,6 +485,39 @@ class ScanSignalsCommand extends Command
             }
         }
 
+        // Weekly reversal pattern filter — block signals against weekly shooting star / hammer
+        if (!empty($klinesWeekly) && count($klinesWeekly) >= 2) {
+            $sigType = strtoupper($signal['type'] ?? '');
+            $isSignalLong  = str_contains($sigType, 'LONG')  || str_contains(strtolower($sigType), 'mua');
+            $isSignalShort = str_contains($sigType, 'SHORT') || str_contains(strtolower($sigType), 'bán');
+
+            // last closed week = index -2, current forming = index -1 (stricter threshold)
+            $weeklyChecks = [
+                count($klinesWeekly) - 2 => 0.50,
+                count($klinesWeekly) - 1 => 0.65,
+            ];
+
+            foreach ($weeklyChecks as $idx => $minRatio) {
+                $w = $klinesWeekly[$idx] ?? null;
+                if (!$w) continue;
+                $wO = (float)$w[1]; $wH = (float)$w[2]; $wL = (float)$w[3]; $wC = (float)$w[4];
+                $wBody  = abs($wC - $wO);
+                $wRange = $wH - $wL;
+                if ($wRange <= 0 || $wBody <= 0) continue;
+                $wUpperWick = $wH - max($wO, $wC);
+                $wLowerWick = min($wO, $wC) - $wL;
+
+                if ($isSignalLong && $wC < $wO && $wUpperWick > $wBody * 2 && ($wUpperWick / $wRange) >= $minRatio) {
+                    $this->line('[' . now()->format('H:i:s') . "] {$symbol} — LONG blocked (weekly shooting star, wick=" . round($wUpperWick / $wRange * 100) . "%)");
+                    return false;
+                }
+                if ($isSignalShort && $wC > $wO && $wLowerWick > $wBody * 2 && ($wLowerWick / $wRange) >= $minRatio) {
+                    $this->line('[' . now()->format('H:i:s') . "] {$symbol} — SHORT blocked (weekly hammer, wick=" . round($wLowerWick / $wRange * 100) . "%)");
+                    return false;
+                }
+            }
+        }
+
         // LocalScore thay AI — backtest 15m: ADX≥15, score≥75 → WR 46.7%, +131% với ai-risk
         $localScore = $this->priceActionService->computeConfidenceScore(
             $signal,
