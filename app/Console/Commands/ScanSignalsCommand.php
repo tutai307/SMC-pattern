@@ -767,6 +767,26 @@ class ScanSignalsCommand extends Command
                 );
             }
 
+            // FOMO opportunity alert — gửi trước alert lệnh đang chạy để user thấy cơ hội trước
+            $currentPrice = $this->binanceService->getPrice($symbol);
+            $lastCandleOpen  = (float)$lastClosed[1];
+            $lastCandleClose = (float)$lastClosed[4];
+            $isBearish = $lastCandleClose < $lastCandleOpen;
+
+            $direction  = $isBearish ? '🔴 SHORT' : '🟢 LONG';
+            $movePct    = round(abs($lastCandleClose - $lastCandleOpen) / $lastCandleOpen * 100, 2);
+            $suggestion = $isBearish
+                ? "Chờ pullback lên để SHORT, hoặc SHORT ngay nếu momentum mạnh"
+                : "Chờ pullback xuống để LONG, hoặc LONG ngay nếu momentum mạnh";
+
+            $msg = "⚡ <b>BLACK SWAN — {$symbol}</b>\n"
+                 . "Nến vừa di chuyển <b>{$movePct}%</b> ({$direction})\n"
+                 . "Giá hiện tại: <b>{$currentPrice}</b>\n\n"
+                 . "🎯 <b>Cơ hội FOMO:</b> {$suggestion}\n"
+                 . "⚠️ High risk — không có OB/FVG confirm, thuần momentum";
+
+            $this->telegramService->sendRaw($msg);
+
             // Alert khan cho RUNNING signals — khong the auto-close, chi canh bao de user dong thu cong
             $running = TradingSignal::where('symbol', $symbol)
                 ->where('status', 'RUNNING')
