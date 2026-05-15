@@ -149,7 +149,7 @@ class TelegramBotCommand extends Command
         }
 
         // ── Route 1: "kèo/phân tích/setup/check [coin]" hoặc "[coin] kèo/setup/..." → full SMC analysis ──
-        $analysisKeywords = 'kèo|phân tích|phan tich|setup|check';
+        $analysisKeywords = 'kèo|phân tích|phan tich|setup|check|sell|buy|short|long|vào|vao|có vào|co vao|nên vào|nen vao|được không|duoc khong';
         $coinAliases      = 'xag|xau|btc|eth|sol|silver|gold|bitcoin|xagusdt|xauusdt|btcusdt|ethusdt|solusdt|link|linkusdt|bnb|bnbusdt';
         if (preg_match(
             '/(?:' . $analysisKeywords . ').*(?:' . $coinAliases . ')|(?:' . $coinAliases . ').*(?:' . $analysisKeywords . ')/ui',
@@ -386,6 +386,7 @@ PROMPT;
             $reply = preg_replace('/`(.+?)`/s', '$1', $reply);          // `inline code`
             $reply = preg_replace('/#{1,6}\s+/m', '', $reply);          // ### headers
             $reply = preg_replace('/^\s*[-*]\s+/m', '• ', $reply);      // bullet points
+            $reply = preg_replace('/^-{2,}\s*$/m', '', $reply);         // --- horizontal rules
 
             // Lưu reply của AI vào history
             $history[] = ['role' => 'assistant', 'content' => $reply];
