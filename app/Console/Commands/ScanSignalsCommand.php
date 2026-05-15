@@ -738,6 +738,11 @@ class ScanSignalsCommand extends Command
 
         $cacheKey = "volatility_breaker_{$symbol}_{$timeframe}";
 
+        // Already in cooldown — skip re-evaluation and re-alerting
+        if (Cache::has($cacheKey)) {
+            return true;
+        }
+
         if ($atr > 0 && $lastRange > $atr * 2.5) {
             $candleMinutes = match($timeframe) {
                 '15m' => 15, '1h' => 60, '4h' => 240, default => 15
