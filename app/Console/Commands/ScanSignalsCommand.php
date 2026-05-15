@@ -440,7 +440,8 @@ class ScanSignalsCommand extends Command
 
         $htf = match ($timeframe) {
             '1m', '5m'  => '1h',
-            '15m', '1h' => '4h',
+            '15m'       => '1h',
+            '1h'        => '4h',
             default     => '1d',
         };
         $klinesHTF    = $this->binanceService->getKlines($symbol, $htf,  50);
