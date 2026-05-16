@@ -18,6 +18,7 @@ class TelegramBotCommand extends Command
     private string $chatId       = '';   // primary (personal)
     private array  $allowedIds   = [];   // tất cả IDs được phép nhắn
     private string $activeChatId = '';   // chat ID của message đang xử lý
+    private string $botUsername  = '';   // username của bot (dùng để detect @mention trong group)
 
     // Timeframe mapping theo loại giao dịch
     private array $tfMap = [
@@ -50,7 +51,10 @@ class TelegramBotCommand extends Command
         $ids              = array_values(array_filter(array_map('trim', explode(',', $raw))));
         $this->chatId     = $ids[0] ?? '';
         $this->allowedIds = $ids;
-        $this->info('Telegram bot đang lắng nghe...');
+
+        $me = $this->telegram->getMe();
+        $this->botUsername = $me['username'] ?? '';
+        $this->info('Telegram bot đang lắng nghe' . ($this->botUsername ? " (@{$this->botUsername})" : '') . '...');
 
         while (true) {
             try {
@@ -86,13 +90,43 @@ class TelegramBotCommand extends Command
         if (!in_array($incomingId, $this->allowedIds)) return;
         $this->activeChatId = $incomingId;
 
-        $text = trim($message['text']);
+        $chatType = $message['chat']['type'] ?? 'private';
+        $text     = trim($message['text']);
+
+        // Trong group/supergroup: chỉ trả lời khi được tag @BotUsername
+        if (in_array($chatType, ['group', 'supergroup'])) {
+            if (!$this->isBotMentioned($message)) return;
+            // Strip @mention khỏi text trước khi xử lý
+            $text = $this->stripBotMention($text);
+        }
 
         if (str_starts_with($text, '/')) {
             $this->handleCommand($text);
         } else {
             $this->handleFreeText($text);
         }
+    }
+
+    private function isBotMentioned(array $message): bool
+    {
+        if (!$this->botUsername) return true; // không biết username → cho qua hết
+        $text = $message['text'] ?? '';
+        if (stripos($text, '@' . $this->botUsername) !== false) return true;
+
+        // Check entities type=mention
+        foreach ($message['entities'] ?? [] as $entity) {
+            if ($entity['type'] === 'mention') {
+                $mention = mb_substr($text, $entity['offset'], $entity['length']);
+                if (strcasecmp($mention, '@' . $this->botUsername) === 0) return true;
+            }
+        }
+        return false;
+    }
+
+    private function stripBotMention(string $text): string
+    {
+        if (!$this->botUsername) return $text;
+        return trim(preg_replace('/@' . preg_quote($this->botUsername, '/') . '\b/i', '', $text));
     }
 
     // ─── Slash commands ─────────────────────────────────────────────────────────
@@ -295,12 +329,26 @@ class TelegramBotCommand extends Command
         $total  = $wins + $losses;
         $wrStr  = $total > 0 ? round($wins / $total * 100) . "% ({$wins}W/{$losses}L)" : "Chưa có dữ liệu";
 
-        // ── MỚI: Detect symbols + fetch real-time market data ──
-        $historyKey = "tg_ai_history_{$this->chatId}";
+        // ── Detect symbols + fetch real-time market data ──
+        // Dùng activeChatId để mỗi chat có history riêng (không dùng primary chatId)
+        $historyKey = "tg_ai_history_{$this->activeChatId}";
         $history    = Cache::get($historyKey, []);
 
         $detectedSymbols = $this->detectSymbolsInContext($userMessage, $history);
-        $marketBlock     = $this->fetchMarketContext($detectedSymbols);
+
+        // Luôn thêm symbols từ lệnh đang chạy vào context (tránh AI hỏi ngược user)
+        foreach ($runningSignals as $s) {
+            if (!in_array($s->symbol, $detectedSymbols)) {
+                $detectedSymbols[] = $s->symbol;
+            }
+        }
+        foreach ($pendingSignals as $s) {
+            if (!in_array($s->symbol, $detectedSymbols) && count($detectedSymbols) < 4) {
+                $detectedSymbols[] = $s->symbol;
+            }
+        }
+
+        $marketBlock     = $this->fetchMarketContext(array_slice($detectedSymbols, 0, 3));
         $userPositionStr = $this->detectAndSaveUserPosition($userMessage);
 
         $marketSection = $marketBlock
@@ -331,15 +379,16 @@ class TelegramBotCommand extends Command
         }
 
         $systemPrompt = <<<PROMPT
-Bạn là Felix — trading assistant chuyên SMC. Dữ liệu giá realtime từ Binance đã được cung cấp bên dưới — dùng ngay, KHÔNG hỏi lại user.
+Bạn là Felix — trading assistant chuyên SMC. Dữ liệu giá realtime từ Binance đã được inject bên dưới — dùng NGAY, TUYỆT ĐỐI không hỏi lại user.
 
-NGUYÊN TẮC CỨNG:
-- KHÔNG hỏi ngược lại user ("anh đang giữ không?", "anh cần gì?", v.v.)
-- KHÔNG đưa ra danh sách lựa chọn để user chọn
-- KHÔNG hỏi clarifying questions — tự suy luận từ context và data
-- Trả lời THẲNG: giá bao nhiêu, nên làm gì, tại sao — xong
-- Tối đa 4-5 dòng. Emoji ít thôi. Tiếng Việt.
-- KHÔNG dùng bảng markdown (|col|col|). KHÔNG dùng header (---). Chỉ text thuần + bullet.
+NGUYÊN TẮC KHÔNG VI PHẠM:
+1. XƯNG HÔ: tôi/bạn hoặc tôi/anh. TUYỆT ĐỐI không dùng "mày", "tao", "mình ơi" kiểu bạn bè suồng sã.
+2. KHÔNG hỏi ngược user bất cứ điều gì — kể cả giá, nến, chart. Data đã có sẵn bên dưới.
+3. KHÔNG đưa danh sách lựa chọn. KHÔNG hỏi clarifying questions.
+4. Nếu thiếu data → thừa nhận ngắn gọn rồi dùng data gần nhất có sẵn, KHÔNG hỏi user bổ sung.
+5. Trả lời THẲNG: giá bao nhiêu → báo ngay, nên làm gì → nói thẳng, tại sao → 1-2 câu.
+6. Tối đa 5 dòng. Emoji ít thôi. Tiếng Việt thuần.
+7. KHÔNG dùng bảng markdown, KHÔNG dùng header dạng ---. Chỉ text + bullet •.
 
 === DỮ LIỆU THỰC TẾ ({$now}) ===
 Watchlist: {$watchlist} | Winrate: {$wrStr}
@@ -349,17 +398,17 @@ LỆNH ĐANG CHẠY:
 LỆNH PENDING:
 {$pendingStr}{$positionSection}{$marketSection}{$newsBlock}
 
-Nếu user hỏi giá → báo giá từ data trên luôn.
-Nếu user hỏi lệnh → đánh giá dựa trên P&L + trend hiện tại.
-Nếu cần phân tích OB/FVG sâu hơn → bảo nhắn "kèo [coin]".
+Hướng xử lý:
+- Hỏi giá → đọc từ "Giá LIVE" trong data trên, báo ngay số cụ thể.
+- Hỏi nến đóng cửa → đọc dòng candle cuối trong "Nến 15m gần nhất".
+- Hỏi lệnh → đánh giá P&L + trend, kết luận giữ/chốt/cắt.
+- Cần phân tích OB/FVG sâu → bảo nhắn lệnh "kèo [coin]".
 PROMPT;
 
-        // Thêm tin nhắn user mới vào history
+        // Thêm tin nhắn user mới vào history (giữ 12 messages gần nhất)
         $history[] = ['role' => 'user', 'content' => $userMessage];
-
-        // Giữ tối đa 8 messages gần nhất
-        if (count($history) > 8) {
-            $history = array_slice($history, -8);
+        if (count($history) > 12) {
+            $history = array_slice($history, -12);
         }
 
         try {
@@ -400,9 +449,9 @@ PROMPT;
             $reply = preg_replace('/^\s*[-*]\s+/m', '• ', $reply);      // bullet points
             $reply = preg_replace('/^-{2,}\s*$/m', '', $reply);         // --- horizontal rules
 
-            // Lưu reply của AI vào history
+            // Lưu reply của AI vào history (giữ 12 messages, TTL 4 giờ)
             $history[] = ['role' => 'assistant', 'content' => $reply];
-            Cache::put($historyKey, array_slice($history, -8), now()->addHours(1));
+            Cache::put($historyKey, array_slice($history, -12), now()->addHours(4));
 
             $this->reply($reply);
 
@@ -1116,9 +1165,11 @@ PROMPT;
 
         foreach ($symbols as $symbol) {
             try {
-                // Force-clear price cache để lấy tick mới nhất
+                // Force-clear cache để lấy data mới nhất (key format: binance_klines_{symbol}_{interval}_{limit}_now)
                 Cache::forget("price_{$symbol}");
                 Cache::forget("binance_klines_{$symbol}_15m_22_now");
+                Cache::forget("binance_klines_{$symbol}_15m_50_now");
+                Cache::forget("binance_klines_{$symbol}_4h_16_now");
                 $fetchedAt = now()->format('H:i:s');
 
                 $price = $this->binance->getPrice($symbol);

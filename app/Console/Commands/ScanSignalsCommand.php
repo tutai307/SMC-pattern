@@ -828,6 +828,29 @@ class ScanSignalsCommand extends Command
             $isBearish       = $lastCandleClose < $lastCandleOpen;
             $movePct         = round(abs($lastCandleClose - $lastCandleOpen) / $lastCandleOpen * 100, 2);
 
+            // Chỉ gửi signal khi HTF (1h + 4h) align với hướng momentum
+            $htfMap = ['15m' => ['1h', '4h'], '1h' => ['4h', '1d'], '4h' => ['1d', '1w']];
+            $htfFrames = $htfMap[$timeframe] ?? ['1h', '4h'];
+            $htfTrends = [];
+            foreach ($htfFrames as $htf) {
+                $htfKlines = $this->binanceService->getKlines($symbol, $htf, 50);
+                if (!empty($htfKlines)) {
+                    $htfTrends[] = $this->priceActionService->getStructure($htfKlines)['trend'] ?? '';
+                }
+            }
+            $momentumDir    = $isBearish ? 'SHORT' : 'LONG';
+            $htfCounterBear = array_filter($htfTrends, fn($t) => str_contains($t, 'TĂNG'));
+            $htfCounterBull = array_filter($htfTrends, fn($t) => str_contains($t, 'GIẢM'));
+            $htfBlocked     = ($momentumDir === 'LONG'  && count($htfCounterBull) > 0)
+                           || ($momentumDir === 'SHORT' && count($htfCounterBear) > 0);
+
+            if ($htfBlocked) {
+                $htfSummary = implode(', ', $htfTrends);
+                \Log::info("BLACK SWAN [{$symbol}] {$momentumDir} bị chặn — HTF: {$htfSummary}");
+                // Không gửi signal, chỉ log — circuit breaker vẫn active
+                return true;
+            }
+
             if ($isBearish) {
                 // SHORT: entry = current price (momentum), SL = candle high + 0.2%, TP = R:R 2.5
                 $entry  = $currentPrice;
@@ -848,13 +871,15 @@ class ScanSignalsCommand extends Command
                 $slPct  = round(($entry - $sl) / $entry * 100, 2);
             }
 
-            $arrow = $isBearish ? '🔴' : '🟢';
+            $arrow      = $isBearish ? '🔴' : '🟢';
+            $htfSummary = implode(' + ', $htfTrends);
 
             $msg = "⚡ <b>BLACK SWAN — {$symbol}</b> ({$movePct}%)\n\n"
                  . "{$arrow} <b>{$type} MOMENTUM</b>\n"
                  . "📌 Entry: <code>{$entry}</code>\n"
                  . "🎯 TP: <code>{$tp}</code> (+{$tpPct}%)\n"
-                 . "🛡 SL: <code>{$sl}</code> (-{$slPct}%) | R:R 1:2.5\n\n"
+                 . "🛡 SL: <code>{$sl}</code> (-{$slPct}%) | R:R 1:2.5\n"
+                 . "📊 HTF: <i>{$htfSummary}</i>\n\n"
                  . "⚠️ Thuần momentum — không có OB/FVG confirm. High risk.";
 
             $this->telegramService->sendRaw($msg);

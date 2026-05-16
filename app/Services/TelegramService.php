@@ -311,6 +311,18 @@ class TelegramService
         }
     }
 
+    public function getMe(): array
+    {
+        try {
+            $res  = (new Client())->get("{$this->baseUrl}/getMe", ['timeout' => 5]);
+            $data = json_decode($res->getBody(), true);
+            return $data['ok'] ? ($data['result'] ?? []) : [];
+        } catch (\Exception $e) {
+            \Log::warning('Telegram getMe failed: ' . $e->getMessage());
+            return [];
+        }
+    }
+
     public function reply(string $text, ?string $targetChatId = null): void
     {
         $this->sendTo($targetChatId ?? $this->chatId, $text);
