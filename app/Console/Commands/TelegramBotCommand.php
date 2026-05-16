@@ -348,7 +348,8 @@ class TelegramBotCommand extends Command
             }
         }
 
-        $marketBlock     = $this->fetchMarketContext(array_slice($detectedSymbols, 0, 3));
+        $userPositions   = Cache::get("tg_position_{$this->activeChatId}", []);
+        $marketBlock     = $this->buildStructuredAnalysis(array_slice($detectedSymbols, 0, 3), $userPositions);
         $userPositionStr = $this->detectAndSaveUserPosition($userMessage);
 
         $marketSection = $marketBlock
@@ -398,11 +399,12 @@ LỆNH ĐANG CHẠY:
 LỆNH PENDING:
 {$pendingStr}{$positionSection}{$marketSection}{$newsBlock}
 
-Hướng xử lý:
-- Hỏi giá → đọc từ "Giá LIVE" trong data trên, báo ngay số cụ thể.
-- Hỏi nến đóng cửa → đọc dòng candle cuối trong "Nến 15m gần nhất".
-- Hỏi lệnh → đánh giá P&L + trend, kết luận giữ/chốt/cắt.
-- Cần phân tích OB/FVG sâu → bảo nhắn lệnh "kèo [coin]".
+Hướng xử lý (đọc từ block "=== SYMBOL ===" bên trên):
+- Hỏi giá → đọc "Giá LIVE", báo số ngay.
+- Hỏi nến → đọc dòng "Nến 15m", nến cuối có dấu ←.
+- Hỏi nên giữ/cắt lệnh → đọc dòng "▶ VỊ THẾ": P&L + HTF alignment → kết luận 1 câu: CẮT hoặc GIỮ + lý do ngắn.
+- HTF ngược chiều = tín hiệu cắt mạnh. HTF đồng chiều + Pattern GIẢM/TĂNG = có thể giữ.
+- Cần phân tích OB/FVG sâu → bảo nhắn "kèo [coin]".
 PROMPT;
 
         // Thêm tin nhắn user mới vào history (giữ 12 messages gần nhất)
@@ -1219,6 +1221,92 @@ PROMPT;
         }
 
         return implode("\n", $blocks);
+    }
+
+    private function buildStructuredAnalysis(array $symbols, array $positions = []): string
+    {
+        if (empty($symbols)) return '';
+        $blocks = [];
+
+        foreach (array_slice($symbols, 0, 3) as $symbol) {
+            try {
+                Cache::forget("price_{$symbol}");
+                foreach (['15m_50', '1h_50', '4h_20'] as $part) {
+                    Cache::forget("binance_klines_{$symbol}_{$part}_now");
+                }
+
+                $price = $this->binance->getPrice($symbol);
+                $k15   = $this->binance->getKlines($symbol, '15m', 50);
+                $k1h   = $this->binance->getKlines($symbol, '1h',  50);
+                $k4h   = $this->binance->getKlines($symbol, '4h',  20);
+
+                if (!$price || empty($k15)) continue;
+
+                $s15 = $this->priceAction->getStructure($k15);
+                $s1h = !empty($k1h) ? $this->priceAction->getStructure($k1h) : ['trend' => 'N/A'];
+                $s4h = !empty($k4h) ? $this->priceAction->getStructure($k4h) : ['trend' => 'N/A'];
+
+                $pattern = $this->detectCandlePattern(array_slice($k15, -8));
+
+                $candleStr = '';
+                $last5 = array_slice($k15, -5);
+                foreach ($last5 as $idx => $k) {
+                    $dir   = (float)$k[4] >= (float)$k[1] ? 'G' : 'R';
+                    $label = $idx === 4 ? ' ←' : '';
+                    $candleStr .= date('H:i', (int)($k[0] / 1000)) . " [{$dir}] H:{$k[2]} L:{$k[3]} C:{$k[4]}{$label}\n";
+                }
+
+                $posStr = '';
+                if (isset($positions[$symbol])) {
+                    $pos     = $positions[$symbol];
+                    $pnlPct  = $pos['dir'] === 'LONG'
+                        ? round(($price - $pos['entry']) / $pos['entry'] * 100, 2)
+                        : round(($pos['entry'] - $price) / $pos['entry'] * 100, 2);
+                    $sign    = $pnlPct >= 0 ? '+' : '';
+                    $htfOk   = $pos['dir'] === 'LONG'
+                        ? str_contains($s1h['trend'], 'TĂNG')
+                        : str_contains($s1h['trend'], 'GIẢM');
+                    $align   = $htfOk ? '✓ HTF đồng chiều' : '✗ HTF ngược chiều — rủi ro';
+                    $posStr  = "▶ VỊ THẾ: {$pos['dir']} entry={$pos['entry']} | P&L={$sign}{$pnlPct}% | {$align}\n";
+                }
+
+                $fetchedAt = now()->format('H:i:s');
+                $blocks[]  = "=== {$symbol} ({$fetchedAt}) ===\n"
+                    . "Giá LIVE: {$price}\n"
+                    . "Trend: 15m={$s15['trend']} | 1h={$s1h['trend']} | 4h={$s4h['trend']}\n"
+                    . "Pattern 15m: {$pattern}\n"
+                    . $posStr
+                    . "Nến 15m:\n{$candleStr}";
+
+            } catch (\Exception $e) {
+                \Log::warning("buildStructuredAnalysis [{$symbol}]: " . $e->getMessage());
+            }
+        }
+
+        return implode("\n\n", $blocks);
+    }
+
+    private function detectCandlePattern(array $candles): string
+    {
+        if (count($candles) < 4) return 'không đủ data';
+
+        $highs = array_map(fn($k) => (float)$k[2], $candles);
+        $lows  = array_map(fn($k) => (float)$k[3], $candles);
+        $n     = count($candles);
+
+        $lhCount = $llCount = $hhCount = $hlCount = 0;
+        for ($i = 1; $i < $n; $i++) {
+            $highs[$i] < $highs[$i - 1] ? $lhCount++ : $hhCount++;
+            $lows[$i]  < $lows[$i - 1]  ? $llCount++ : $hlCount++;
+        }
+
+        $threshold = ($n - 1) * 0.6;
+        $hi = round(max(array_slice($highs, -3)), 3);
+        $lo = round(min(array_slice($lows,  -3)), 3);
+
+        if ($lhCount >= $threshold && $llCount >= $threshold) return "GIẢM — Lower Highs + Lower Lows";
+        if ($hhCount >= $threshold && $hlCount >= $threshold) return "TĂNG — Higher Highs + Higher Lows";
+        return "NÉN — range {$lo}–{$hi}";
     }
 
     private function detectAndSaveUserPosition(string $message): string
