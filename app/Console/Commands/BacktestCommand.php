@@ -30,12 +30,14 @@ class BacktestCommand extends Command
         {--save : Lưu kết quả vào DB để tái sử dụng}
         {--use-cache : Dùng kết quả đã lưu nếu params + logic trùng khớp}
         {--ai-risk : Dynamic sizing: AI score≥ai-high → risk-high USD, otherwise → risk USD}
-        {--ai-high=75 : AI score threshold for high risk (default 75)}
+        {--ai-high=80 : AI score threshold for high risk (default 80)}
         {--risk-high=5 : Risk per trade khi AI score≥ai-high (default $5)}
         {--override-tp : Override TP của signal về đúng entry±SL×rr để test R:R thực tế}
         {--local-score : Dùng computeConfidenceScore() thay AI API (free, dùng để so sánh)}
         {--vision : Tải dữ liệu từ data.binance.vision thay Binance API (cho backtest dài ngày, cache local)}
-        {--sl-mode=new : SL calculation mode: "old" (OB edge + 0.1% buffer) or "new" (ATR×1.5 adaptive)}';
+        {--sl-mode=new : SL calculation mode: "old" (OB edge + 0.1% buffer) or "new" (ATR×1.5 adaptive)}
+        {--skip-weekend : Skip Saturday and Sunday — no signal generation on weekends}
+        {--pct-risk : Interpret --risk and --risk-high as % of current capital (compound sizing)}';
 
 
 
@@ -66,6 +68,8 @@ class BacktestCommand extends Command
         $localScore    = (bool)   $this->option('local-score');
         $useVision     = (bool)   $this->option('vision');
         $slMode        = (string) $this->option('sl-mode');
+        $skipWeekend = (bool) $this->option('skip-weekend');
+        $pctRisk = (bool) $this->option('pct-risk');
         $logicHash     = md5(file_get_contents(app_path('Services/PriceActionService.php')));
 
         // Resolve date range
@@ -163,10 +167,17 @@ class BacktestCommand extends Command
         $obCooldown   = [];
         // Dedup: track candle index of last signal per direction
         $lastSignalCandle = ['LONG' => -999, 'SHORT' => -999];
+        $currentCapital = $capital; // track compound capital khi pct-risk
 
         for ($i = $startIdx; $i < count($klines1h); $i++) {
             $candle = $klines1h[$i];
             $ts     = (int)$candle[0];
+
+            // Weekend filter — T7 (6) và CN (0) không giao dịch
+            if ($skipWeekend) {
+                $dow = (int) date('w', (int) ($ts / 1000));
+                if ($dow === 0 || $dow === 6) continue;
+            }
 
             // Stop at end of range
             if ($ts > $toTs) break;
@@ -215,6 +226,8 @@ class BacktestCommand extends Command
                         $activeSignal['close_time']  = $ts;
                         $activeSignal['close_price'] = $close;
                         $activeSignal['exit_pnl']    = $exitPnl;
+                        if ($pctRisk) $currentCapital += ($activeSignal['exit_pnl'] ?? 0);
+                        $currentCapital = max($currentCapital, 0);
                         $signals[]    = $activeSignal;
                         $activeSignal = null;
                         continue;
@@ -229,6 +242,8 @@ class BacktestCommand extends Command
                         $activeSignal['close_price']  = $activeSignal['sl'];
                         // OB cooldown: 24 candles after loss (string key — PHP truncates float keys to int)
                         $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 24;
+                        if ($pctRisk) $currentCapital -= ($activeSignal['trade_risk'] ?? $tradeRisk);
+                        $currentCapital = max($currentCapital, 0);
                         $signals[]    = $activeSignal;
                         $activeSignal = null;
                         continue;
@@ -239,6 +254,8 @@ class BacktestCommand extends Command
                         $activeSignal['close_price']  = $activeSignal['tp'];
                         // OB cooldown after WIN (shorter): same OB re-entry rarely works
                         $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 8;
+                        if ($pctRisk) $currentCapital += ($activeSignal['trade_risk'] ?? $tradeRisk) * $rrTarget;
+                        $currentCapital = max($currentCapital, 0);
                         $signals[]    = $activeSignal;
                         $activeSignal = null;
                         continue;
@@ -250,6 +267,8 @@ class BacktestCommand extends Command
                         $activeSignal['close_price']  = $activeSignal['sl'];
                         // OB cooldown: 24 candles after loss (string key)
                         $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 24;
+                        if ($pctRisk) $currentCapital -= ($activeSignal['trade_risk'] ?? $tradeRisk);
+                        $currentCapital = max($currentCapital, 0);
                         $signals[]    = $activeSignal;
                         $activeSignal = null;
                         continue;
@@ -260,6 +279,8 @@ class BacktestCommand extends Command
                         $activeSignal['close_price']  = $activeSignal['tp'];
                         // OB cooldown after WIN too (shorter): same OB re-entry rarely works
                         $obCooldown[sprintf('%.4f', $activeSignal['entry'])] = $i + 8;
+                        if ($pctRisk) $currentCapital += ($activeSignal['trade_risk'] ?? $tradeRisk) * $rrTarget;
+                        $currentCapital = max($currentCapital, 0);
                         $signals[]    = $activeSignal;
                         $activeSignal = null;
                         continue;
@@ -311,13 +332,14 @@ class BacktestCommand extends Command
                 }
             }
 
-            // Per-trade risk based on AI score or LocalScore
-            $tradeRisk  = $risk;
+            // Per-trade risk: fixed USD hoặc % of current capital
+            $tradeRisk  = $pctRisk ? round($currentCapital * $risk / 100, 4) : $risk;
             $sigAiScore = (int)($sig['ai_score'] ?? 0);
             if ($aiRisk || $localScore) {
-                $tradeRisk = ($sigAiScore >= $aiHigh) ? $riskHigh : $risk;
-                $label = $localScore ? 'LocalScore' : 'AI';
-                $this->line("  → {$label} {$sigAiScore}/100 → Risk: \${$tradeRisk}");
+                $highRisk  = $pctRisk ? round($currentCapital * $riskHigh / 100, 4) : $riskHigh;
+                $tradeRisk = ($sigAiScore >= $aiHigh) ? $highRisk : $tradeRisk;
+                $label     = $localScore ? 'LocalScore' : 'AI';
+                $this->line("  → {$label} {$sigAiScore}/100 → Risk: \$" . number_format($tradeRisk, 2) . ($pctRisk ? " ({$sigAiScore}>={$aiHigh} ? {$riskHigh}% : {$risk}% of \${$currentCapital})" : ''));
             }
 
             $entry  = (float)$sig['entry'];
@@ -473,6 +495,9 @@ class BacktestCommand extends Command
             $this->line("  P&L (\${$capital}, {$risk}\$/trade, 1:{$rrTarget}): <fg={$pnlColor}>{$pnlSign}" . number_format($pnl, 2) . " USD</>");
         }
         $this->line("  Capital cuối:   " . number_format($capital + $pnl, 2) . " USD");
+        if ($pctRisk) {
+            $this->line("  Capital cuối (compound):   " . number_format($currentCapital, 2) . " USD  (start: \${$capital})");
+        }
         $this->line(str_repeat('═', 55));
 
         // ── 6. Daily stats ───────────────────────────────────────────────
@@ -566,10 +591,11 @@ class BacktestCommand extends Command
 
     private function resolveDateRange(?string $from, ?string $to): array
     {
-        if ($from && $to) {
-            $fromTs = strtotime($from . ' 00:00:00 UTC') * 1000;
-            $toTs   = strtotime($to   . ' 23:59:59 UTC') * 1000;
-            return [$fromTs, $toTs, $from, $to];
+        if ($from) {
+            $toResolved = $to ?: date('Y-m-d'); // --to mặc định = hôm nay nếu không truyền
+            $fromTs = strtotime($from        . ' 00:00:00 UTC') * 1000;
+            $toTs   = strtotime($toResolved  . ' 23:59:59 UTC') * 1000;
+            return [$fromTs, $toTs, $from, $toResolved];
         }
 
         // Default: previous calendar month
