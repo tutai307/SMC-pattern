@@ -7,7 +7,7 @@
 #property version   "1.0"
 
 //--- Input parameters
-input string WebhookURL    = "http://YOUR_SERVER_IP/api/mt5";  // Địa chỉ server Laravel
+input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";  // Địa chỉ server Laravel
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";    // MT5_WEBHOOK_SECRET trong .env
 input int    KlineCount    = 200;                               // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;                                // Giây push giá bid (timer)
