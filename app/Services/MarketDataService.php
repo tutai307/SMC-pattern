@@ -84,7 +84,7 @@ class MarketDataService
         );
 
         Cache::put($this->metaKey($sym, $timeframe), [
-            'pushed_at'   => now()->toISOString(),
+            'pushed_at'   => now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
             'count'       => count($klines),
             'last_close'  => (float) ($klines[count($klines) - 1][4] ?? 0),
             'last_ts_ms'  => (int)   ($klines[count($klines) - 1][0] ?? 0),

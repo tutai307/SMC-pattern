@@ -58,9 +58,11 @@ void PushKlines()
     }
 
     // Build JSON klines array
+    // rates[i].time = broker time (Exness UTC+3) → UTC = broker - 3h
+    int brokerOffsetSec = (int)((TimeGMT() - TimeCurrent()));  // tự detect offset broker vs UTC
     string klinesJson = "[";
     for (int i = 0; i < copied; i++) {
-        long   ts_ms  = (long)rates[i].time * 1000;
+        long   ts_ms  = ((long)rates[i].time + brokerOffsetSec) * 1000;  // convert to UTC ms
         if (i > 0) klinesJson += ",";
         klinesJson += "[" + IntegerToString(ts_ms)
                    + "," + DoubleToString(rates[i].open,  2)
@@ -83,8 +85,11 @@ void PushKlines()
         + "}";
 
     string result = PostJSON(WebhookURL + "/klines?secret=" + WebhookSecret, body);
-    if (EnableLogging)
-        Print("FelixDataPusher klines: ", copied, " bars — ", result);
+    if (EnableLogging) {
+        datetime vnTime = TimeGMT() + 7 * 3600;
+        Print("FelixDataPusher klines [VN ", TimeToString(vnTime, TIME_DATE|TIME_MINUTES), "]: ",
+              copied, " bars — ", result);
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -105,9 +110,11 @@ void PushTick()
     ArrayResize(emptyBody, 0);
 
     int sc = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
-    if (EnableLogging)
-        Print("FelixDataPusher tick: bid=", DoubleToString(bid, _Digits),
-              " — ", IntegerToString(sc), ":", CharArrayToString(responseBody));
+    if (EnableLogging) {
+        datetime vnTime = TimeGMT() + 7 * 3600;
+        Print("FelixDataPusher tick [VN ", TimeToString(vnTime, TIME_MINUTES), "] bid=",
+              DoubleToString(bid, _Digits), " — ", IntegerToString(sc));
+    }
 }
 
 //+------------------------------------------------------------------+

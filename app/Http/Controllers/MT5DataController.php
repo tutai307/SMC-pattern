@@ -68,7 +68,7 @@ class MT5DataController extends Controller
             'ok'        => true,
             'symbol'    => $this->marketData->normalizeSymbol($symbol),
             'count'     => count($klines),
-            'stored_at' => now()->toISOString(),
+            'stored_at' => now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
         ]);
     }
 
@@ -132,7 +132,7 @@ class MT5DataController extends Controller
 
         return response()->json([
             'status'     => 'ok',
-            'server_time'=> now()->toISOString(),
+            'server_time'=> now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
             'pairs'      => $result,
         ]);
     }
