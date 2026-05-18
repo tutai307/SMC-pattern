@@ -26,7 +26,8 @@ class ScanSignalsCommand extends Command
         {--multi=7         : Hệ số nhân lot khi breakout (probe × multi)}
         {--daily-target=50 : Mục tiêu ngày (pips) — đạt rồi khóa máy nghỉ}
         {--tp-pips=15      : TP cố định tính bằng pip}
-        {--ai-score=70     : Ngưỡng AI score tối thiểu để gửi alert}';
+        {--ai-score=70          : Ngưỡng AI score tối thiểu để gửi alert}
+        {--min-compression=0.2  : Bỏ qua kênh nén < giá trị này (0.2 = 20%)}';
 
     protected $description = 'v4 — Quét kênh nén Gold/Silver + gửi Telegram breakout setup';
 
@@ -133,6 +134,13 @@ class ScanSignalsCommand extends Command
         if (!$channel['is_channel']) {
             $lh = $channel['lh_count']; $hl = $channel['hl_count'];
             $this->line("[{$ts}] [{$symbol}] Không có kênh — LH={$lh} HL={$hl} (cần ≥1 mỗi loại)");
+            return;
+        }
+
+        $minComp = (float) $this->option('min-compression');
+        if ($channel['compression'] < $minComp) {
+            $comp = round($channel['compression'] * 100);
+            $this->line("[{$ts}] [{$symbol}] Kênh nén yếu {$comp}% < " . round($minComp * 100) . "% — skip");
             return;
         }
 

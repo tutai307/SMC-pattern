@@ -84,8 +84,11 @@ class SignalFormatterService
         $pip     = $inst['pip_size'];
         $dec     = $inst['decimals'];
 
-        $slPips  = $atr > 0 ? round($atr / $pip * 1.5) : 30; // ATR × 1.5
-        $slPips  = max(10, $slPips); // sàn 10 pips
+        // SL cứng = TP pips → R:R 1:1
+        // Backtest 1-18/5/2026: WR 67.5%, EV +3.63 pip, variance thấp (avg loss -20 pip)
+        // ATR×1.5 SL cho EV +3.91 nhưng avg loss -118 pip = 1 ngày xấu xóa 2 tuần tốt
+        $slPips        = $tpPips;
+        $slBoundaryBuf = 5;
 
         $tpDist  = $tpPips  * $pip;
         $bufDist = $buferPips * $pip;
@@ -95,12 +98,14 @@ class SignalFormatterService
 
         $longEntry  = round($channel['upper'] + $bufDist, $dec);
         $longTp     = round($longEntry + $tpDist, $dec);
-        $longSl     = round($longEntry - $slDist, $dec);
+        // BUY SL = dưới đáy kênh (lower) - buffer
+        $longSl     = round($channel['lower'] - ($slBoundaryBuf * $pip), $dec);
         $longRr     = $slPips > 0 ? round($tpPips / $slPips, 2) : 0;
 
         $shortEntry = round($channel['lower'] - $bufDist, $dec);
         $shortTp    = round($shortEntry - $tpDist, $dec);
-        $shortSl    = round($shortEntry + $slDist, $dec);
+        // SELL SL = trên đỉnh kênh (upper) + buffer
+        $shortSl    = round($channel['upper'] + ($slBoundaryBuf * $pip), $dec);
         $shortRr    = $slPips > 0 ? round($tpPips / $slPips, 2) : 0;
 
         return [
