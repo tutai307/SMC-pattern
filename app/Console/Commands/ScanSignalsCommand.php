@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Services\BinanceService;
+use App\Services\MarketDataService;
 use App\Services\PriceActionService;
 use App\Services\SignalFormatterService;
 use App\Services\TelegramService;
@@ -34,10 +34,10 @@ class ScanSignalsCommand extends Command
     private array $watchlist  = [];
 
     public function __construct(
-        private BinanceService       $binanceService,
-        private PriceActionService   $priceActionService,
+        private MarketDataService     $marketData,
+        private PriceActionService    $priceActionService,
         private SignalFormatterService $signalFormatter,
-        private TelegramService      $telegramService,
+        private TelegramService       $telegramService,
     ) {
         parent::__construct();
 
@@ -114,11 +114,16 @@ class ScanSignalsCommand extends Command
         $multi        = (int)   $this->option('multi');
         $tpPips       = (float) $this->option('tp-pips');
 
-        $klines       = $this->binanceService->getKlines($symbol, $timeframe, 200);
-        $currentPrice = (float) ($this->binanceService->getPrice($symbol) ?? 0);
+        if (!$this->marketData->hasData($symbol, $timeframe)) {
+            $this->warn("[{$ts}] [{$symbol}] Chưa có data từ MT5 EA — chờ EA push");
+            return;
+        }
+
+        $klines       = $this->marketData->getKlines($symbol, $timeframe, 200);
+        $currentPrice = (float) ($this->marketData->getPrice($symbol) ?? 0);
 
         if (empty($klines) || $currentPrice <= 0) {
-            $this->warn("[{$ts}] [{$symbol}] Không lấy được dữ liệu Binance");
+            $this->warn("[{$ts}] [{$symbol}] Data trống — EA cần push lại");
             return;
         }
 
@@ -126,7 +131,8 @@ class ScanSignalsCommand extends Command
         $channel = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 40);
 
         if (!$channel['is_channel']) {
-            $this->line("[{$ts}] [{$symbol}] Không có kênh nén — skip");
+            $lh = $channel['lh_count']; $hl = $channel['hl_count'];
+            $this->line("[{$ts}] [{$symbol}] Không có kênh — LH={$lh} HL={$hl} (cần ≥1 mỗi loại)");
             return;
         }
 
