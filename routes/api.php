@@ -8,4 +8,5 @@ Route::prefix('mt5')->group(function () {
     Route::post('klines', [MT5DataController::class, 'receiveKlines']);
     Route::post('tick',   [MT5DataController::class, 'receiveTick']);
     Route::get('status',  [MT5DataController::class, 'status']);
+    Route::get('scan',    [MT5DataController::class, 'scanNow']);
 });

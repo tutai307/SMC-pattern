@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\MarketDataService;
+use App\Services\PriceActionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -16,7 +17,10 @@ use Illuminate\Http\JsonResponse;
  */
 class MT5DataController extends Controller
 {
-    public function __construct(private MarketDataService $marketData) {}
+    public function __construct(
+        private MarketDataService  $marketData,
+        private PriceActionService $priceAction,
+    ) {}
 
     // ──────────────────────────────────────────────────────────────
     // POST /api/mt5/klines
@@ -133,6 +137,52 @@ class MT5DataController extends Controller
         return response()->json([
             'status'     => 'ok',
             'server_time'=> now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
+            'pairs'      => $result,
+        ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // GET /api/mt5/scan  — chạy channel detection trên data hiện tại
+    // ──────────────────────────────────────────────────────────────
+
+    public function scanNow(): JsonResponse
+    {
+        $symbols = [['symbol' => 'XAUUSDT', 'tf' => '15m'], ['symbol' => 'XAGUSDT', 'tf' => '15m']];
+        $result  = [];
+
+        foreach ($symbols as $item) {
+            $sym    = $item['symbol'];
+            $tf     = $item['tf'];
+            $klines = $this->marketData->getKlines($sym, $tf, 150);
+            $price  = $this->marketData->getPrice($sym);
+
+            if (empty($klines)) {
+                $result[$sym] = ['error' => 'no data'];
+                continue;
+            }
+
+            $channel = $this->priceAction->detectUnpredictableChannel($klines, lookback: 100);
+            $atr     = $this->priceAction->calculateATR($klines, 14);
+
+            $result[$sym] = [
+                'bars'         => count($klines),
+                'price'        => $price,
+                'atr'          => $atr,
+                'is_channel'   => $channel['is_channel'],
+                'type'         => $channel['type']        ?? 'none',
+                'direction'    => $channel['direction']   ?? null,
+                'upper'        => $channel['upper']       ?? null,
+                'lower'        => $channel['lower']       ?? null,
+                'compression'  => $channel['compression'] ?? 0,
+                'lh_count'     => $channel['lh_count']    ?? 0,
+                'hl_count'     => $channel['hl_count']    ?? 0,
+                'll_count'     => $channel['ll_count']    ?? 0,
+                'hh_count'     => $channel['hh_count']    ?? 0,
+            ];
+        }
+
+        return response()->json([
+            'scanned_at' => now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
             'pairs'      => $result,
         ]);
     }
