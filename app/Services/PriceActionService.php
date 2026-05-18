@@ -91,12 +91,24 @@ class PriceActionService
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
             if (count($highs) < 2 || count($lows) < 2)
                 return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            $lH1 = $highs[count($highs) - 2]; $lH2 = end($highs);
-            $lL1 = $lows[count($lows) - 2];   $lL2 = end($lows);
-            $uSlope = $lH2['idx'] > $lH1['idx'] ? ($lH2['price'] - $lH1['price']) / ($lH2['idx'] - $lH1['idx']) : 0.0;
-            $dSlope = $lL2['idx'] > $lL1['idx'] ? ($lL2['price'] - $lL1['price']) / ($lL2['idx'] - $lL1['idx']) : 0.0;
-            $projU  = round($lH2['price'] + $uSlope * ($currentIdx - $lH2['idx']), 2);
-            $projL  = round($lL2['price'] + $dSlope * ($currentIdx - $lL2['idx']), 2);
+
+            // Slope = vector từ điểm ĐẦU đến điểm CUỐI của chuỗi LH/LL
+            // Dùng đầu chuỗi thay vì chỉ 2 điểm cuối để đường thẳng ổn định hơn khi có nhiều swings
+            $firstLH = $highs[count($highs) - 1 - $lhCount]; // điểm LH cũ nhất trong chuỗi
+            $lastLH  = end($highs);                            // điểm LH mới nhất
+            $firstLL = $lows[count($lows)  - 1 - $llCount];
+            $lastLL  = end($lows);
+
+            $uSlope = $lastLH['idx'] > $firstLH['idx']
+                ? ($lastLH['price'] - $firstLH['price']) / ($lastLH['idx'] - $firstLH['idx'])
+                : 0.0;
+            $dSlope = $lastLL['idx'] > $firstLL['idx']
+                ? ($lastLL['price'] - $firstLL['price']) / ($lastLL['idx'] - $firstLL['idx'])
+                : 0.0;
+
+            $projU = round($lastLH['price'] + $uSlope * ($currentIdx - $lastLH['idx']), 2);
+            $projL = round($lastLL['price'] + $dSlope * ($currentIdx - $lastLL['idx']), 2);
+
             if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
             $w = $projU - $projL;
             $mid = ($projU + $projL) / 2;
@@ -110,12 +122,22 @@ class PriceActionService
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
             if (count($highs) < 2 || count($lows) < 2)
                 return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            $lH1 = $highs[count($highs) - 2]; $lH2 = end($highs);
-            $lL1 = $lows[count($lows) - 2];   $lL2 = end($lows);
-            $uSlope = $lH2['idx'] > $lH1['idx'] ? ($lH2['price'] - $lH1['price']) / ($lH2['idx'] - $lH1['idx']) : 0.0;
-            $dSlope = $lL2['idx'] > $lL1['idx'] ? ($lL2['price'] - $lL1['price']) / ($lL2['idx'] - $lL1['idx']) : 0.0;
-            $projU  = round($lH2['price'] + $uSlope * ($currentIdx - $lH2['idx']), 2);
-            $projL  = round($lL2['price'] + $dSlope * ($currentIdx - $lL2['idx']), 2);
+
+            $firstHH = $highs[count($highs) - 1 - $hhCount];
+            $lastHH  = end($highs);
+            $firstHL = $lows[count($lows)  - 1 - $hlCount];
+            $lastHL  = end($lows);
+
+            $uSlope = $lastHH['idx'] > $firstHH['idx']
+                ? ($lastHH['price'] - $firstHH['price']) / ($lastHH['idx'] - $firstHH['idx'])
+                : 0.0;
+            $dSlope = $lastHL['idx'] > $firstHL['idx']
+                ? ($lastHL['price'] - $firstHL['price']) / ($lastHL['idx'] - $firstHL['idx'])
+                : 0.0;
+
+            $projU = round($lastHH['price'] + $uSlope * ($currentIdx - $lastHH['idx']), 2);
+            $projL = round($lastHL['price'] + $dSlope * ($currentIdx - $lastHL['idx']), 2);
+
             if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
             $w = $projU - $projL;
             $mid = ($projU + $projL) / 2;

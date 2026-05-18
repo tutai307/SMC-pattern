@@ -16,19 +16,18 @@ use Illuminate\Support\Facades\Cache;
  * Không tự bắn lệnh — chỉ gửi Telegram để user copy-paste vào Exness.
  *
  * Chạy:
- *   php artisan signals:scan --capital=1000 --multi=7 --daily-target=50 --tp-pips=15
+ *   php artisan signals:scan --capital=1000 --daily-target=50 --ai-score=70
  */
 class ScanSignalsCommand extends Command
 {
     protected $signature = 'signals:scan
         {--interval=300         : Giây giữa mỗi lần quét (mặc định 5 phút)}
         {--capital=0            : Vốn tài khoản USD}
-        {--multi=7              : Hệ số nhân lot khi breakout (probe × multi)}
         {--daily-target=50      : Mục tiêu ngày (pips) — đạt rồi khóa máy nghỉ}
         {--ai-score=70          : Ngưỡng AI score tối thiểu để gửi alert}
         {--min-compression=0.2  : Bỏ qua kênh nén < giá trị này (0.2 = 20%)}';
 
-    protected $description = 'v4 — Quét kênh nén Gold/Silver + gửi Telegram breakout setup';
+    protected $description = 'v5 — Quét kênh nén/trending Gold/Silver + gửi Telegram setup';
 
     private int   $lastScanAt = 0;
     private array $watchlist  = [];
@@ -111,7 +110,6 @@ class ScanSignalsCommand extends Command
         $ts          = now()->format('H:i:s');
         $aiThreshold = (int)   $this->option('ai-score');
         $capital     = (float) $this->option('capital');
-        $multi       = (int)   $this->option('multi');
 
         if (!$this->marketData->hasData($symbol, $timeframe)) {
             $this->warn("[{$ts}] [{$symbol}] Chưa có data từ MT5 EA — chờ EA push");
@@ -194,8 +192,13 @@ class ScanSignalsCommand extends Command
         }
         Cache::put($dedupKey, true, now()->addHours(2));
 
-        // ── 5. Build tham số lệnh + format Telegram ──
-        $signals = $this->signalFormatter->buildSignals($symbol, $channel, $capital, $multi);
+        // ── 5. Build tham số lệnh (dynamic SL/TP) ──
+        $signals = $this->signalFormatter->buildSignals($symbol, $channel, $capital, $atr);
+
+        if ($signals === null) {
+            $this->line("[{$ts}] [{$symbol}] R:R < 1:1 (TP < SL dựa ATR) — skip");
+            return;
+        }
 
         $msg = $this->signalFormatter->formatTelegramMessage(
             $symbol, $timeframe, $channel, $signals,
@@ -206,7 +209,8 @@ class ScanSignalsCommand extends Command
 
         $slPips = $signals['sl_pips'];
         $tpPips = $signals['tp_pips'];
-        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpPips}p SL:{$slPips}p | dir:{$aiDirection}");
+        $rr     = $signals['rr'];
+        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpPips}p SL:{$slPips}p R:R=1:{$rr} | dir:{$aiDirection}");
     }
 
     // ──────────────────────────────────────────────────────────────

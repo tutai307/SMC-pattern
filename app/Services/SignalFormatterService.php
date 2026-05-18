@@ -5,55 +5,37 @@ namespace App\Services;
 /**
  * v5 — Tính toán thông số lệnh + format Telegram message.
  *
- * Backtest 1–18/5/2026 kết quả tối ưu:
- *   TP = 15 pips cứng | SL = 20 pips cứng | R:R = 1:0.75
- *   WR 67.5% | EV +3.63 pip/trade | avg loss -20 pip (kiểm soát được)
+ * Chiến thuật:
+ *   Triangle breakout:    BUY STOP  (upper + buf) | SELL STOP  (lower - buf)
+ *   Descending (bounce):  SELL LIMIT (upper - buf)
+ *   Ascending  (bounce):  BUY LIMIT  (lower + buf)
  *
- * Không bắn lệnh tự động. Chỉ tính số và trả về chuỗi
- * để người dùng copy-paste vào Exness trong 3 giây.
+ * R:R động:
+ *   SL = 1.5 × ATR(14)          — dựa theo market noise thực
+ *   TP = channel_width × 0.8    — nhắm 80% biên độ kênh
+ *   Lọc: R:R < 1:1 → null (skip)
+ *
+ * Sizing: Fixed Fractional 2% vốn
+ *   Lot = (Capital × 2%) / (SL_pips × $100), clamp ≥ 0.01
  */
 class SignalFormatterService
 {
-    // XAUUSD Exness: 0.01 lot × 10 pips = $1.00 → pip_value per lot = $0.10
-    private const TP_PIPS  = 15.0;
-    private const SL_PIPS  = 20.0;
-    private const BUF_PIPS =  3.0;
-    private const RR       = 0.75; // TP/SL = 15/20
+    private const BUF_PIPS = 3.0;  // buffer breakout / bounce (pips = $)
 
     // ──────────────────────────────────────────────────────────────
-    // LOT SIZING
+    // LOT SIZING — Fixed Fractional
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Tính probe lot (0.5% vốn) và main lot (probe × multi).
+     * Tính lot theo Fixed Fractional: rủi ro %Risk mỗi lệnh.
      *
-     * Công thức Exness XAUUSD:
-     *   Probe lot = (Vốn × 0.005) / (SL Pips × 0.1)
-     *   Main lot  = Probe lot × multi
-     *
-     * @param float $capital  Vốn tài khoản USD
-     * @param int   $multi    Hệ số nhân "Lâng Lot" (mặc định 7)
-     * @return array{probe: float, main: float, sl_usd_probe: float, sl_usd_main: float}
+     * Exness XAUUSD: 1 lot × 1 pip ($1 price) = $100 P&L
+     * Lot = (Capital × %Risk) / (SL_pips × $100), clamp ≥ 0.01
      */
-    public function calculateExnessLots(float $capital, int $multi = 7): array
+    public function calculateExnessLot(float $capital, float $slPips, float $riskPct = 0.02): float
     {
-        $slPips = self::SL_PIPS;
-
-        // Exness XAUUSD: 1 pip = $1.00 giá, 1 lot = $100/pip → pip_value = 100.0/lot
-        // Capital $1000 → probe = (1000×0.005)/(20×100) = 0.0025 → clamped to 0.01
-        $probeLot = $capital > 0
-            ? round(($capital * 0.005) / ($slPips * 100.0), 2)
-            : 0.01;
-
-        $probeLot = max(0.01, $probeLot);
-        $mainLot  = round($probeLot * $multi, 2);
-
-        return [
-            'probe'        => $probeLot,
-            'main'         => $mainLot,
-            'sl_usd_probe' => round($probeLot * $slPips * 100.0, 2),
-            'sl_usd_main'  => round($mainLot  * $slPips * 100.0, 2),
-        ];
+        if ($capital <= 0 || $slPips <= 0) return 0.01;
+        return max(0.01, round(($capital * $riskPct) / ($slPips * 100.0), 2));
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -61,82 +43,67 @@ class SignalFormatterService
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Xây dựng tham số cho cả 2 lệnh STOP từ channel data.
+     * Xây dựng tham số lệnh từ channel + ATR.
      *
-     * BUY  STOP: entry = upper + 3 pips | TP = entry + 15 pips | SL = entry - 20 pips
-     * SELL STOP: entry = lower - 3 pips | TP = entry - 15 pips | SL = entry + 20 pips
+     * Triangle:          BUY STOP  + SELL STOP  (breakout cả 2 chiều)
+     * Descending (SHORT): SELL LIMIT (bounce bán tại upper trendline)
+     * Ascending  (LONG):  BUY LIMIT  (bounce mua tại lower trendline)
      *
-     * @return array{long: array, short: array, sl_pips: float, tp_pips: float, lots: array}
+     * Trả về null nếu R:R < 1:1 (TP nhỏ hơn SL) — setup không đáng vào.
+     *
+     * @return array{orders: array, sl_pips: float, tp_pips: float, rr: float, lot: float}|null
      */
     public function buildSignals(
         string $symbol,
         array  $channel,
         float  $capital,
-        int    $multi = 7
-    ): array {
-        // XAUUSD: 1 pip = $1.00 (giá vàng tính theo USD, 1 pip = $1 di chuyển)
-        $pip = 1.00;
-        $dec = 2;
+        float  $atr
+    ): ?array {
+        $pip     = 1.00;   // XAUUSD: 1 pip = $1.00 price movement
+        $dec     = 2;
+        $bufDist = self::BUF_PIPS * $pip;
 
-        $tpPips  = self::TP_PIPS;
-        $slPips  = self::SL_PIPS;
-        $bufPips = self::BUF_PIPS;
-        $rr      = self::RR;
+        // ── Dynamic SL / TP ──
+        $slDist = round(1.5 * $atr, 2);                                   // 1.5 × ATR(14)
+        $tpDist = round(($channel['upper'] - $channel['lower']) * 0.8, 2); // 80% channel width
 
-        $tpDist  = $tpPips  * $pip;
-        $slDist  = $slPips  * $pip;
-        $bufDist = $bufPips * $pip;
+        // Minimum R:R 1:1
+        if ($slDist <= 0 || $tpDist < $slDist) return null;
 
-        $lots = $this->calculateExnessLots($capital, $multi);
+        $slPips = round($slDist / $pip, 2);
+        $tpPips = round($tpDist / $pip, 2);
+        $rr     = round($tpDist / $slDist, 2);
+        $lot    = $this->calculateExnessLot($capital, $slPips);
 
         $channelDir = $channel['direction'] ?? null;
 
         if ($channelDir === 'SHORT') {
-            // Sell near upper trendline of descending channel
-            $shortEntry = round($channel['upper'] - $bufDist, $dec);
-            $shortTp    = round($shortEntry - $tpDist, $dec);
-            $shortSl    = round($shortEntry + $slDist, $dec);
-            $longEntry  = round($channel['upper'] + $bufDist, $dec);
-            $longTp     = round($longEntry + $tpDist, $dec);
-            $longSl     = round($longEntry - $slDist, $dec);
+            $entry  = round($channel['upper'] - $bufDist, $dec);
+            $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
+                         'tp'  => round($entry - $tpDist, $dec),
+                         'sl'  => round($entry + $slDist, $dec)]];
+
         } elseif ($channelDir === 'LONG') {
-            // Buy near lower trendline of ascending channel
-            $longEntry  = round($channel['lower'] + $bufDist, $dec);
-            $longTp     = round($longEntry + $tpDist, $dec);
-            $longSl     = round($longEntry - $slDist, $dec);
-            $shortEntry = round($channel['lower'] - $bufDist, $dec);
-            $shortTp    = round($shortEntry - $tpDist, $dec);
-            $shortSl    = round($shortEntry + $slDist, $dec);
+            $entry  = round($channel['lower'] + $bufDist, $dec);
+            $orders = [['side' => 'BUY_LIMIT',  'entry' => $entry,
+                         'tp'  => round($entry + $tpDist, $dec),
+                         'sl'  => round($entry - $slDist, $dec)]];
+
         } else {
-            // Triangle: breakout both sides (original logic)
-            $longEntry  = round($channel['upper'] + $bufDist, $dec);
-            $longTp     = round($longEntry + $tpDist, $dec);
-            $longSl     = round($longEntry - $slDist, $dec);
-            $shortEntry = round($channel['lower'] - $bufDist, $dec);
-            $shortTp    = round($shortEntry - $tpDist, $dec);
-            $shortSl    = round($shortEntry + $slDist, $dec);
+            $lE = round($channel['upper'] + $bufDist, $dec);
+            $sE = round($channel['lower'] - $bufDist, $dec);
+            $orders = [
+                ['side' => 'BUY_STOP',  'entry' => $lE, 'tp' => round($lE + $tpDist, $dec), 'sl' => round($lE - $slDist, $dec)],
+                ['side' => 'SELL_STOP', 'entry' => $sE, 'tp' => round($sE - $tpDist, $dec), 'sl' => round($sE + $slDist, $dec)],
+            ];
         }
 
         return [
-            'long' => [
-                'side'  => 'BUY_STOP',
-                'entry' => $longEntry,
-                'tp'    => $longTp,
-                'sl'    => $longSl,
-                'rr'    => $rr,
-                'lots'  => $lots,
-            ],
-            'short' => [
-                'side'  => 'SELL_STOP',
-                'entry' => $shortEntry,
-                'tp'    => $shortTp,
-                'sl'    => $shortSl,
-                'rr'    => $rr,
-                'lots'  => $lots,
-            ],
+            'orders'  => $orders,
             'sl_pips' => $slPips,
             'tp_pips' => $tpPips,
-            'lots'    => $lots,
+            'rr'      => $rr,
+            'lot'     => $lot,
         ];
     }
 
@@ -160,9 +127,7 @@ class SignalFormatterService
     ): string {
         $upper       = $channel['upper'];
         $lower       = $channel['lower'];
-        $compression = round($channel['compression'] * 100);
-        $lhCount     = $channel['lh_count'];
-        $hlCount     = $channel['hl_count'];
+        $channelType = $channel['type'] ?? 'triangle';
 
         $score      = $aiResult['score']      ?? 0;
         $analysis   = $aiResult['analysis']   ?? '';
@@ -177,34 +142,41 @@ class SignalFormatterService
             default  => '🔴',
         };
 
-        $time  = now()->format('H:i d/m');
-        $long  = $signals['long'];
-        $short = $signals['short'];
-        $lots  = $signals['lots'];
+        $time   = now('Asia/Ho_Chi_Minh')->format('H:i d/m');
+        $lot    = $signals['lot'];
+        $slPips = $signals['sl_pips'];
+        $tpPips = $signals['tp_pips'];
+        $slUsd  = round($lot * $slPips * 100.0, 2);
 
-        $showLong  = in_array($breakoutDirection, ['LONG',  'BOTH']);
-        $showShort = in_array($breakoutDirection, ['SHORT', 'BOTH']);
-
-        $longBlock  = '';
-        $shortBlock = '';
-
-        if ($showLong) {
-            $longBlock = "⬆ <b>BUY STOP</b>\n"
-                . "   📌 Entry : <code>{$long['entry']}</code>\n"
-                . "   🎯 TP    : <code>{$long['tp']}</code>  (+15 pips / +$15)\n"
-                . "   🛡 SL    : <code>{$long['sl']}</code>  (-20 pips / -$20)\n"
-                . "   📊 R:R   : 1:0.75\n";
+        // Header + channel description by type
+        if ($channelType === 'descending') {
+            $header       = "📉 <b>VÀNG BOUNCE SELL</b>";
+            $channelLabel = "📉 Kênh GIẢM Song Song";
+        } elseif ($channelType === 'ascending') {
+            $header       = "📈 <b>VÀNG BOUNCE BUY</b>";
+            $channelLabel = "📈 Kênh TĂNG Song Song";
+        } else {
+            $compression  = round($channel['compression'] * 100);
+            $lhCount      = $channel['lh_count'];
+            $hlCount      = $channel['hl_count'];
+            $header       = "🥇 <b>VÀNG BREAKOUT SETUP</b>";
+            $channelLabel = "🗜 Kênh NÉN <b>{$compression}%</b>  ({$lhCount} LH · {$hlCount} HL)";
         }
 
-        if ($showShort) {
-            $shortBlock = "⬇ <b>SELL STOP</b>\n"
-                . "   📌 Entry : <code>{$short['entry']}</code>\n"
-                . "   🎯 TP    : <code>{$short['tp']}</code>  (-15 pips / -$15)\n"
-                . "   🛡 SL    : <code>{$short['sl']}</code>  (+20 pips / +$20)\n"
-                . "   📊 R:R   : 1:0.75\n";
+        // For triangles, respect AI direction to show 1 or 2 orders
+        $orders = $signals['orders'];
+        if (($channel['direction'] ?? null) === null) {
+            if ($breakoutDirection === 'LONG') {
+                $orders = array_values(array_filter($orders, fn($o) => str_starts_with($o['side'], 'BUY')));
+            } elseif ($breakoutDirection === 'SHORT') {
+                $orders = array_values(array_filter($orders, fn($o) => str_starts_with($o['side'], 'SELL')));
+            }
         }
 
-        $ordersSection = implode("\n", array_filter([$longBlock, $shortBlock]));
+        $ordersSection = '';
+        foreach ($orders as $order) {
+            $ordersSection .= $this->formatOrderBlock($order, $tpPips, $slPips) . "\n";
+        }
 
         $dirLabel = match ($breakoutDirection) {
             'LONG'  => '⬆ CHỈ BUY',
@@ -213,19 +185,10 @@ class SignalFormatterService
             default => '⬆⬇ HAI CHIỀU',
         };
 
-        $capitalLine = $lots['probe'] > 0
-            ? "\n💰 Probe <b>{$lots['probe']} lot</b>  |  Main <b>{$lots['main']} lot</b>"
-            : '';
-
-        $probeLossLine = $lots['sl_usd_probe'] > 0
-            ? "  |  ❌ SL probe = -\${$lots['sl_usd_probe']}"
-            : '';
-
-        $msg = "🥇 <b>VÀNG BREAKOUT SETUP</b> — {$symbol} {$timeframe}  <i>{$time}</i>\n"
+        return "{$header} — {$symbol} {$timeframe}  <i>{$time}</i>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "🗜 Kênh nén <b>{$compression}%</b>  ({$lhCount} LH · {$hlCount} HL)\n"
-            . "   🏔 Đỉnh cứng     : <code>{$upper}</code>\n"
-            . "   ⛰ Đáy cứng     : <code>{$lower}</code>\n"
+            . "{$channelLabel}\n"
+            . "   🏔 Upper : <code>{$upper}</code>   ⛰ Lower : <code>{$lower}</code>\n"
             . "   💰 Giá hiện tại : <code>{$currentPrice}</code>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
             . $ordersSection
@@ -233,10 +196,23 @@ class SignalFormatterService
             . "🤖 AI <b>{$score}/100</b>  {$scoreBar}  {$confEmoji}{$cached}  [{$dirLabel}]\n"
             . "<i>{$analysis}</i>\n"
             . ($riskNote ? "⚠️ <i>{$riskNote}</i>\n" : '')
-            . $capitalLine
-            . $probeLossLine;
+            . "\n💼 Lot: <b>{$lot}</b>  |  ❌ SL rủi ro: -\${$slUsd}";
+    }
 
-        return $msg;
+    private function formatOrderBlock(array $order, float $tpPips, float $slPips): string
+    {
+        $isSell = str_starts_with($order['side'], 'SELL');
+        $emoji  = $isSell ? '⬇' : '⬆';
+        $label  = str_replace('_', ' ', $order['side']);
+        $tpSign = $isSell ? '-' : '+';
+        $slSign = $isSell ? '+' : '-';
+        $rr     = round($tpPips / $slPips, 2);
+
+        return "{$emoji} <b>{$label}</b>\n"
+            . "   📌 Entry : <code>{$order['entry']}</code>\n"
+            . "   🎯 TP    : <code>{$order['tp']}</code>  ({$tpSign}{$tpPips} pips)\n"
+            . "   🛡 SL    : <code>{$order['sl']}</code>  ({$slSign}{$slPips} pips)\n"
+            . "   📊 R:R   : 1:{$rr}";
     }
 
     /**
