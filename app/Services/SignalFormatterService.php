@@ -89,15 +89,33 @@ class SignalFormatterService
 
         $lots = $this->calculateExnessLots($capital, $multi);
 
-        // BUY STOP
-        $longEntry = round($channel['upper'] + $bufDist, $dec);
-        $longTp    = round($longEntry + $tpDist, $dec);
-        $longSl    = round($longEntry - $slDist, $dec);
+        $channelDir = $channel['direction'] ?? null;
 
-        // SELL STOP
-        $shortEntry = round($channel['lower'] - $bufDist, $dec);
-        $shortTp    = round($shortEntry - $tpDist, $dec);
-        $shortSl    = round($shortEntry + $slDist, $dec);
+        if ($channelDir === 'SHORT') {
+            // Sell near upper trendline of descending channel
+            $shortEntry = round($channel['upper'] - $bufDist, $dec);
+            $shortTp    = round($shortEntry - $tpDist, $dec);
+            $shortSl    = round($shortEntry + $slDist, $dec);
+            $longEntry  = round($channel['upper'] + $bufDist, $dec);
+            $longTp     = round($longEntry + $tpDist, $dec);
+            $longSl     = round($longEntry - $slDist, $dec);
+        } elseif ($channelDir === 'LONG') {
+            // Buy near lower trendline of ascending channel
+            $longEntry  = round($channel['lower'] + $bufDist, $dec);
+            $longTp     = round($longEntry + $tpDist, $dec);
+            $longSl     = round($longEntry - $slDist, $dec);
+            $shortEntry = round($channel['lower'] - $bufDist, $dec);
+            $shortTp    = round($shortEntry - $tpDist, $dec);
+            $shortSl    = round($shortEntry + $slDist, $dec);
+        } else {
+            // Triangle: breakout both sides (original logic)
+            $longEntry  = round($channel['upper'] + $bufDist, $dec);
+            $longTp     = round($longEntry + $tpDist, $dec);
+            $longSl     = round($longEntry - $slDist, $dec);
+            $shortEntry = round($channel['lower'] - $bufDist, $dec);
+            $shortTp    = round($shortEntry - $tpDist, $dec);
+            $shortSl    = round($shortEntry + $slDist, $dec);
+        }
 
         return [
             'long' => [

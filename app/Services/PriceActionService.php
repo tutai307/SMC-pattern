@@ -52,8 +52,8 @@ class PriceActionService
 
         $candles = $this->formatCandles(array_slice($klines, -($lookback + 6)));
         $swings  = $this->detectSwingPoints($candles, wing: 2);
-        $highs   = array_slice($swings['highs'], -5);
-        $lows    = array_slice($swings['lows'],  -5);
+        $highs   = array_slice($swings['highs'], -8);
+        $lows    = array_slice($swings['lows'],  -8);
 
         if (count($highs) < 2 || count($lows) < 2) return $empty;
 
@@ -69,6 +69,60 @@ class PriceActionService
         for ($i = count($lows) - 1; $i >= 1; $i--) {
             if ($lows[$i]['price'] > $lows[$i - 1]['price']) $hlCount++;
             else break;
+        }
+
+        // ── Chuỗi LL (Lower Lows) liên tiếp từ cuối trở về ──
+        $llCount = 0;
+        for ($i = count($lows) - 1; $i >= 1; $i--) {
+            if ($lows[$i]['price'] < $lows[$i - 1]['price']) $llCount++;
+            else break;
+        }
+
+        // ── Chuỗi HH (Higher Highs) liên tiếp từ cuối trở về ──
+        $hhCount = 0;
+        for ($i = count($highs) - 1; $i >= 1; $i--) {
+            if ($highs[$i]['price'] > $highs[$i - 1]['price']) $hhCount++;
+            else break;
+        }
+
+        $currentIdx = count($candles) - 1;
+
+        // ── Kênh giảm: LH + LL (descending parallel channel) ──
+        if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
+            if (count($highs) < 2 || count($lows) < 2)
+                return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            $lH1 = $highs[count($highs) - 2]; $lH2 = end($highs);
+            $lL1 = $lows[count($lows) - 2];   $lL2 = end($lows);
+            $uSlope = $lH2['idx'] > $lH1['idx'] ? ($lH2['price'] - $lH1['price']) / ($lH2['idx'] - $lH1['idx']) : 0.0;
+            $dSlope = $lL2['idx'] > $lL1['idx'] ? ($lL2['price'] - $lL1['price']) / ($lL2['idx'] - $lL1['idx']) : 0.0;
+            $projU  = round($lH2['price'] + $uSlope * ($currentIdx - $lH2['idx']), 2);
+            $projL  = round($lL2['price'] + $dSlope * ($currentIdx - $lL2['idx']), 2);
+            if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            $w = $projU - $projL;
+            $mid = ($projU + $projL) / 2;
+            if ($mid > 0 && ($w / $mid) < 0.0015) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            return ['is_channel' => true, 'upper' => $projU, 'lower' => $projL,
+                    'compression' => 0.5, 'lh_count' => $lhCount, 'hl_count' => $hlCount,
+                    'll_count' => $llCount, 'direction' => 'SHORT', 'type' => 'descending'];
+        }
+
+        // ── Kênh tăng: HH + HL (ascending parallel channel) ──
+        if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
+            if (count($highs) < 2 || count($lows) < 2)
+                return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            $lH1 = $highs[count($highs) - 2]; $lH2 = end($highs);
+            $lL1 = $lows[count($lows) - 2];   $lL2 = end($lows);
+            $uSlope = $lH2['idx'] > $lH1['idx'] ? ($lH2['price'] - $lH1['price']) / ($lH2['idx'] - $lH1['idx']) : 0.0;
+            $dSlope = $lL2['idx'] > $lL1['idx'] ? ($lL2['price'] - $lL1['price']) / ($lL2['idx'] - $lL1['idx']) : 0.0;
+            $projU  = round($lH2['price'] + $uSlope * ($currentIdx - $lH2['idx']), 2);
+            $projL  = round($lL2['price'] + $dSlope * ($currentIdx - $lL2['idx']), 2);
+            if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            $w = $projU - $projL;
+            $mid = ($projU + $projL) / 2;
+            if ($mid > 0 && ($w / $mid) < 0.0015) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+            return ['is_channel' => true, 'upper' => $projU, 'lower' => $projL,
+                    'compression' => 0.5, 'lh_count' => $lhCount, 'hl_count' => $hlCount,
+                    'hh_count' => $hhCount, 'direction' => 'LONG', 'type' => 'ascending'];
         }
 
         // Trả về counts thực để caller có thể log lý do bị loại
@@ -98,6 +152,7 @@ class PriceActionService
             'compression' => max(0.0, $compression),
             'lh_count'    => $lhCount,
             'hl_count'    => $hlCount,
+            'direction'   => null,
             'type'        => 'triangle',
         ];
     }

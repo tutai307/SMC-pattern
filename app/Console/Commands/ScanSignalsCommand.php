@@ -127,25 +127,34 @@ class ScanSignalsCommand extends Command
         }
 
         // ── 1. Phát hiện kênh nén ──
-        $channel = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 40);
+        $channel = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 100);
 
         if (!$channel['is_channel']) {
             $lh = $channel['lh_count']; $hl = $channel['hl_count'];
-            $this->line("[{$ts}] [{$symbol}] Không có kênh — LH={$lh} HL={$hl} (cần ≥1 mỗi loại)");
-            return;
-        }
-
-        $minComp = (float) $this->option('min-compression');
-        if ($channel['compression'] < $minComp) {
-            $comp = round($channel['compression'] * 100);
-            $this->line("[{$ts}] [{$symbol}] Kênh nén yếu {$comp}% < " . round($minComp * 100) . "% — skip");
+            $this->line("[{$ts}] [{$symbol}] Không có kênh — LH={$lh} HL={$hl} (cần >=1 mỗi loại)");
             return;
         }
 
         $upper       = $channel['upper'];
         $lower       = $channel['lower'];
-        $compression = round($channel['compression'] * 100);
-        $this->line("[{$ts}] [{$symbol}] 📐 Kênh nén {$compression}% | upper={$upper} lower={$lower}");
+        $channelType = $channel['type'] ?? 'triangle';
+        $channelDir  = $channel['direction'] ?? null;
+
+        // Trending channels: skip compression check, force AI direction
+        if ($channelType === 'descending' || $channelType === 'ascending') {
+            $this->line("[{$ts}] [{$symbol}] Kenh {$channelType} | upper={$upper} lower={$lower}");
+            // continue to step 2 (ATR), force direction after AI scoring
+        } else {
+            // Triangle: apply compression filter
+            $minComp = (float) $this->option('min-compression');
+            if ($channel['compression'] < $minComp) {
+                $comp = round($channel['compression'] * 100);
+                $this->line("[{$ts}] [{$symbol}] Kenh nen yeu {$comp}% < " . round($minComp * 100) . "% — skip");
+                return;
+            }
+            $compression = round($channel['compression'] * 100);
+            $this->line("[{$ts}] [{$symbol}] Kenh nen {$compression}% | upper={$upper} lower={$lower}");
+        }
 
         // ── 2. Tính ATR ──
         $atr = $this->priceActionService->calculateATR($klines, 14);
@@ -158,7 +167,12 @@ class ScanSignalsCommand extends Command
         $aiScore     = $aiResult['score'] ?? 0;
         $aiDirection = $aiResult['breakout_direction'] ?? 'BOTH';
         $cachedLabel = ($aiResult['cached'] ?? false) ? '[cache]' : '[live]';
-        $this->line("[{$ts}] [{$symbol}] 🤖 AI={$aiScore}/100 dir={$aiDirection} {$cachedLabel}");
+        $this->line("[{$ts}] [{$symbol}] AI={$aiScore}/100 dir={$aiDirection} {$cachedLabel}");
+
+        // Force direction for trending channels regardless of AI
+        if ($channelDir !== null) {
+            $aiDirection = $channelDir;
+        }
 
         if ($aiScore < $aiThreshold) {
             $this->line("[{$ts}] [{$symbol}] AI {$aiScore} < threshold {$aiThreshold} — skip");
