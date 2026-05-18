@@ -21,11 +21,10 @@ use Illuminate\Support\Facades\Cache;
 class ScanSignalsCommand extends Command
 {
     protected $signature = 'signals:scan
-        {--interval=300    : Giây giữa mỗi lần quét (mặc định 5 phút)}
-        {--capital=0       : Vốn tài khoản USD}
-        {--multi=7         : Hệ số nhân lot khi breakout (probe × multi)}
-        {--daily-target=50 : Mục tiêu ngày (pips) — đạt rồi khóa máy nghỉ}
-        {--tp-pips=15      : TP cố định tính bằng pip}
+        {--interval=300         : Giây giữa mỗi lần quét (mặc định 5 phút)}
+        {--capital=0            : Vốn tài khoản USD}
+        {--multi=7              : Hệ số nhân lot khi breakout (probe × multi)}
+        {--daily-target=50      : Mục tiêu ngày (pips) — đạt rồi khóa máy nghỉ}
         {--ai-score=70          : Ngưỡng AI score tối thiểu để gửi alert}
         {--min-compression=0.2  : Bỏ qua kênh nén < giá trị này (0.2 = 20%)}';
 
@@ -109,11 +108,10 @@ class ScanSignalsCommand extends Command
      */
     private function scanGold(string $symbol, string $timeframe): void
     {
-        $ts           = now()->format('H:i:s');
-        $aiThreshold  = (int)   $this->option('ai-score');
-        $capital      = (float) $this->option('capital');
-        $multi        = (int)   $this->option('multi');
-        $tpPips       = (float) $this->option('tp-pips');
+        $ts          = now()->format('H:i:s');
+        $aiThreshold = (int)   $this->option('ai-score');
+        $capital     = (float) $this->option('capital');
+        $multi       = (int)   $this->option('multi');
 
         if (!$this->marketData->hasData($symbol, $timeframe)) {
             $this->warn("[{$ts}] [{$symbol}] Chưa có data từ MT5 EA — chờ EA push");
@@ -181,9 +179,7 @@ class ScanSignalsCommand extends Command
         Cache::put($dedupKey, true, now()->addHours(2));
 
         // ── 5. Build tham số lệnh + format Telegram ──
-        $signals = $this->signalFormatter->buildSignals(
-            $symbol, $channel, $atr, $capital, $multi, $tpPips
-        );
+        $signals = $this->signalFormatter->buildSignals($symbol, $channel, $capital, $multi);
 
         $msg = $this->signalFormatter->formatTelegramMessage(
             $symbol, $timeframe, $channel, $signals,
@@ -193,6 +189,7 @@ class ScanSignalsCommand extends Command
         $this->telegramService->sendRaw($msg);
 
         $slPips = $signals['sl_pips'];
+        $tpPips = $signals['tp_pips'];
         $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpPips}p SL:{$slPips}p | dir:{$aiDirection}");
     }
 

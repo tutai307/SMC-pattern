@@ -22,9 +22,10 @@ class BacktestV4Command extends Command
         {--symbol=XAUUSDT       : Symbol (XAUUSDT hoặc XAGUSDT)}
         {--from=2026-05-01      : Ngày bắt đầu YYYY-MM-DD}
         {--to=                  : Ngày kết thúc (mặc định hôm nay)}
-        {--capital=1000         : Vốn ban đầu (USD)}
+        {--capital=100          : Vốn ban đầu (USD)}
         {--multi=7              : Hệ số nhân lot khi breakout}
         {--tp-pips=15           : TP cố định (pips)}
+        {--sl-pips=20           : SL cứng (pips)}
         {--buf-pips=3           : Buffer ngoài đỉnh/đáy (pips)}
         {--expiry-bars=16       : Hủy stop sau N nến không khớp (16 × 15m = 4h)}
         {--lookback=40          : Lookback channel detection (số nến M15)}
@@ -45,6 +46,7 @@ class BacktestV4Command extends Command
         $capital     = (float) $this->option('capital');
         $multi       = (int)   $this->option('multi');
         $tpPips      = (float) $this->option('tp-pips');
+        $slPipsHard  = (float) $this->option('sl-pips');
         $bufPips     = (float) $this->option('buf-pips');
         $expiryBars  = (int)   $this->option('expiry-bars');
         $lookback    = (int)   $this->option('lookback');
@@ -64,7 +66,7 @@ class BacktestV4Command extends Command
         $this->info("║  FELIX v4 BACKTEST — {$symbol} M15              ║");
         $this->info("╚══════════════════════════════════════════════════╝");
         $this->info("Period : {$from} → {$to}");
-        $this->info("Capital: \${$capital} | Multi: ×{$multi} | TP: {$tpPips}pip | Buf: {$bufPips}pip | Expiry: {$expiryBars}bars");
+        $this->info("Capital: \${$capital} | Multi: ×{$multi} | TP: {$tpPips}pip | SL: {$slPipsHard}pip (cứng) | Buf: {$bufPips}pip | Expiry: {$expiryBars}bars");
         $this->line('');
 
         // ── 1. Tải toàn bộ klines từ Binance ──
@@ -168,26 +170,22 @@ class BacktestV4Command extends Command
             }
             $channelDedup[$fingerprint] = $i;
 
-            $pa->calculateATR($window, 14); // warm ATR (unused in SL calc now)
-
-            // SL = channel boundary + 5pip buffer (backtest-validated)
-            $channelWidthPips = ($channel['upper'] - $channel['lower']) / $this->pipSize;
-            $slBufPips        = 5;
-            $slPips           = max(10, round($channelWidthPips + $slBufPips + $bufPips));
-
+            // SL cứng theo spec: 20 pip tính từ entry
+            $slPips  = $slPipsHard;
             $bufDist = $bufPips * $this->pipSize;
             $tpDist  = $tpPips  * $this->pipSize;
+            $slDist  = $slPips  * $this->pipSize;
 
-            // Lot sizing
+            // Lot sizing: (capital × 0.5%) / (slPips × pip_value)
             $probeLot = $capital > 0
                 ? max(0.01, round(($capital * 0.005) / ($slPips * $this->pipValue), 2))
                 : 0.01;
             $mainLot = round($probeLot * $multi, 2);
 
-            // BUY STOP: SL = dưới lower - 5pip
+            // BUY STOP: entry = upper + buf | TP = entry + 15p | SL = entry - 20p
             $buyEntry = round($channel['upper'] + $bufDist, $this->decimals);
             $buyTp    = round($buyEntry + $tpDist, $this->decimals);
-            $buySl    = round($channel['lower'] - ($slBufPips * $this->pipSize), $this->decimals);
+            $buySl    = round($buyEntry - $slDist, $this->decimals);
 
             $pendingOrders['buy_' . $i] = [
                 'id'             => 'buy_' . $i,
@@ -207,10 +205,10 @@ class BacktestV4Command extends Command
                 'pnl_pips'       => 0,
             ];
 
-            // SELL STOP: SL = trên upper + 5pip
+            // SELL STOP: entry = lower - buf | TP = entry - 15p | SL = entry + 20p
             $sellEntry = round($channel['lower'] - $bufDist, $this->decimals);
             $sellTp    = round($sellEntry - $tpDist, $this->decimals);
-            $sellSl    = round($channel['upper'] + ($slBufPips * $this->pipSize), $this->decimals);
+            $sellSl    = round($sellEntry + $slDist, $this->decimals);
 
             $pendingOrders['sell_' . $i] = [
                 'id'             => 'sell_' . $i,
