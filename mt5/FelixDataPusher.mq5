@@ -9,7 +9,7 @@
 //--- Input parameters
 input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";  // Địa chỉ server Laravel
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";    // MT5_WEBHOOK_SECRET trong .env
-input int    KlineCount    = 100;                               // Số nến gửi mỗi lần push
+input int    KlineCount    = 90;                                // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;                                // Giây push giá bid (timer)
 input bool   EnableLogging = true;                              // In log vào Experts tab
 
@@ -78,39 +78,36 @@ void PushKlines()
         return;
     }
 
-    // Compact format: ts_sec,o,h,l,c,v~ts_sec,o,h,l,c,v~...
-    // Dùng ~ làm row separator (URL-safe), không cần body
+    // Compact: bỏ timestamp (reconstruct server-side), integer price (không decimal)
+    // Format: o,h,l,c~o,h,l,c~... — 90 nến × 20 chars = ~1800 chars < URL limit 2048
     string compact = "";
     for (int i = 0; i < copied; i++) {
         if (i > 0) compact += "~";
-        compact += IntegerToString((long)rates[i].time) + ","
-                 + DoubleToString(rates[i].open,  2) + ","
-                 + DoubleToString(rates[i].high,  2) + ","
-                 + DoubleToString(rates[i].low,   2) + ","
-                 + DoubleToString(rates[i].close, 2) + ","
-                 + IntegerToString((int)rates[i].tick_volume);
+        compact += IntegerToString((int)MathRound(rates[i].open))  + ","
+                 + IntegerToString((int)MathRound(rates[i].high))  + ","
+                 + IntegerToString((int)MathRound(rates[i].low))   + ","
+                 + IntegerToString((int)MathRound(rates[i].close));
     }
 
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    // Gửi klines qua form-encoded body — PHP parse natively, không bị giới hạn URL
-    string url      = WebhookURL + "/klines?secret=" + WebhookSecret;
-    string formBody = "symbol="    + _Symbol
-                    + "&timeframe=M15"
-                    + "&bid="      + DoubleToString(bid, _Digits)
-                    + "&k="        + compact;
+    // start_ts để server reconstruct timestamps (M15 = 900s/bar)
+    string url = WebhookURL + "/klines"
+               + "?secret="    + WebhookSecret
+               + "&symbol="    + _Symbol
+               + "&timeframe=M15"
+               + "&bid="       + DoubleToString(bid, _Digits)
+               + "&ts="        + IntegerToString((long)rates[0].time)
+               + "&k="         + compact;
 
-    uchar  requestBody[];
+    uchar  emptyBody[];
     uchar  responseBody[];
     string responseHeaders;
-    StringToCharArray(formBody, requestBody, 0, StringLen(formBody));
-    ArrayResize(requestBody, ArraySize(requestBody) - 1); // bỏ null terminator
+    ArrayResize(emptyBody, 0);
 
-    int statusCode = WebRequest("POST", url,
-        "Content-Type: application/x-www-form-urlencoded\r\n",
-        5000, requestBody, responseBody, responseHeaders);
+    int statusCode = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
     if (statusCode == -1) {
-        Print("FelixDataPusher klines ERROR #", GetLastError(), " url=", url);
+        Print("FelixDataPusher klines ERROR #", GetLastError(), " url_len=", StringLen(url));
         return;
     }
     string result = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);

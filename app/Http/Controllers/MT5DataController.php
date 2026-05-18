@@ -41,13 +41,12 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        // Meta + klines từ form-encoded body, secret từ query param
-        $symbol    = strtoupper(trim($request->input('symbol', $request->query('symbol', ''))));
-        $timeframe = strtoupper(trim($request->input('timeframe', $request->query('timeframe', ''))));
-        $bid       = (float) $request->input('bid', $request->query('bid', 0));
-        $klines    = $this->parseCompactKlines(
-            $request->input('k', $request->query('k', ''))
-        );
+        // Tất cả trong query params, klines compact không có timestamp
+        $symbol    = strtoupper(trim($request->query('symbol', '')));
+        $timeframe = strtoupper(trim($request->query('timeframe', '')));
+        $bid       = (float) $request->query('bid', 0);
+        $startTs   = (int) $request->query('ts', 0);
+        $klines    = $this->parseCompactKlines($request->query('k', ''), $startTs);
 
         if (empty($symbol) || empty($timeframe) || empty($klines)) {
             return response()->json(['error' => 'Missing required fields'], 422);
@@ -149,22 +148,16 @@ class MT5DataController extends Controller
     // PRIVATE
     // ──────────────────────────────────────────────────────────────
 
-    /** Parse compact klines: "ts,o,h,l,c,v~ts,o,h,l,c,v~..." → [[ts_ms,o,h,l,c,v], ...] */
-    private function parseCompactKlines(string $k): array
+    /** Parse compact klines: "o,h,l,c~o,h,l,c~..." + startTs → [[ts_ms,o,h,l,c,0], ...] */
+    private function parseCompactKlines(string $k, int $startTs = 0): array
     {
         if (empty($k)) return [];
         $klines = [];
-        foreach (explode('~', $k) as $row) {
+        foreach (explode('~', $k) as $i => $row) {
             $f = explode(',', $row);
-            if (count($f) === 6) {
-                $klines[] = [
-                    (int)$f[0] * 1000, // seconds → ms
-                    (float)$f[1],
-                    (float)$f[2],
-                    (float)$f[3],
-                    (float)$f[4],
-                    (float)$f[5],
-                ];
+            if (count($f) === 4) {
+                $ts = $startTs > 0 ? ($startTs + $i * 900) * 1000 : 0;
+                $klines[] = [$ts, (float)$f[0], (float)$f[1], (float)$f[2], (float)$f[3], 0.0];
             }
         }
         return $klines;
