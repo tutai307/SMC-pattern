@@ -4,12 +4,12 @@
 //| Attach vào chart XAUUSD M15 trên Exness                         |
 //+------------------------------------------------------------------+
 #property copyright "Felix v4"
-#property version   "1.1"
+#property version   "1.2"
 
 //--- Input parameters
 input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";
-input int    KlineCount    = 90;   // Tổng số nến (chia 3 chunk × 30)
+input int    KlineCount    = 150;  // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;   // Giây push tick
 input bool   EnableLogging = true;
 
@@ -23,7 +23,7 @@ int OnInit()
     PushKlines();
     PushTick();
     if (EnableLogging)
-        Print("FelixDataPusher v1.1 — symbol=", _Symbol, " server=", WebhookURL);
+        Print("FelixDataPusher v1.2 — symbol=", _Symbol, " server=", WebhookURL);
     return INIT_SUCCEEDED;
 }
 
@@ -47,44 +47,7 @@ void OnCalculate(const int rates_total,
 void OnTimer() { PushTick(); }
 
 //+------------------------------------------------------------------+
-// Push 1 chunk klines (30 nến) — URL ~780 chars, dưới limit MT5
-void PushKlinesChunk(const MqlRates &rates[], int start, int count,
-                     int batchNum, int totalBatches, double bid)
-{
-    string k = "";
-    for (int i = start; i < start + count; i++) {
-        if (i > start) k += "-";
-        k += IntegerToString((int)MathRound(rates[i].open))  + ","
-           + IntegerToString((int)MathRound(rates[i].high))  + ","
-           + IntegerToString((int)MathRound(rates[i].low))   + ","
-           + IntegerToString((int)MathRound(rates[i].close));
-    }
-
-    string url = WebhookURL + "/klines"
-               + "?secret="   + WebhookSecret
-               + "&symbol="   + _Symbol
-               + "&tf=M15"
-               + "&bid="      + DoubleToString(bid, _Digits)
-               + "&ts="       + IntegerToString((long)rates[start].time)
-               + "&b="        + IntegerToString(batchNum)
-               + "&t="        + IntegerToString(totalBatches)
-               + "&k="        + k;
-
-    uchar emptyBody[], responseBody[];
-    string responseHeaders;
-    ArrayResize(emptyBody, 0);
-
-    int sc = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
-    if (sc == -1) {
-        Print("FelixDataPusher chunk ", batchNum, " ERROR #", GetLastError(),
-              " url_len=", StringLen(url));
-    } else if (EnableLogging) {
-        Print("FelixDataPusher chunk ", batchNum, "/", totalBatches,
-              " url_len=", StringLen(url), " — ", sc, ":", CharArrayToString(responseBody));
-    }
-}
-
-//+------------------------------------------------------------------+
+// Push klines qua JSON body với Content-Length explicit
 void PushKlines()
 {
     MqlRates rates[];
@@ -94,22 +57,38 @@ void PushKlines()
         return;
     }
 
+    // Build JSON klines array
+    string klinesJson = "[";
+    for (int i = 0; i < copied; i++) {
+        long   ts_ms  = (long)rates[i].time * 1000;
+        if (i > 0) klinesJson += ",";
+        klinesJson += "[" + IntegerToString(ts_ms)
+                   + "," + DoubleToString(rates[i].open,  2)
+                   + "," + DoubleToString(rates[i].high,  2)
+                   + "," + DoubleToString(rates[i].low,   2)
+                   + "," + DoubleToString(rates[i].close, 2)
+                   + "," + DoubleToString((double)rates[i].tick_volume, 1)
+                   + "]";
+    }
+    klinesJson += "]";
+
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    int chunkSize   = 30;
-    int totalChunks = (int)MathCeil((double)copied / chunkSize);
+    string body = "{"
+        + "\"secret\":\""    + WebhookSecret  + "\","
+        + "\"symbol\":\""    + _Symbol        + "\","
+        + "\"timeframe\":\"M15\","
+        + "\"bid\":"         + DoubleToString(bid, _Digits) + ","
+        + "\"klines\":"      + klinesJson
+        + "}";
 
-    for (int b = 0; b < totalChunks; b++) {
-        int start = b * chunkSize;
-        int count = MathMin(chunkSize, copied - start);
-        PushKlinesChunk(rates, start, count, b + 1, totalChunks, bid);
-    }
-
+    string result = PostJSON(WebhookURL + "/klines", body);
     if (EnableLogging)
-        Print("FelixDataPusher klines: ", copied, " bars in ", totalChunks, " chunks");
+        Print("FelixDataPusher klines: ", copied, " bars — ", result);
 }
 
 //+------------------------------------------------------------------+
+// Push tick qua query params (body rỗng — tick nhỏ, không cần body)
 void PushTick()
 {
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -129,4 +108,35 @@ void PushTick()
     if (EnableLogging)
         Print("FelixDataPusher tick: bid=", DoubleToString(bid, _Digits),
               " — ", IntegerToString(sc), ":", CharArrayToString(responseBody));
+}
+
+//+------------------------------------------------------------------+
+// HTTP POST JSON với Content-Length explicit để server đọc được body
+string PostJSON(const string url, const string body)
+{
+    uchar  requestBody[];
+    uchar  responseBody[];
+    string responseHeaders;
+
+    StringToCharArray(body, requestBody, 0, StringLen(body));
+    int bodyLen = ArraySize(requestBody) - 1; // bỏ null terminator
+    ArrayResize(requestBody, bodyLen);
+
+    // Content-Length bắt buộc — không có sẽ bị server bỏ qua body
+    string headers = "Content-Type: application/json\r\n"
+                   + "Content-Length: " + IntegerToString(bodyLen) + "\r\n";
+
+    int statusCode = WebRequest("POST", url, headers, 5000,
+                                requestBody, responseBody, responseHeaders);
+
+    if (statusCode == -1) {
+        int err = GetLastError();
+        if (err == 4014)
+            Print("FelixDataPusher: URL chưa allow — thêm vào Tools > Options > Expert Advisors: ", url);
+        else
+            Print("FelixDataPusher: WebRequest lỗi #", err, " url=", url);
+        return "ERROR:" + IntegerToString(err);
+    }
+
+    return IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
 }
