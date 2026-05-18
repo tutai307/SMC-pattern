@@ -4,55 +4,51 @@ namespace App\Console\Commands;
 
 use App\Services\BinanceService;
 use App\Services\PriceActionService;
-use App\Services\SignalFormatterService;
 use Illuminate\Console\Command;
 
 /**
- * v4 Walk-forward backtest — Channel Compression Breakout.
+ * v5 Walk-forward backtest — Channel Compression Breakout.
  *
  * Logic:
  *   Mỗi bar M15: detectUnpredictableChannel()
- *   Nếu có kênh → đặt BUY_STOP tại upper+buf, SELL_STOP tại lower-buf
- *   Scan các bar tiếp theo: entry trigger → kiểm tra TP/SL hit
- *   Expiry: hủy nếu không khớp sau --expiry-bars nến
+ *   Tính channelScore() 0-100 → chọn lot cao/thấp
+ *   Đặt BUY_STOP + SELL_STOP, scan TP/SL, expiry sau N bars
  */
 class BacktestV4Command extends Command
 {
     protected $signature = 'backtest:v4
-        {--symbol=XAUUSDT       : Symbol (XAUUSDT hoặc XAGUSDT)}
-        {--from=2026-05-01      : Ngày bắt đầu YYYY-MM-DD}
-        {--to=                  : Ngày kết thúc (mặc định hôm nay)}
-        {--capital=100          : Vốn ban đầu (USD)}
-        {--multi=7              : Hệ số nhân lot khi breakout}
-        {--tp-pips=15           : TP cố định (pips)}
-        {--sl-pips=20           : SL cứng (pips)}
-        {--buf-pips=3           : Buffer ngoài đỉnh/đáy (pips)}
-        {--expiry-bars=16       : Hủy stop sau N nến không khớp (16 × 15m = 4h)}
-        {--lookback=40          : Lookback channel detection (số nến M15)}
-        {--min-compression=0.0  : Chỉ trade khi compression >= giá trị này (0.0=tất cả)}';
+        {--symbol=XAUUSDT        : Symbol}
+        {--from=2026-05-01       : Ngày bắt đầu YYYY-MM-DD}
+        {--to=                   : Ngày kết thúc (mặc định hôm nay)}
+        {--tp-pips=15            : TP cố định (pips)}
+        {--sl-pips=20            : SL cứng (pips)}
+        {--buf-pips=3            : Buffer ngoài đỉnh/đáy (pips)}
+        {--lot=0.05              : Lot size cho mỗi lệnh}
+        {--ma=100                : MA period để xác định trend (chỉ trade theo chiều MA)}
+        {--expiry-bars=16        : Hủy stop sau N nến không khớp}
+        {--lookback=40           : Lookback channel detection}
+        {--min-compression=0.0   : Chỉ trade khi compression >= giá trị này}';
 
-    protected $description = 'v4 Walk-forward backtest — channel compression breakout Gold/Silver';
+    protected $description = 'v5 Backtest — tiered lot theo channel score (0-100)';
 
-    // XAUUSD: 1 pip = $0.10
-    private float $pipSize   = 0.10;
-    private float $pipValue  = 10.0;  // USD per pip per standard lot
-    private int   $decimals  = 2;
+    private float $pipSize  = 0.10;
+    private float $pipValue = 10.0;
+    private int   $decimals = 2;
 
-    public function handle(BinanceService $binance, PriceActionService $pa, SignalFormatterService $fmt): int
+    public function handle(BinanceService $binance, PriceActionService $pa): int
     {
         $symbol      = strtoupper($this->option('symbol'));
         $from        = $this->option('from');
         $to          = $this->option('to') ?: now()->format('Y-m-d');
-        $capital     = (float) $this->option('capital');
-        $multi       = (int)   $this->option('multi');
-        $tpPips      = (float) $this->option('tp-pips');
-        $slPipsHard  = (float) $this->option('sl-pips');
-        $bufPips     = (float) $this->option('buf-pips');
-        $expiryBars  = (int)   $this->option('expiry-bars');
-        $lookback    = (int)   $this->option('lookback');
-        $minComp     = (float) $this->option('min-compression');
+        $tpPips     = (float) $this->option('tp-pips');
+        $slPips     = (float) $this->option('sl-pips');
+        $bufPips    = (float) $this->option('buf-pips');
+        $lot        = (float) $this->option('lot');
+        $maPeriod   = (int)   $this->option('ma');
+        $expiryBars = (int)   $this->option('expiry-bars');
+        $lookback   = (int)   $this->option('lookback');
+        $minComp    = (float) $this->option('min-compression');
 
-        // XAGUSDT dùng pip_size khác
         if (str_contains($symbol, 'XAG')) {
             $this->pipSize  = 0.001;
             $this->pipValue = 1.0;
@@ -63,55 +59,52 @@ class BacktestV4Command extends Command
         $toTs   = strtotime($to . ' 23:59:59') * 1000;
 
         $this->info("╔══════════════════════════════════════════════════╗");
-        $this->info("║  FELIX v4 BACKTEST — {$symbol} M15              ║");
+        $this->info("║  FELIX v5 BACKTEST — {$symbol} M15              ║");
         $this->info("╚══════════════════════════════════════════════════╝");
-        $this->info("Period : {$from} → {$to}");
-        $this->info("Capital: \${$capital} | Multi: ×{$multi} | TP: {$tpPips}pip | SL: {$slPipsHard}pip (cứng) | Buf: {$bufPips}pip | Expiry: {$expiryBars}bars");
+        $this->info("Period    : {$from} → {$to}");
+        $this->info("TP/SL     : {$tpPips}p / {$slPips}p cứng  R:R 1:" . round($tpPips / $slPips, 2));
+        $this->info("Lot       : {$lot}  |  Trend filter: MA{$maPeriod} (chỉ trade thuận chiều)");
         $this->line('');
 
-        // ── 1. Tải toàn bộ klines từ Binance ──
         $this->line("Đang tải klines {$symbol} M15...");
         $allKlines = $this->fetchHistoricalKlines($binance, $symbol, $fromTs, $toTs);
 
         if (count($allKlines) < $lookback + 10) {
-            $this->error("Không đủ dữ liệu: " . count($allKlines) . " bars (cần ≥ " . ($lookback + 10) . ")");
+            $this->error("Không đủ dữ liệu: " . count($allKlines) . " bars");
             return 1;
         }
-        $this->line("Tải được " . count($allKlines) . " nến M15");
-        $this->line('');
+        $this->line("Tải được " . count($allKlines) . " nến M15\n");
 
-        // ── 2. Walk-forward simulation ──
-        $trades       = [];
-        $pendingOrders = []; // active stop orders chưa khớp
-        $channelDedup = []; // fingerprint kênh đã đặt lệnh
+        // ── Walk-forward simulation ──
+        $trades        = [];
+        $pendingOrders = [];
+        $channelDedup  = [];
+        $warmup        = max(200, $lookback + 6);
 
-        $warmup = max(200, $lookback + 6);
+        $bufDist = $bufPips * $this->pipSize;
+        $tpDist  = $tpPips  * $this->pipSize;
+        $slDist  = $slPips  * $this->pipSize;
 
         for ($i = $warmup; $i < count($allKlines); $i++) {
-            $currentBar = $allKlines[$i];
-            $barTime    = (int) $currentBar[0];
-            $barHigh    = (float) $currentBar[2];
-            $barLow     = (float) $currentBar[3];
-            $barClose   = (float) $currentBar[4];
+            $bar     = $allKlines[$i];
+            $barTime = (int)   $bar[0];
+            $barHigh = (float) $bar[2];
+            $barLow  = (float) $bar[3];
 
-            // ── A. Kiểm tra pending orders: trigger / TP / SL / expiry ──
+            // ── A. Check pending orders ──
             foreach ($pendingOrders as $oid => &$order) {
-                // Expiry check
                 if ($i - $order['placed_at_bar'] > $expiryBars) {
                     $order['status'] = 'EXPIRED';
                     unset($pendingOrders[$oid]);
                     continue;
                 }
-
                 if ($order['status'] !== 'PENDING') continue;
 
-                // Trigger check
                 if (!$order['triggered']) {
-                    $triggered = $order['side'] === 'BUY'
-                        ? ($barHigh >= $order['entry'])
-                        : ($barLow  <= $order['entry']);
-
-                    if ($triggered) {
+                    $hit = $order['side'] === 'BUY'
+                        ? $barHigh >= $order['entry']
+                        : $barLow  <= $order['entry'];
+                    if ($hit) {
                         $order['triggered']      = true;
                         $order['triggered_bar']  = $i;
                         $order['triggered_time'] = $barTime;
@@ -120,41 +113,27 @@ class BacktestV4Command extends Command
                     }
                 }
 
-                // TP / SL check (sau khi triggered)
                 if ($order['side'] === 'BUY') {
                     if ($barHigh >= $order['tp']) {
-                        $order['status']   = 'WIN';
-                        $order['exit_bar'] = $i;
-                        $order['pnl_pips'] = $tpPips;
-                        $trades[] = $order;
-                        unset($pendingOrders[$oid]);
+                        $order['status'] = 'WIN';  $order['pnl_pips'] = $tpPips;
+                        $trades[] = $order; unset($pendingOrders[$oid]);
                     } elseif ($barLow <= $order['sl']) {
-                        $order['status']   = 'LOSS';
-                        $order['exit_bar'] = $i;
-                        $order['pnl_pips'] = -$order['sl_pips'];
-                        $trades[] = $order;
-                        unset($pendingOrders[$oid]);
+                        $order['status'] = 'LOSS'; $order['pnl_pips'] = -$slPips;
+                        $trades[] = $order; unset($pendingOrders[$oid]);
                     }
                 } else {
                     if ($barLow <= $order['tp']) {
-                        $order['status']   = 'WIN';
-                        $order['exit_bar'] = $i;
-                        $order['pnl_pips'] = $tpPips;
-                        $trades[] = $order;
-                        unset($pendingOrders[$oid]);
+                        $order['status'] = 'WIN';  $order['pnl_pips'] = $tpPips;
+                        $trades[] = $order; unset($pendingOrders[$oid]);
                     } elseif ($barHigh >= $order['sl']) {
-                        $order['status']   = 'LOSS';
-                        $order['exit_bar'] = $i;
-                        $order['pnl_pips'] = -$order['sl_pips'];
-                        $trades[] = $order;
-                        unset($pendingOrders[$oid]);
+                        $order['status'] = 'LOSS'; $order['pnl_pips'] = -$slPips;
+                        $trades[] = $order; unset($pendingOrders[$oid]);
                     }
                 }
             }
             unset($order);
 
-            // ── B. Detect channel + đặt stop orders ──
-            // Chỉ scan mỗi 3 bars (≈ 45 phút) để tiết kiệm CPU và tránh over-signal
+            // ── B. Detect channel ──
             if ($i % 3 !== 0) continue;
 
             $window  = array_slice($allKlines, max(0, $i - 200), 200);
@@ -163,63 +142,38 @@ class BacktestV4Command extends Command
             if (!$channel['is_channel']) continue;
             if ($channel['compression'] < $minComp) continue;
 
-            // Dedup: không đặt 2 lệnh cho cùng 1 kênh trong 16 bars
             $fingerprint = round($channel['upper'], 1) . '_' . round($channel['lower'], 1);
             if (isset($channelDedup[$fingerprint]) && $i - $channelDedup[$fingerprint] < $expiryBars) {
                 continue;
             }
             $channelDedup[$fingerprint] = $i;
 
-            // SL cứng theo spec: 20 pip tính từ entry
-            $slPips  = $slPipsHard;
-            $bufDist = $bufPips * $this->pipSize;
-            $tpDist  = $tpPips  * $this->pipSize;
-            $slDist  = $slPips  * $this->pipSize;
+            // Trend filter: tính MA → chỉ place lệnh thuận chiều
+            $closes    = array_map(fn($k) => (float) $k[4], $window);
+            $lastClose = end($closes);
+            $ma        = count($closes) >= $maPeriod
+                ? array_sum(array_slice($closes, -$maPeriod)) / $maPeriod
+                : null;
 
-            // Lot sizing: (capital × 0.5%) / (slPips × pip_value)
-            $probeLot = $capital > 0
-                ? max(0.01, round(($capital * 0.005) / ($slPips * $this->pipValue), 2))
-                : 0.01;
-            $mainLot = round($probeLot * $multi, 2);
+            $bullish = $ma === null || $lastClose >= $ma; // không đủ data → trade cả 2
+            $bearish = $ma === null || $lastClose <  $ma;
 
-            // BUY STOP: entry = upper + buf | TP = entry + 15p | SL = entry - 20p
-            $buyEntry = round($channel['upper'] + $bufDist, $this->decimals);
-            $buyTp    = round($buyEntry + $tpDist, $this->decimals);
-            $buySl    = round($buyEntry - $slDist, $this->decimals);
+            $buyEntry  = round($channel['upper'] + $bufDist, $this->decimals);
+            $buyTp     = round($buyEntry + $tpDist, $this->decimals);
+            $buySl     = round($buyEntry - $slDist, $this->decimals);
 
-            $pendingOrders['buy_' . $i] = [
-                'id'             => 'buy_' . $i,
-                'side'           => 'BUY',
-                'placed_at_bar'  => $i,
-                'placed_at_time' => $barTime,
-                'entry'          => $buyEntry,
-                'tp'             => $buyTp,
-                'sl'             => $buySl,
-                'sl_pips'        => $slPips,
-                'lots'           => $mainLot,
-                'compression'    => $channel['compression'],
-                'upper'          => $channel['upper'],
-                'lower'          => $channel['lower'],
-                'triggered'      => false,
-                'status'         => 'PENDING',
-                'pnl_pips'       => 0,
-            ];
-
-            // SELL STOP: entry = lower - buf | TP = entry - 15p | SL = entry + 20p
             $sellEntry = round($channel['lower'] - $bufDist, $this->decimals);
             $sellTp    = round($sellEntry - $tpDist, $this->decimals);
             $sellSl    = round($sellEntry + $slDist, $this->decimals);
 
-            $pendingOrders['sell_' . $i] = [
-                'id'             => 'sell_' . $i,
-                'side'           => 'SELL',
+            $maScore = $ma !== null ? round($ma, $this->decimals) : 0;
+
+            $baseCommon = [
                 'placed_at_bar'  => $i,
                 'placed_at_time' => $barTime,
-                'entry'          => $sellEntry,
-                'tp'             => $sellTp,
-                'sl'             => $sellSl,
                 'sl_pips'        => $slPips,
-                'lots'           => $mainLot,
+                'lots'           => $lot,
+                'score'          => $maScore,
                 'compression'    => $channel['compression'],
                 'upper'          => $channel['upper'],
                 'lower'          => $channel['lower'],
@@ -227,53 +181,124 @@ class BacktestV4Command extends Command
                 'status'         => 'PENDING',
                 'pnl_pips'       => 0,
             ];
+
+            if ($bullish) {
+                $pendingOrders['buy_' . $i] = array_merge($baseCommon, [
+                    'id' => 'buy_' . $i, 'side' => 'BUY',
+                    'entry' => $buyEntry, 'tp' => $buyTp, 'sl' => $buySl,
+                ]);
+            }
+            if ($bearish) {
+                $pendingOrders['sell_' . $i] = array_merge($baseCommon, [
+                    'id' => 'sell_' . $i, 'side' => 'SELL',
+                    'entry' => $sellEntry, 'tp' => $sellTp, 'sl' => $sellSl,
+                ]);
+            }
         }
 
-        // Flush pending orders còn lại → EXPIRED
         foreach ($pendingOrders as $order) {
             $order['status'] = 'EXPIRED';
             $trades[] = $order;
         }
 
-        // ── 3. Report ──
-        $this->printReport($trades, $capital, $multi, $tpPips, $symbol, $from, $to);
+        $this->printReport($trades, $tpPips, $slPips, $lot, $maPeriod, $symbol, $from, $to);
         return 0;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // DIRECTIONAL SCORE  0-100
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Đánh giá khả năng phá theo hướng $side ('BUY' | 'SELL').
+     *
+     * Trend score (80pts) dựa trên MA50 + MA100:
+     *   close > MA50  → +25pts trend bullish
+     *   close > MA100 → +25pts trend bullish mạnh hơn
+     *   Baseline = 50 (neutral khi không đủ data)
+     *
+     *   BUY  score = trendScore (cao = uptrend = BUY bias)
+     *   SELL score = 100 - trendScore (thấp trend = downtrend = SELL bias)
+     *
+     * Compression bonus (20pts): kênh nén tốt cộng thêm
+     */
+    private function directionalScore(array $channel, array $klines, string $side): int
+    {
+        $closes    = array_map(fn($k) => (float) $k[4], $klines);
+        $n         = count($closes);
+        $lastClose = end($closes);
+
+        // MA50 + MA100
+        $ma50  = $n >= 50  ? array_sum(array_slice($closes, -50))  / 50  : null;
+        $ma100 = $n >= 100 ? array_sum(array_slice($closes, -100)) / 100 : null;
+
+        // Trend score 0–100: baseline 50, +25 mỗi MA thuận chiều BUY
+        $trendScore = 50;
+        if ($ma50  !== null) $trendScore += $lastClose > $ma50  ? 25 : -25;
+        if ($ma100 !== null) $trendScore += $lastClose > $ma100 ? 25 : -25;
+        $trendScore = max(0, min(100, $trendScore));
+
+        // Compression bonus 0–20pts
+        $compBonus = (int) round($channel['compression'] * 20);
+
+        $raw = $side === 'BUY'
+            ? $trendScore * 0.8 + $compBonus       // uptrend → BUY score cao
+            : (100 - $trendScore) * 0.8 + $compBonus; // downtrend → SELL score cao
+
+        return min(100, (int) round($raw));
     }
 
     // ──────────────────────────────────────────────────────────────
     // REPORT
     // ──────────────────────────────────────────────────────────────
 
-    private function printReport(array $trades, float $capital, int $multi, float $tpPips, string $symbol, string $from, string $to): void
-    {
-        $triggered = array_filter($trades, fn($t) => $t['triggered'] ?? false);
-        $wins      = array_filter($triggered, fn($t) => $t['status'] === 'WIN');
-        $losses    = array_filter($triggered, fn($t) => $t['status'] === 'LOSS');
-        $expired   = array_filter($trades,    fn($t) => $t['status'] === 'EXPIRED');
+    private function printReport(
+        array  $trades,
+        float  $tpPips,
+        float  $slPips,
+        float  $lot,
+        int    $maPeriod,
+        string $symbol,
+        string $from,
+        string $to
+    ): void {
+        $triggered = array_values(array_filter($trades, fn($t) => $t['triggered'] ?? false));
+        $expired   = array_filter($trades, fn($t) => $t['status'] === 'EXPIRED');
         $placed    = count($trades);
-        $nTrig     = count($triggered);
-        $nWin      = count($wins);
-        $nLoss     = count($losses);
-        $nExpired  = count($expired);
 
-        $winrate   = $nTrig > 0 ? round($nWin / $nTrig * 100, 1) : 0;
+        $wins   = array_filter($triggered, fn($t) => $t['status'] === 'WIN');
+        $losses = array_filter($triggered, fn($t) => $t['status'] === 'LOSS');
+        $nTrig  = count($triggered);
+        $nWin   = count($wins);
+        $nLoss  = count($losses);
 
-        // P&L tính bằng USD (dùng main lot)
-        $totalPips = array_sum(array_column(iterator_to_array((function() use ($triggered) { foreach ($triggered as $t) yield $t; })(), false), 'pnl_pips'));
-        $avgLot    = $nTrig > 0 ? array_sum(array_column(iterator_to_array((function() use ($triggered) { foreach ($triggered as $t) yield $t; })(), false), 'lots')) / $nTrig : 0;
-        $totalUsd  = round($totalPips * $this->pipValue * $avgLot, 2);
-        $returnPct = $capital > 0 ? round($totalUsd / $capital * 100, 2) : 0;
-
-        // Win/Loss pips
+        $winrate  = $nTrig > 0 ? round($nWin / $nTrig * 100, 1) : 0;
         $winPips  = array_sum(array_column(array_values($wins),   'pnl_pips'));
         $lossPips = array_sum(array_column(array_values($losses),  'pnl_pips'));
-        $avgWin   = $nWin   > 0 ? round($winPips  / $nWin,  1) : 0;
-        $avgLoss  = $nLoss  > 0 ? round($lossPips / $nLoss, 1) : 0;
-
-        // Expected value per trade
-        $ev = $nTrig > 0
+        $avgWin   = $nWin  > 0 ? round($winPips  / $nWin,  1) : 0;
+        $avgLoss  = $nLoss > 0 ? round($lossPips / $nLoss, 1) : 0;
+        $ev       = $nTrig > 0
             ? round(($winrate / 100 * $tpPips) + ((1 - $winrate / 100) * $avgLoss), 2)
             : 0;
+
+        $totalUsd  = round(array_sum(array_map(
+            fn($t) => $t['pnl_pips'] * $this->pipValue * $t['lots'], $triggered
+        )), 2);
+        $totalPips = array_sum(array_column($triggered, 'pnl_pips'));
+
+        $sideStats = function(string $side) use ($triggered): array {
+            $g  = array_values(array_filter($triggered, fn($t) => $t['side'] === $side));
+            $n  = count($g);
+            $nW = count(array_filter($g, fn($t) => $t['status'] === 'WIN'));
+            return [
+                'n'    => $n,
+                'wr'   => $n > 0 ? round($nW / $n * 100, 1) : 0,
+                'pips' => array_sum(array_column($g, 'pnl_pips')),
+                'usd'  => round(array_sum(array_map(fn($t) => $t['pnl_pips'] * 10.0 * $t['lots'], $g)), 2),
+            ];
+        };
+        $bS = $sideStats('BUY');
+        $sS = $sideStats('SELL');
 
         // Daily breakdown
         $dailyPnl = [];
@@ -287,48 +312,51 @@ class BacktestV4Command extends Command
         $this->info('══════════════════════════════════════════════════');
         $this->info("  KẾT QUẢ BACKTEST — {$symbol} M15  ({$from} → {$to})");
         $this->info('══════════════════════════════════════════════════');
-        $this->line(sprintf('  Channels phát hiện  : %d', $placed / 2));
-        $this->line(sprintf('  Lệnh đặt (stops)    : %d  (BUY + SELL mỗi channel)', $placed));
-        $this->line(sprintf('  Lệnh khớp (triggered): %d', $nTrig));
-        $this->line(sprintf('  Lệnh hết hạn (expired): %d', $nExpired));
+        $this->line(sprintf('  Channels phát hiện : %d  (lọc MA%d → %d lệnh thực tế)',
+            intdiv($placed + 1, 2), $maPeriod, $placed));
+        $this->line(sprintf('  Lệnh khớp          : %d  |  Hết hạn: %d', $nTrig, count($expired)));
         $this->line('──────────────────────────────────────────────────');
-        $wr_color = $winrate >= 50 ? 'info' : 'warn';
-        $this->{$wr_color}(sprintf('  WIN    : %d  (%s%%)', $nWin, $winrate));
+        ($winrate >= 50 ? fn($s) => $this->info($s) : fn($s) => $this->warn($s))(
+            sprintf('  WIN    : %d  (%s%%)', $nWin, $winrate)
+        );
         $this->line(sprintf('  LOSS   : %d', $nLoss));
-        $this->line(sprintf('  Avg Win : +%.1f pips | Avg Loss: %.1f pips', $avgWin, $avgLoss));
-        $this->line(sprintf('  EV/trade: %+.2f pips', $ev));
+        $this->line(sprintf('  Avg Win : %+.1f pip  |  Avg Loss: %.1f pip', $avgWin, $avgLoss));
+        $this->line(sprintf('  EV/trade: %+.2f pip', $ev));
+        $this->line('──────────────────────────────────────────────────');
+        $this->line(sprintf('  Tổng P&L : %+.1f pip  ≈  %+.2f USD  (%.2f lot/lệnh)',
+            $totalPips, $totalUsd, $lot));
         $this->line('──────────────────────────────────────────────────');
 
-        $pnl_fn = $totalPips >= 0 ? 'info' : 'warn';
-        $this->{$pnl_fn}(sprintf('  Tổng P&L : %+.1f pips  ≈  %+.2f USD  (%+.2f%%)',
-            $totalPips, $totalUsd, $returnPct));
-        $this->line(sprintf('  Vốn cuối : $%.2f → $%.2f', $capital, $capital + $totalUsd));
+        // BUY vs SELL
+        $this->info('  PHÂN TÍCH THEO HƯỚNG (MA filter):');
+        $this->line(sprintf('  [BUY  ]  %d lệnh  WR %.1f%%  %+.1f pip  ≈ %+.2f USD',
+            $bS['n'], $bS['wr'], $bS['pips'], $bS['usd']));
+        $this->line(sprintf('  [SELL ]  %d lệnh  WR %.1f%%  %+.1f pip  ≈ %+.2f USD',
+            $sS['n'], $sS['wr'], $sS['pips'], $sS['usd']));
         $this->line('──────────────────────────────────────────────────');
 
-        // Daily P&L table
+        // Daily P&L
         $this->line('  Daily P&L (pips):');
         foreach ($dailyPnl as $day => $pips) {
             $bar   = str_repeat($pips >= 0 ? '█' : '░', min(20, (int) abs($pips / 3)));
-            $sign  = $pips >= 0 ? '+' : '';
             $color = $pips >= 0 ? 'info' : 'warn';
             $this->{$color}(sprintf('    %s  %s%+.1f', $day, $bar, $pips));
         }
 
-        // Top 5 best + worst trades
-        $trigArr = array_values($triggered);
-        usort($trigArr, fn($a, $b) => $b['pnl_pips'] <=> $a['pnl_pips']);
+        // Top 5 best / worst
+        usort($triggered, fn($a, $b) => $b['pnl_pips'] <=> $a['pnl_pips']);
         $this->line('──────────────────────────────────────────────────');
         $this->line('  Top 5 trades tốt nhất:');
-        foreach (array_slice($trigArr, 0, 5) as $t) {
+        foreach (array_slice($triggered, 0, 5) as $t) {
             $dt = date('m/d H:i', intdiv((int)$t['placed_at_time'], 1000));
-            $this->info(sprintf('    [%s] %s @ %.2f  %+.1f pip  (comp=%.0f%%)',
-                $dt, $t['side'], $t['entry'], $t['pnl_pips'], $t['compression'] * 100));
+            $this->info(sprintf('    [%s] %s @ %.2f  %+.1f pip  score=%d  %.2f lot',
+                $dt, $t['side'], $t['entry'], $t['pnl_pips'], $t['score'], $t['lots']));
         }
         $this->line('  Top 5 trades tệ nhất:');
-        foreach (array_slice(array_reverse($trigArr), 0, 5) as $t) {
+        foreach (array_slice(array_reverse($triggered), 0, 5) as $t) {
             $dt = date('m/d H:i', intdiv((int)$t['placed_at_time'], 1000));
-            $this->warn(sprintf('    [%s] %s @ %.2f  %+.1f pip  (comp=%.0f%%)',
-                $dt, $t['side'], $t['entry'], $t['pnl_pips'], $t['compression'] * 100));
+            $this->warn(sprintf('    [%s] %s @ %.2f  %+.1f pip  score=%d  %.2f lot',
+                $dt, $t['side'], $t['entry'], $t['pnl_pips'], $t['score'], $t['lots']));
         }
         $this->info('══════════════════════════════════════════════════');
     }
@@ -341,8 +369,8 @@ class BacktestV4Command extends Command
     {
         $all    = [];
         $limit  = 1000;
-        $tfMs   = 15 * 60 * 1000; // 15m in ms
-        $cursor = $fromMs - 200 * $tfMs; // warmup buffer
+        $tfMs   = 15 * 60 * 1000;
+        $cursor = $fromMs - 200 * $tfMs;
 
         $this->output->write("  Tải: ");
         while ($cursor < $toMs) {
@@ -350,14 +378,13 @@ class BacktestV4Command extends Command
             if (empty($batch)) break;
 
             foreach ($batch as $k) {
-                if ((int)$k[0] < $fromMs - 200 * $tfMs) { $all[] = $k; continue; }
                 if ((int)$k[0] > $toMs) break 2;
                 $all[] = $k;
             }
 
             $cursor = (int) end($batch)[0] + $tfMs;
             $this->output->write(".");
-            usleep(200000); // 200ms rate limit
+            usleep(200000);
         }
         $this->line(" " . count($all) . " bars");
         return $all;
