@@ -39,10 +39,10 @@ class SignalFormatterService
     {
         $slPips = self::SL_PIPS;
 
-        // Exness XAUUSD: 1 lot × 1 pip ($0.10 move) = $10 → pip_value = 10.0/lot
-        // Capital $100 → probe = (100×0.005)/(20×10) = 0.0025 → clamped to 0.01
+        // Exness XAUUSD: 1 pip = $1.00 giá, 1 lot = $100/pip → pip_value = 100.0/lot
+        // Capital $1000 → probe = (1000×0.005)/(20×100) = 0.0025 → clamped to 0.01
         $probeLot = $capital > 0
-            ? round(($capital * 0.005) / ($slPips * 10.0), 2)
+            ? round(($capital * 0.005) / ($slPips * 100.0), 2)
             : 0.01;
 
         $probeLot = max(0.01, $probeLot);
@@ -51,8 +51,8 @@ class SignalFormatterService
         return [
             'probe'        => $probeLot,
             'main'         => $mainLot,
-            'sl_usd_probe' => round($probeLot * $slPips * 10.0, 2),
-            'sl_usd_main'  => round($mainLot  * $slPips * 10.0, 2),
+            'sl_usd_probe' => round($probeLot * $slPips * 100.0, 2),
+            'sl_usd_main'  => round($mainLot  * $slPips * 100.0, 2),
         ];
     }
 
@@ -74,8 +74,8 @@ class SignalFormatterService
         float  $capital,
         int    $multi = 7
     ): array {
-        // XAUUSD: pip_size = 0.10, decimals = 2
-        $pip = 0.10;
+        // XAUUSD: 1 pip = $1.00 (giá vàng tính theo USD, 1 pip = $1 di chuyển)
+        $pip = 1.00;
         $dec = 2;
 
         $tpPips  = self::TP_PIPS;
@@ -191,16 +191,16 @@ class SignalFormatterService
         if ($showLong) {
             $longBlock = "⬆ <b>BUY STOP</b>\n"
                 . "   📌 Entry : <code>{$long['entry']}</code>\n"
-                . "   🎯 TP    : <code>{$long['tp']}</code>  (+15 pips / 1.5 giá Vàng)\n"
-                . "   🛡 SL    : <code>{$long['sl']}</code>  (-20 pips cứng / 2.0 giá Vàng)\n"
+                . "   🎯 TP    : <code>{$long['tp']}</code>  (+15 pips / +$15)\n"
+                . "   🛡 SL    : <code>{$long['sl']}</code>  (-20 pips / -$20)\n"
                 . "   📊 R:R   : 1:0.75\n";
         }
 
         if ($showShort) {
             $shortBlock = "⬇ <b>SELL STOP</b>\n"
                 . "   📌 Entry : <code>{$short['entry']}</code>\n"
-                . "   🎯 TP    : <code>{$short['tp']}</code>  (-15 pips / 1.5 giá Vàng)\n"
-                . "   🛡 SL    : <code>{$short['sl']}</code>  (+20 pips cứng / 2.0 giá Vàng)\n"
+                . "   🎯 TP    : <code>{$short['tp']}</code>  (-15 pips / -$15)\n"
+                . "   🛡 SL    : <code>{$short['sl']}</code>  (+20 pips / +$20)\n"
                 . "   📊 R:R   : 1:0.75\n";
         }
 
@@ -233,11 +233,6 @@ class SignalFormatterService
             . "🤖 AI <b>{$score}/100</b>  {$scoreBar}  {$confEmoji}{$cached}  [{$dirLabel}]\n"
             . "<i>{$analysis}</i>\n"
             . ($riskNote ? "⚠️ <i>{$riskNote}</i>\n" : '')
-            . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "📋 <b>Hướng dẫn Exness:</b>\n"
-            . "   1. Pending Order → Stop Order\n"
-            . "   2. Nhập Entry / TP / SL ở trên\n"
-            . "   3. Khi +5 pips (0.5 giá) → kéo SL về hoà vốn ngay để bảo vệ Main Lot"
             . $capitalLine
             . $probeLossLine;
 
