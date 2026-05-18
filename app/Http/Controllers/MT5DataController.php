@@ -41,11 +41,13 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        // Tất cả data trong query params (MT5 WebRequest không gửi được body)
-        $symbol    = strtoupper(trim($request->query('symbol', '')));
-        $timeframe = strtoupper(trim($request->query('timeframe', '')));
-        $bid       = (float) $request->query('bid', 0);
-        $klines    = $this->parseCompactKlines($request->query('k', ''));
+        // Meta + klines từ form-encoded body, secret từ query param
+        $symbol    = strtoupper(trim($request->input('symbol', $request->query('symbol', ''))));
+        $timeframe = strtoupper(trim($request->input('timeframe', $request->query('timeframe', ''))));
+        $bid       = (float) $request->input('bid', $request->query('bid', 0));
+        $klines    = $this->parseCompactKlines(
+            $request->input('k', $request->query('k', ''))
+        );
 
         if (empty($symbol) || empty($timeframe) || empty($klines)) {
             return response()->json(['error' => 'Missing required fields'], 422);

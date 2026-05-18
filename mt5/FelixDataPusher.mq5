@@ -9,7 +9,7 @@
 //--- Input parameters
 input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";  // Địa chỉ server Laravel
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";    // MT5_WEBHOOK_SECRET trong .env
-input int    KlineCount    = 60;                                // Số nến gửi mỗi lần push
+input int    KlineCount    = 100;                               // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;                                // Giây push giá bid (timer)
 input bool   EnableLogging = true;                              // In log vào Experts tab
 
@@ -93,22 +93,24 @@ void PushKlines()
 
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    string url = WebhookURL + "/klines"
-               + "?secret="    + WebhookSecret
-               + "&symbol="    + _Symbol
-               + "&timeframe=M15"
-               + "&bid="       + DoubleToString(bid, _Digits)
-               + "&k="         + compact;
+    // Gửi klines qua form-encoded body — PHP parse natively, không bị giới hạn URL
+    string url      = WebhookURL + "/klines?secret=" + WebhookSecret;
+    string formBody = "symbol="    + _Symbol
+                    + "&timeframe=M15"
+                    + "&bid="      + DoubleToString(bid, _Digits)
+                    + "&k="        + compact;
 
-    uchar  emptyBody[];
+    uchar  requestBody[];
     uchar  responseBody[];
     string responseHeaders;
-    ArrayResize(emptyBody, 0);
+    StringToCharArray(formBody, requestBody, 0, StringLen(formBody));
+    ArrayResize(requestBody, ArraySize(requestBody) - 1); // bỏ null terminator
 
-    int statusCode = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
+    int statusCode = WebRequest("POST", url,
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        5000, requestBody, responseBody, responseHeaders);
     if (statusCode == -1) {
-        int err = GetLastError();
-        Print("FelixDataPusher klines ERROR #", err, " (4014=URL chưa allow, 5203=timeout) url_len=", StringLen(url));
+        Print("FelixDataPusher klines ERROR #", GetLastError(), " url=", url);
         return;
     }
     string result = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
