@@ -147,10 +147,13 @@ class MT5DataController extends Controller
 
     private function verifySecret(Request $request): bool
     {
-        $expected = config('services.mt5.webhook_secret', '');
+        $expected = trim(config('services.mt5.webhook_secret', ''));
         if (empty($expected)) return true; // dev mode: không cần secret
 
-        return $request->input('secret') === $expected
-            || $request->header('X-MT5-Secret') === $expected;
+        $incoming = trim((string) $request->input('secret', ''));
+        \Log::debug("MT5 secret check: incoming=" . substr($incoming, 0, 8) . "... expected=" . substr($expected, 0, 8) . "...");
+
+        return $incoming === $expected
+            || trim((string) $request->header('X-MT5-Secret', '')) === $expected;
     }
 }
