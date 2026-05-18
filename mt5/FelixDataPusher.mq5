@@ -131,7 +131,9 @@ void PushTick()
         + "\"ask\":"      + DoubleToString(ask, _Digits)
         + "}";
 
-    PostJSON(WebhookURL + "/tick", body);
+    string result = PostJSON(WebhookURL + "/tick", body);
+    if (EnableLogging)
+        Print("FelixDataPusher tick: bid=", DoubleToString(bid, _Digits), " — ", result);
 }
 
 //+------------------------------------------------------------------+
