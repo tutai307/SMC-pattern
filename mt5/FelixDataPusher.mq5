@@ -103,15 +103,17 @@ void PushKlines()
 
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    string body = "{"
-        + "\"secret\":\""    + WebhookSecret + "\","
-        + "\"symbol\":\""    + _Symbol       + "\","
-        + "\"timeframe\":\"M15\","
-        + "\"bid\":"         + DoubleToString(bid, _Digits) + ","
-        + "\"klines\":"      + klinesJson
-        + "}";
+    // Meta (symbol, timeframe, bid) gửi qua query params — tránh JSON parse issue
+    // Chỉ klines array nặng gửi trong body
+    string url = WebhookURL + "/klines"
+               + "?secret="    + WebhookSecret
+               + "&symbol="    + _Symbol
+               + "&timeframe=M15"
+               + "&bid="       + DoubleToString(bid, _Digits);
 
-    string result = PostJSON(WebhookURL + "/klines?secret=" + WebhookSecret, body);
+    string body = "{\"klines\":" + klinesJson + "}";
+
+    string result = PostJSON(url, body);
 
     if (EnableLogging)
         Print("FelixDataPusher klines: ", copied, " bars — ", result);
@@ -124,14 +126,20 @@ void PushTick()
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-    string body = "{"
-        + "\"secret\":\"" + WebhookSecret + "\","
-        + "\"symbol\":\"" + _Symbol       + "\","
-        + "\"bid\":"      + DoubleToString(bid, _Digits) + ","
-        + "\"ask\":"      + DoubleToString(ask, _Digits)
-        + "}";
+    // Gửi toàn bộ qua query params — không cần body, tránh JSON parse issue
+    string url = WebhookURL + "/tick"
+               + "?secret=" + WebhookSecret
+               + "&symbol=" + _Symbol
+               + "&bid="    + DoubleToString(bid, _Digits)
+               + "&ask="    + DoubleToString(ask, _Digits);
 
-    string result = PostJSON(WebhookURL + "/tick?secret=" + WebhookSecret, body);
+    uchar  emptyBody[];
+    uchar  responseBody[];
+    string responseHeaders;
+    ArrayResize(emptyBody, 0);
+
+    int statusCode = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
+    string result  = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
     if (EnableLogging)
         Print("FelixDataPusher tick: bid=", DoubleToString(bid, _Digits), " — ", result);
 }

@@ -41,11 +41,12 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $data      = $this->body($request);
-        $symbol    = strtoupper(trim($data['symbol'] ?? ''));
-        $timeframe = strtoupper(trim($data['timeframe'] ?? ''));
-        $klines    = $data['klines'] ?? [];
-        $bid       = (float) ($data['bid'] ?? 0);
+        // Meta từ query params, klines từ JSON body
+        $symbol    = strtoupper(trim($request->query('symbol', '')));
+        $timeframe = strtoupper(trim($request->query('timeframe', '')));
+        $bid       = (float) $request->query('bid', 0);
+        $raw       = json_decode($request->getContent(), true) ?? [];
+        $klines    = $raw['klines'] ?? [];
 
         if (empty($symbol) || empty($timeframe) || empty($klines)) {
             return response()->json(['error' => 'Missing required fields'], 422);
@@ -97,9 +98,9 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $data   = $this->body($request);
-        $symbol = strtoupper(trim($data['symbol'] ?? ''));
-        $bid    = (float) ($data['bid'] ?? 0);
+        // Tick: toàn bộ data trong query params (không có body)
+        $symbol = strtoupper(trim($request->query('symbol', '')));
+        $bid    = (float) $request->query('bid', 0);
 
         if (empty($symbol) || $bid <= 0) {
             return response()->json(['error' => 'Missing symbol or bid'], 422);
