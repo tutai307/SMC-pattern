@@ -41,42 +41,20 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $symbol    = strtoupper(trim($request->query('symbol', '')));
-        $timeframe = strtoupper(trim($request->query('tf', $request->query('timeframe', ''))));
-        $bid       = (float) $request->query('bid', 0);
-        $startTs   = (int)   $request->query('ts', 0);
-        $batch     = (int)   $request->query('b',  0);
-        $total     = (int)   $request->query('t',  1);
-        $chunk     = $this->parseCompactKlines($request->query('k', ''), $startTs);
+        // JSON body (EA v1.2 gửi Content-Length) — fallback query params
+        $json      = json_decode($request->getContent(), true) ?? [];
+        $symbol    = strtoupper(trim($json['symbol']    ?? $request->query('symbol', '')));
+        $timeframe = strtoupper(trim($json['timeframe'] ?? $request->query('timeframe', 'M15')));
+        $bid       = (float) ($json['bid']     ?? $request->query('bid', 0));
+        $klines    = $json['klines'] ?? [];
 
-        if (empty($symbol) || empty($chunk)) {
+        if (empty($symbol) || empty($klines)) {
             return response()->json([
                 'error'    => 'Missing required fields',
                 'symbol'   => $symbol,
-                'k_len'    => strlen($request->query('k', '')),
-                'k_sample' => substr($request->query('k', ''), 0, 30),
-                'keys'     => array_keys($request->query()),
-                'chunk_n'  => count($chunk),
+                'klines_n' => count($klines),
+                'body_len' => strlen($request->getContent()),
             ], 422);
-        }
-
-        // Chunked assembly: accumulate in cache, store when last chunk arrives
-        if ($batch > 0 && $total > 1) {
-            $cacheKey = "mt5_chunk_{$symbol}_M15_{$total}";
-            $chunks   = \Cache::get($cacheKey, []);
-            $chunks[$batch] = $chunk;
-            \Cache::put($cacheKey, $chunks, 120);
-
-            if (count($chunks) < $total) {
-                return response()->json(['ok' => true, 'chunk' => $batch, 'pending' => $total - count($chunks)]);
-            }
-
-            // All chunks arrived — assemble in order
-            ksort($chunks);
-            $klines = array_merge(...array_values($chunks));
-            \Cache::forget($cacheKey);
-        } else {
-            $klines = $chunk;
         }
 
         if (empty($timeframe)) $timeframe = 'M15';
