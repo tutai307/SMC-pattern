@@ -151,7 +151,7 @@ class MT5DataController extends Controller
         if (empty($expected)) return true; // dev mode: không cần secret
 
         $incoming = trim((string) $request->input('secret', ''));
-        \Log::debug("MT5 secret check: incoming=" . substr($incoming, 0, 8) . "... expected=" . substr($expected, 0, 8) . "...");
+        \Log::info("MT5 auth: incoming=[{$incoming}] expected=[{$expected}] match=" . ($incoming === $expected ? 'YES' : 'NO'));
 
         return $incoming === $expected
             || trim((string) $request->header('X-MT5-Secret', '')) === $expected;
