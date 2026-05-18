@@ -50,7 +50,14 @@ class MT5DataController extends Controller
         $chunk     = $this->parseCompactKlines($request->query('k', ''), $startTs);
 
         if (empty($symbol) || empty($chunk)) {
-            return response()->json(['error' => 'Missing required fields'], 422);
+            return response()->json([
+                'error'    => 'Missing required fields',
+                'symbol'   => $symbol,
+                'k_len'    => strlen($request->query('k', '')),
+                'k_sample' => substr($request->query('k', ''), 0, 30),
+                'keys'     => array_keys($request->query()),
+                'chunk_n'  => count($chunk),
+            ], 422);
         }
 
         // Chunked assembly: accumulate in cache, store when last chunk arrives
