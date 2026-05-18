@@ -49,15 +49,11 @@ class MT5DataController extends Controller
         $klines    = $json['klines'] ?? [];
 
         if (empty($symbol) || empty($klines)) {
-            $raw = $request->getContent();
             return response()->json([
-                'error'      => 'Missing required fields',
-                'symbol'     => $symbol,
-                'klines_n'   => count($klines),
-                'body_len'   => strlen($raw),
-                'json_error' => json_last_error_msg(),
-                'body_head'  => substr($raw, 0, 120),
-                'body_tail'  => substr($raw, -80),
+                'error'    => 'Missing required fields',
+                'symbol'   => $symbol,
+                'klines_n' => count($klines),
+                'body_len' => strlen($request->getContent()),
             ], 422);
         }
 
