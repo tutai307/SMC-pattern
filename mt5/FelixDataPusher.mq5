@@ -14,7 +14,9 @@ input int    TickInterval  = 10;   // Giây push tick
 input bool   EnableLogging = true;
 
 //--- Trạng thái nội bộ
-datetime g_lastBarTime = 0;
+datetime g_lastBarTime  = 0;
+int      g_timerCount   = 0;   // đếm tick timer, push klines mỗi KlinesPushEvery lần
+input int KlinesPushEvery = 10; // push klines mỗi 10 × TickInterval giây (= 100s)
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -44,7 +46,15 @@ void OnCalculate(const int rates_total,
     }
 }
 
-void OnTimer() { PushTick(); }
+void OnTimer()
+{
+    PushTick();
+    g_timerCount++;
+    if (g_timerCount >= KlinesPushEvery) {
+        g_timerCount = 0;
+        PushKlines();  // đảm bảo klines luôn mới dù chart không có bar mới
+    }
+}
 
 //+------------------------------------------------------------------+
 // Push klines qua JSON body với Content-Length explicit

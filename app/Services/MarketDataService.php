@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Cache;
 class MarketDataService
 {
     // Cache TTL — EA phải push trước khi expired
-    private const KLINES_TTL_MIN = 60;   // 1 giờ
+    private const KLINES_TTL_MIN = 120;  // 2 giờ — buffer nếu EA skip 1-2 bar
     private const PRICE_TTL_SEC  = 30;   // 30 giây
 
     // ──────────────────────────────────────────────────────────────
