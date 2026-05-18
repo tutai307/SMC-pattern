@@ -112,13 +112,11 @@ class MarketDataService
     public function normalizeSymbol(string $symbol): string
     {
         $s = strtoupper(trim($symbol));
-        return match (true) {
-            $s === 'XAUUSD'  => 'XAUUSDT',
-            $s === 'XAGUSD'  => 'XAGUSDT',
-            $s === 'XAGUSDT' => 'XAGUSDT',
-            $s === 'XAUUSDT' => 'XAUUSDT',
-            default          => $s,
-        };
+        // XAUUSDm, XAUUSD, XAUUSDT → XAUUSDT
+        if (str_starts_with($s, 'XAUUSD')) return 'XAUUSDT';
+        // XAGUSDm, XAGUSD, XAGUSDT → XAGUSDT
+        if (str_starts_with($s, 'XAGUSD')) return 'XAGUSDT';
+        return $s;
     }
 
     /**
