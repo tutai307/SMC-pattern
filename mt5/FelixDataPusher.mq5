@@ -111,7 +111,7 @@ void PushKlines()
         + "\"klines\":"      + klinesJson
         + "}";
 
-    string result = PostJSON(WebhookURL + "/klines", body);
+    string result = PostJSON(WebhookURL + "/klines?secret=" + WebhookSecret, body);
 
     if (EnableLogging)
         Print("FelixDataPusher klines: ", copied, " bars — ", result);
@@ -131,7 +131,7 @@ void PushTick()
         + "\"ask\":"      + DoubleToString(ask, _Digits)
         + "}";
 
-    string result = PostJSON(WebhookURL + "/tick", body);
+    string result = PostJSON(WebhookURL + "/tick?secret=" + WebhookSecret, body);
     if (EnableLogging)
         Print("FelixDataPusher tick: bid=", DoubleToString(bid, _Digits), " — ", result);
 }

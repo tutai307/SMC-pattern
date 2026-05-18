@@ -150,14 +150,15 @@ class MT5DataController extends Controller
         $expected = trim(config('services.mt5.webhook_secret', ''));
         if (empty($expected)) return true; // dev mode: không cần secret
 
-        // Try parsed input first, fallback to raw JSON body (MT5 WebRequest quirk)
-        $incoming = trim((string) $request->input('secret', ''));
+        // Check: query param (?secret=) → JSON body → header
+        $incoming = trim((string) $request->query('secret', ''));
+        if (empty($incoming)) {
+            $incoming = trim((string) $request->input('secret', ''));
+        }
         if (empty($incoming)) {
             $raw = json_decode($request->getContent(), true);
             $incoming = trim((string) ($raw['secret'] ?? ''));
         }
-
-        \Log::info("MT5 auth: incoming=[{$incoming}] expected=[{$expected}] ct=[{$request->header('Content-Type')}]");
 
         return $incoming === $expected
             || trim((string) $request->header('X-MT5-Secret', '')) === $expected;
