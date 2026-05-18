@@ -174,8 +174,10 @@ class ScanSignalsCommand extends Command
             $aiDirection = $channelDir;
         }
 
-        if ($aiScore < $aiThreshold) {
-            $this->line("[{$ts}] [{$symbol}] AI {$aiScore} < threshold {$aiThreshold} — skip");
+        // Trending channels đã có xác nhận cấu trúc → dùng ngưỡng thấp hơn (55 vs 70)
+        $effectiveThreshold = ($channelDir !== null) ? 55 : $aiThreshold;
+        if ($aiScore < $effectiveThreshold) {
+            $this->line("[{$ts}] [{$symbol}] AI {$aiScore} < threshold {$effectiveThreshold} — skip");
             return;
         }
 

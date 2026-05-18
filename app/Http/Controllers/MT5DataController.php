@@ -189,7 +189,8 @@ class MT5DataController extends Controller
                 'ai_direction' => $ai['breakout_direction']  ?? 'n/a',
                 'ai_analysis'  => $ai['analysis']            ?? '',
                 'ai_cached'    => $ai['cached']              ?? false,
-                'would_fire'   => ($channel['is_channel'] && is_int($ai['score'] ?? null) && ($ai['score'] ?? 0) >= 70),
+                'would_fire'   => ($channel['is_channel'] && is_int($ai['score'] ?? null)
+                                    && ($ai['score'] ?? 0) >= (($channel['direction'] ?? null) ? 55 : 70)),
             ];
         }
 
