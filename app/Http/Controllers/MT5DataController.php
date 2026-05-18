@@ -41,12 +41,11 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        // Meta từ query params, klines từ JSON body
+        // Tất cả data trong query params (MT5 WebRequest không gửi được body)
         $symbol    = strtoupper(trim($request->query('symbol', '')));
         $timeframe = strtoupper(trim($request->query('timeframe', '')));
         $bid       = (float) $request->query('bid', 0);
-        $raw       = json_decode($request->getContent(), true) ?? [];
-        $klines    = $raw['klines'] ?? [];
+        $klines    = $this->parseCompactKlines($request->query('k', ''));
 
         if (empty($symbol) || empty($timeframe) || empty($klines)) {
             return response()->json(['error' => 'Missing required fields'], 422);
@@ -148,12 +147,25 @@ class MT5DataController extends Controller
     // PRIVATE
     // ──────────────────────────────────────────────────────────────
 
-    /** MT5 WebRequest không set Content-Type đúng → phải parse raw body thủ công */
-    private function body(Request $request): array
+    /** Parse compact klines: "ts,o,h,l,c,v~ts,o,h,l,c,v~..." → [[ts_ms,o,h,l,c,v], ...] */
+    private function parseCompactKlines(string $k): array
     {
-        $parsed = $request->all();
-        if (!empty($parsed)) return $parsed;
-        return (array) (json_decode($request->getContent(), true) ?? []);
+        if (empty($k)) return [];
+        $klines = [];
+        foreach (explode('~', $k) as $row) {
+            $f = explode(',', $row);
+            if (count($f) === 6) {
+                $klines[] = [
+                    (int)$f[0] * 1000, // seconds → ms
+                    (float)$f[1],
+                    (float)$f[2],
+                    (float)$f[3],
+                    (float)$f[4],
+                    (float)$f[5],
+                ];
+            }
+        }
+        return $klines;
     }
 
     private function verifySecret(Request $request): bool

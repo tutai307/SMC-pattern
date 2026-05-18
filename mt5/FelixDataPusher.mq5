@@ -9,7 +9,7 @@
 //--- Input parameters
 input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";  // Địa chỉ server Laravel
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";    // MT5_WEBHOOK_SECRET trong .env
-input int    KlineCount    = 200;                               // Số nến gửi mỗi lần push
+input int    KlineCount    = 100;                               // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;                                // Giây push giá bid (timer)
 input bool   EnableLogging = true;                              // In log vào Experts tab
 
@@ -78,42 +78,35 @@ void PushKlines()
         return;
     }
 
-    // Build JSON array klines
-    string klinesJson = "[";
+    // Compact format: ts_sec,o,h,l,c,v~ts_sec,o,h,l,c,v~...
+    // Dùng ~ làm row separator (URL-safe), không cần body
+    string compact = "";
     for (int i = 0; i < copied; i++) {
-        long   ts_ms  = (long) rates[i].time * 1000; // Unix ms
-        double open   = rates[i].open;
-        double high   = rates[i].high;
-        double low    = rates[i].low;
-        double close  = rates[i].close;
-        double volume = (double) rates[i].tick_volume;
-
-        klinesJson += "[" +
-            IntegerToString(ts_ms) + "," +
-            DoubleToString(open,  _Digits) + "," +
-            DoubleToString(high,  _Digits) + "," +
-            DoubleToString(low,   _Digits) + "," +
-            DoubleToString(close, _Digits) + "," +
-            DoubleToString(volume, 2)      +
-        "]";
-
-        if (i < copied - 1) klinesJson += ",";
+        if (i > 0) compact += "~";
+        compact += IntegerToString((long)rates[i].time) + ","
+                 + DoubleToString(rates[i].open,  2) + ","
+                 + DoubleToString(rates[i].high,  2) + ","
+                 + DoubleToString(rates[i].low,   2) + ","
+                 + DoubleToString(rates[i].close, 2) + ","
+                 + IntegerToString((int)rates[i].tick_volume);
     }
-    klinesJson += "]";
 
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-    // Meta (symbol, timeframe, bid) gửi qua query params — tránh JSON parse issue
-    // Chỉ klines array nặng gửi trong body
     string url = WebhookURL + "/klines"
                + "?secret="    + WebhookSecret
                + "&symbol="    + _Symbol
                + "&timeframe=M15"
-               + "&bid="       + DoubleToString(bid, _Digits);
+               + "&bid="       + DoubleToString(bid, _Digits)
+               + "&k="         + compact;
 
-    string body = "{\"klines\":" + klinesJson + "}";
+    uchar  emptyBody[];
+    uchar  responseBody[];
+    string responseHeaders;
+    ArrayResize(emptyBody, 0);
 
-    string result = PostJSON(url, body);
+    int statusCode = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
+    string result  = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
 
     if (EnableLogging)
         Print("FelixDataPusher klines: ", copied, " bars — ", result);
