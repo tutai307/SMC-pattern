@@ -157,6 +157,86 @@ class PriceActionService
         return $this->formatCandles($klines);
     }
 
+    /**
+     * Phát hiện kênh giá phân vân / tam giác nén (Compression Triangle).
+     *
+     * Điều kiện xác nhận:
+     *   - Ít nhất 2 swing high liên tiếp tạo LH (Lower High)
+     *   - Ít nhất 2 swing low  liên tiếp tạo HL (Higher Low)
+     *   - Cả hai điều kiện phải cùng tồn tại trong cửa sổ lookback
+     *
+     * Trả về:
+     *   - is_channel : true khi phát hiện kênh nén
+     *   - upper      : Đỉnh cứng gần nhất → entry Buy Stop = upper + buffer
+     *   - lower      : Đáy cứng gần nhất  → entry Sell Stop = lower - buffer
+     *   - type       : 'triangle' | 'none'
+     *   - compression: tỉ lệ thu hẹp kênh (0-1), càng gần 1 càng nén mạnh
+     */
+    public function detectUnpredictableChannel(array $klines, int $lookback = 40): array
+    {
+        $empty = ['is_channel' => false, 'upper' => 0.0, 'lower' => 0.0, 'type' => 'none', 'compression' => 0.0];
+
+        if (count($klines) < $lookback + 10) return $empty;
+
+        $candles = $this->formatCandles(array_slice($klines, -($lookback + 6)));
+        // wing=2 phù hợp M15 (không bỏ lỡ swing nhỏ trong kênh nén)
+        $swings = $this->detectSwingPoints($candles, 2);
+        $highs  = array_slice($swings['highs'], -5);
+        $lows   = array_slice($swings['lows'],  -5);
+
+        if (count($highs) < 2 || count($lows) < 2) return $empty;
+
+        // ── Kiểm tra chuỗi LH (Lower Highs) ──
+        $lhCount = 0;
+        for ($i = count($highs) - 1; $i >= 1; $i--) {
+            if ($highs[$i]['price'] < $highs[$i - 1]['price']) {
+                $lhCount++;
+            } else {
+                break;
+            }
+        }
+
+        // ── Kiểm tra chuỗi HL (Higher Lows) ──
+        $hlCount = 0;
+        for ($i = count($lows) - 1; $i >= 1; $i--) {
+            if ($lows[$i]['price'] > $lows[$i - 1]['price']) {
+                $hlCount++;
+            } else {
+                break;
+            }
+        }
+
+        // Cần ít nhất 1 LH + 1 HL để xác nhận tam giác
+        if ($lhCount < 1 || $hlCount < 1) return $empty;
+
+        $upper = (float) end($highs)['price']; // Đỉnh cứng gần nhất
+        $lower = (float) end($lows)['price'];  // Đáy cứng gần nhất
+
+        if ($upper <= $lower) return $empty;
+
+        $channelWidth = $upper - $lower;
+        $midPrice     = ($upper + $lower) / 2;
+
+        // Kênh phải đủ rộng tối thiểu 0.15% để worth trading
+        if ($midPrice > 0 && ($channelWidth / $midPrice) < 0.0015) return $empty;
+
+        // Compression ratio: so sánh kênh hiện tại vs kênh đầu chuỗi
+        $firstHigh = $highs[0]['price'];
+        $firstLow  = $lows[0]['price'];
+        $origWidth = $firstHigh > $firstLow ? $firstHigh - $firstLow : $channelWidth;
+        $compression = $origWidth > 0 ? round(1 - ($channelWidth / $origWidth), 3) : 0.0;
+
+        return [
+            'is_channel'  => true,
+            'upper'       => round($upper, 4),
+            'lower'       => round($lower, 4),
+            'type'        => 'triangle',
+            'compression' => max(0.0, $compression),
+            'lh_count'    => $lhCount,
+            'hl_count'    => $hlCount,
+        ];
+    }
+
     private function formatCandles(array $klines)
     {
         return array_map(function($k) {

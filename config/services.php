@@ -40,4 +40,10 @@ return [
         'chat_id' => env('TELEGRAM_CHAT_ID'),
     ],
 
+    'exness' => [
+        'webhook_url'    => env('EXNESS_WEBHOOK_URL', ''),
+        'webhook_secret' => env('EXNESS_WEBHOOK_SECRET', ''),
+        'magic'          => env('EXNESS_MAGIC', 20260513),
+    ],
+
 ];

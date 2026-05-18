@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Events\SignalStatusChanged;
 use App\Models\TradingSignal;
 use App\Services\BinanceService;
+use App\Services\ExnessService;
 use App\Services\PriceActionService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -12,14 +13,23 @@ use Illuminate\Support\Facades\Cache;
 
 class ScanSignalsCommand extends Command
 {
-    protected $signature   = 'signals:scan {--interval=300 : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)} {--capital=0 : Vốn hiện tại (USDT) để tính vol/margin}';
-    protected $description = 'Quét setup SMC mới + theo dõi lệnh đang mở trong cùng 1 vòng lặp';
+    protected $signature   = 'signals:scan
+        {--interval=300    : Giây giữa mỗi lần quét setup mới (mặc định 5 phút)}
+        {--capital=0       : Vốn tài khoản (USD) để tính lot size}
+        {--risk-probe=0.5  : % vốn rủi ro cho probe lot (thăm dò)}
+        {--lot-multi=7     : Hệ số nhân lot khi breakout xác nhận (main lot = probe * multi)}
+        {--daily-target=50 : Mục tiêu lợi nhuận ngày (pips) — đạt rồi hủy lệnh chờ còn lại}
+        {--tp-pips=15      : Take Profit cố định theo pip cho lệnh breakout (mặc định 15 pips)}';
+    protected $description = 'Quét setup SMC mới + theo dõi lệnh đang mở + Gold Breakout "Lâng Lot"';
 
     private array $watchlist      = [];
     private int   $lastScanAt     = 0;
     private int   $lastMonitorAt  = 0;
     private int   $lastAiReviewAt = 0;
     private int   $lastTrendAt    = 0;
+
+    // Symbols dùng chiến lược breakout Exness thay vì Binance market order
+    private array $goldSymbols = ['XAUUSDT', 'XAGUSDT'];
 
     // Struct-exit per-pair: chỉ cancel khi CHoCH ngược chiều (backtest-validated)
     private array $structExitSymbols = ['SOLUSDT'];
@@ -28,6 +38,7 @@ class ScanSignalsCommand extends Command
         private BinanceService     $binanceService,
         private PriceActionService $priceActionService,
         private TelegramService    $telegramService,
+        private ExnessService      $exnessService,
     ) {
         parent::__construct();
 
@@ -400,9 +411,242 @@ class ScanSignalsCommand extends Command
     private function scan(): void
     {
         $this->info('[' . now()->format('H:i:s') . '] === BẮT ĐẦU SCAN ===');
+
         foreach ($this->watchlist as ['symbol' => $symbol, 'timeframe' => $timeframe]) {
-            $this->scanPair($symbol, $timeframe, 'smc');
+            if (in_array($symbol, $this->goldSymbols) && $this->exnessService->isConfigured()) {
+                // v4: Gold/Silver → chiến lược breakout Stop Order + Lâng Lot
+                $this->scanGoldBreakout($symbol, $timeframe);
+            } else {
+                // v2: Crypto → SMC market order như cũ
+                $this->scanPair($symbol, $timeframe, 'smc');
+            }
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // PHẦN 3: GOLD BREAKOUT — STOP ORDER + LÂNG LOT (v4)
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * Chiến lược "Săn Breakout + Lâng Lot" cho XAUUSD / XAGUSDT.
+     *
+     * Logic:
+     *  1. Phát hiện kênh nén (tam giác): detectUnpredictableChannel()
+     *  2. Nếu CÓ kênh → đặt BUY_STOP tại đỉnh cứng + buffer, SELL_STOP tại đáy cứng - buffer
+     *     - Probe lot nhỏ (0.5% vốn) để thăm dò
+     *     - Khi Stop khớp: MT5 EA tự kích hoạt main lot = probe × multiplier với TP cố định
+     *  3. Nếu KHÔNG có kênh → fallback: vào OB bình thường (market order nhỏ)
+     *  4. Mỗi hiệp khớp: ghi nhận pips, kiểm tra mục tiêu ngày
+     *     - Đạt mục tiêu → hủy tất cả lệnh chờ còn lại, nghỉ ngày
+     */
+    private function scanGoldBreakout(string $symbol, string $timeframe): void
+    {
+        $ts = now()->format('H:i:s');
+
+        // ── Kiểm tra mục tiêu ngày ──
+        if ($this->isDailyTargetReached($symbol)) {
+            $this->line("[{$ts}] [{$symbol}] 🏆 Đã đạt mục tiêu ngày — bỏ qua scan");
+            return;
+        }
+
+        $klines       = $this->binanceService->getKlines($symbol, $timeframe, 500);
+        $currentPrice = (float) ($this->binanceService->getPrice($symbol) ?? 0);
+
+        if (empty($klines) || $currentPrice <= 0) {
+            $this->warn("[{$ts}] [{$symbol}] Không lấy được dữ liệu");
+            return;
+        }
+
+        $capital    = (float) $this->option('capital');
+        $riskProbe  = (float) $this->option('risk-probe');
+        $lotMulti   = (int)   $this->option('lot-multi');
+        $dailyTarget = (float) $this->option('daily-target');
+        $tpPips     = (float) $this->option('tp-pips');
+
+        $isXau      = str_contains(strtoupper($symbol), 'XAU');
+        $pipSize    = $isXau ? 0.10 : 0.001;   // XAUUSD: 1 pip = $0.10
+        $pipValue   = $isXau ? 10.0 : 1.0;     // XAUUSD: 1 lot = $10/pip
+
+        // ── Phát hiện kênh nén M15 ──
+        $channel = $this->priceActionService->detectUnpredictableChannel($klines, 40);
+
+        if ($channel['is_channel']) {
+            $upper       = $channel['upper'];
+            $lower       = $channel['lower'];
+            $compression = $channel['compression'];
+            $lhCount     = $channel['lh_count'];
+            $hlCount     = $channel['hl_count'];
+
+            $this->line("[{$ts}] [{$symbol}] 📐 Kênh nén phát hiện — upper={$upper} lower={$lower} compression=" . round($compression * 100) . "% LH={$lhCount} HL={$hlCount}");
+
+            // ── Dedup: chưa đặt stop order trong 2 giờ qua ──
+            $dedupKey = "gold_breakout_{$symbol}_{$timeframe}_" . round($upper, 0) . '_' . round($lower, 0);
+            if (Cache::has($dedupKey)) {
+                $this->line("[{$ts}] [{$symbol}] Stop orders đã đặt cho kênh này, bỏ qua");
+                return;
+            }
+
+            // ── Tính HTF trend để quyết định đặt 1 hay 2 chiều ──
+            $klinesHTF  = $this->binanceService->getKlines($symbol, '1h', 50);
+            $htfStructure = !empty($klinesHTF)
+                ? $this->priceActionService->getStructure($klinesHTF)
+                : ['trend' => 'không rõ'];
+            $htfTrend = $htfStructure['trend'];
+
+            // ── Tính ATR để set SL ──
+            $recentRanges = array_map(
+                fn($k) => (float)$k[2] - (float)$k[3],
+                array_slice($klines, -15, 14)
+            );
+            $atr = count($recentRanges) > 0 ? array_sum($recentRanges) / count($recentRanges) : ($pipSize * 20);
+
+            // ── Lot sizing ──
+            $slPips   = max(10, round($atr / $pipSize)); // SL ít nhất 10 pip
+            $probeLot = $capital > 0
+                ? $this->exnessService->calcProbeLot($capital, $riskProbe, $slPips, $pipValue)
+                : 0.01;
+            $mainLot  = $this->exnessService->calcMainLot($probeLot, $lotMulti);
+            $tpDist   = $tpPips * $pipSize; // TP cố định (10-20 pips)
+
+            $orders   = [];
+            $buffer   = $pipSize * 3; // 3 pip buffer ngoài đỉnh/đáy cứng
+
+            // ── BUY STOP: trên Đỉnh cứng (chỉ đặt khi HTF không GIẢM GIÁ) ──
+            if ($htfTrend !== 'GIẢM GIÁ') {
+                $buyEntry = round($upper + $buffer, 2);
+                $buySl    = round($buyEntry - ($slPips * $pipSize), 2);
+                $buyTp    = round($buyEntry + $tpDist, 2);
+
+                $result = $this->exnessService->placeStopOrder(
+                    $symbol, 'BUY_STOP', $buyEntry, $buySl, $buyTp, $mainLot,
+                    expireMinutes: 240, comment: "Felix_v4_BS_{$lhCount}LH"
+                );
+                $orders[] = ['side' => 'BUY_STOP', 'entry' => $buyEntry, 'sl' => $buySl, 'tp' => $buyTp, 'lots' => $mainLot, 'ok' => $result['success']];
+                $this->line("[{$ts}] [{$symbol}] ⬆ BUY_STOP @ {$buyEntry} SL={$buySl} TP={$buyTp} lot={$mainLot} " . ($result['success'] ? '✓' : '✗'));
+            }
+
+            // ── SELL STOP: dưới Đáy cứng (chỉ đặt khi HTF không TĂNG GIÁ) ──
+            if ($htfTrend !== 'TĂNG GIÁ') {
+                $sellEntry = round($lower - $buffer, 2);
+                $sellSl    = round($sellEntry + ($slPips * $pipSize), 2);
+                $sellTp    = round($sellEntry - $tpDist, 2);
+
+                $result = $this->exnessService->placeStopOrder(
+                    $symbol, 'SELL_STOP', $sellEntry, $sellSl, $sellTp, $mainLot,
+                    expireMinutes: 240, comment: "Felix_v4_SS_{$hlCount}HL"
+                );
+                $orders[] = ['side' => 'SELL_STOP', 'entry' => $sellEntry, 'sl' => $sellSl, 'tp' => $sellTp, 'lots' => $mainLot, 'ok' => $result['success']];
+                $this->line("[{$ts}] [{$symbol}] ⬇ SELL_STOP @ {$sellEntry} SL={$sellSl} TP={$sellTp} lot={$mainLot} " . ($result['success'] ? '✓' : '✗'));
+            }
+
+            if (!empty($orders)) {
+                Cache::put($dedupKey, true, now()->addHours(2));
+                $this->sendBreakoutAlert($symbol, $timeframe, $channel, $htfTrend, $orders, $currentPrice, $tpPips, $slPips, $mainLot, $probeLot, $lotMulti, $capital);
+            }
+
+            return;
+        }
+
+        // ── Fallback: không phát hiện kênh → SMC thường (market order nhỏ) ──
+        $this->line("[{$ts}] [{$symbol}] Không có kênh nén — fallback SMC scan");
+        $this->scanPair($symbol, $timeframe, 'smc');
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // DAILY SESSION MANAGEMENT — "1 hiệp trong ngày"
+    // ──────────────────────────────────────────────────────────────
+
+    private function isDailyTargetReached(string $symbol): bool
+    {
+        $key    = $this->dailyPipKey($symbol);
+        $target = (float) $this->option('daily-target');
+        return (float) Cache::get($key, 0) >= $target;
+    }
+
+    /**
+     * Gọi khi lệnh TP hit — cộng dồn pips thắng trong ngày.
+     * Nếu vượt daily-target: hủy toàn bộ lệnh chờ còn lại.
+     */
+    public function recordDailyWin(string $symbol, float $pipsWon): void
+    {
+        $key     = $this->dailyPipKey($symbol);
+        $target  = (float) $this->option('daily-target');
+        $current = (float) Cache::get($key, 0);
+        $new     = $current + $pipsWon;
+        Cache::put($key, $new, now()->endOfDay());
+
+        $this->line('[' . now()->format('H:i:s') . "] [{$symbol}] Pips hôm nay: {$new} / {$target}");
+
+        if ($new >= $target) {
+            $this->info("[{$symbol}] 🏆 ĐẠT MỤC TIÊU NGÀY ({$new} pips ≥ {$target}) — hủy lệnh chờ");
+            $result = $this->exnessService->cancelAllPending();
+            $this->telegramService->sendRaw(
+                "🏆 <b>Felix đạt mục tiêu ngày — {$symbol}</b>\n"
+                . "Tổng pips: <b>{$new}</b> / target: <b>{$target}</b>\n"
+                . "Đã hủy toàn bộ lệnh chờ còn lại.\n"
+                . "✅ <i>Nghỉ ngơi — tiếp tục ngày mai</i>"
+            );
+        }
+    }
+
+    private function dailyPipKey(string $symbol): string
+    {
+        return 'daily_pips_' . strtoupper($symbol) . '_' . now()->format('Y-m-d');
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // TELEGRAM ALERT cho Breakout Stop Order
+    // ──────────────────────────────────────────────────────────────
+
+    private function sendBreakoutAlert(
+        string $symbol,
+        string $timeframe,
+        array  $channel,
+        string $htfTrend,
+        array  $orders,
+        float  $currentPrice,
+        float  $tpPips,
+        float  $slPips,
+        float  $mainLot,
+        float  $probeLot,
+        int    $lotMulti,
+        float  $capital
+    ): void {
+        $upper       = $channel['upper'];
+        $lower       = $channel['lower'];
+        $compression = round($channel['compression'] * 100);
+        $htfLabel    = match (true) {
+            str_contains($htfTrend, 'TĂNG') => '📈 TĂNG',
+            str_contains($htfTrend, 'GIẢM') => '📉 GIẢM',
+            default                         => '↔ NGANG',
+        };
+
+        $orderLines = '';
+        foreach ($orders as $o) {
+            $arrow    = str_contains($o['side'], 'BUY') ? '⬆' : '⬇';
+            $status   = $o['ok'] ? '✅' : '❌';
+            $orderLines .= "{$arrow} <b>{$o['side']}</b> {$status}\n"
+                . "   📌 Entry: <code>{$o['entry']}</code> | 🎯 TP: <code>{$o['tp']}</code> (+{$tpPips} pips)\n"
+                . "   🛡 SL: <code>{$o['sl']}</code> (-{$slPips} pips) | Lot: <b>{$o['lots']}</b>\n";
+        }
+
+        $capitalLine = $capital > 0
+            ? "\n💰 Vốn: <b>\${$capital}</b> | Probe: <b>{$probeLot}</b> → Main: <b>{$mainLot}</b> (×{$lotMulti})"
+            : '';
+
+        $msg = "📐 <b>GOLD BREAKOUT SETUP — {$symbol} ({$timeframe})</b>\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . "🏔 Đỉnh cứng: <code>{$upper}</code>\n"
+            . "🏔 Đáy cứng:  <code>{$lower}</code>\n"
+            . "🗜 Nén: <b>{$compression}%</b> | Giá hiện tại: <code>{$currentPrice}</code>\n"
+            . "📊 HTF 1h: {$htfLabel}\n"
+            . "━━━━━━━━━━━━━━━\n"
+            . $orderLines
+            . "━━━━━━━━━━━━━━━\n"
+            . "⚡ <i>Khi Stop khớp → kéo SL về BE ngay khi +5 pips</i>"
+            . $capitalLine;
+
+        $this->telegramService->sendRaw($msg);
     }
 
     private function getGoldTrend(): array
