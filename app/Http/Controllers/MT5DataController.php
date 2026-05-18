@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\MarketDataService;
 use App\Services\PriceActionService;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -20,6 +21,7 @@ class MT5DataController extends Controller
     public function __construct(
         private MarketDataService  $marketData,
         private PriceActionService $priceAction,
+        private TelegramService    $telegram,
     ) {}
 
     // ──────────────────────────────────────────────────────────────
@@ -164,10 +166,15 @@ class MT5DataController extends Controller
             $channel = $this->priceAction->detectUnpredictableChannel($klines, lookback: 100);
             $atr     = $this->priceAction->calculateATR($klines, 14);
 
+            $ai = ['score' => 'n/a', 'direction' => 'n/a', 'analysis' => ''];
+            if ($channel['is_channel']) {
+                $ai = $this->priceAction->scoreWithAI($sym, '15m', $channel, $atr, (float)$price, $klines);
+            }
+
             $result[$sym] = [
                 'bars'         => count($klines),
                 'price'        => $price,
-                'atr'          => $atr,
+                'atr'          => round($atr, 2),
                 'is_channel'   => $channel['is_channel'],
                 'type'         => $channel['type']        ?? 'none',
                 'direction'    => $channel['direction']   ?? null,
@@ -178,6 +185,11 @@ class MT5DataController extends Controller
                 'hl_count'     => $channel['hl_count']    ?? 0,
                 'll_count'     => $channel['ll_count']    ?? 0,
                 'hh_count'     => $channel['hh_count']    ?? 0,
+                'ai_score'     => $ai['score']               ?? 'n/a',
+                'ai_direction' => $ai['breakout_direction']  ?? 'n/a',
+                'ai_analysis'  => $ai['analysis']            ?? '',
+                'ai_cached'    => $ai['cached']              ?? false,
+                'would_fire'   => ($channel['is_channel'] && is_int($ai['score'] ?? null) && ($ai['score'] ?? 0) >= 70),
             ];
         }
 
@@ -185,6 +197,21 @@ class MT5DataController extends Controller
             'scanned_at' => now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
             'pairs'      => $result,
         ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // GET /api/mt5/ping-telegram  — kiểm tra Telegram có hoạt động không
+    // ──────────────────────────────────────────────────────────────
+
+    public function pingTelegram(): JsonResponse
+    {
+        $ok = $this->telegram->isConfigured();
+        if ($ok) {
+            $this->telegram->sendRaw(
+                "🔔 <b>Felix ping</b> — " . now('Asia/Ho_Chi_Minh')->format('H:i:s T') . "\nTelegram hoạt động bình thường."
+            );
+        }
+        return response()->json(['telegram_configured' => $ok]);
     }
 
     // ──────────────────────────────────────────────────────────────
