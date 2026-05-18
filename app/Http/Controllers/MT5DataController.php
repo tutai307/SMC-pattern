@@ -41,10 +41,11 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $symbol    = strtoupper(trim($request->input('symbol', '')));
-        $timeframe = strtoupper(trim($request->input('timeframe', '')));
-        $klines    = $request->input('klines', []);
-        $bid       = (float) $request->input('bid', 0);
+        $data      = $this->body($request);
+        $symbol    = strtoupper(trim($data['symbol'] ?? ''));
+        $timeframe = strtoupper(trim($data['timeframe'] ?? ''));
+        $klines    = $data['klines'] ?? [];
+        $bid       = (float) ($data['bid'] ?? 0);
 
         if (empty($symbol) || empty($timeframe) || empty($klines)) {
             return response()->json(['error' => 'Missing required fields'], 422);
@@ -96,8 +97,9 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        $symbol = strtoupper(trim($request->input('symbol', '')));
-        $bid    = (float) $request->input('bid', 0);
+        $data   = $this->body($request);
+        $symbol = strtoupper(trim($data['symbol'] ?? ''));
+        $bid    = (float) ($data['bid'] ?? 0);
 
         if (empty($symbol) || $bid <= 0) {
             return response()->json(['error' => 'Missing symbol or bid'], 422);
@@ -144,6 +146,14 @@ class MT5DataController extends Controller
     // ──────────────────────────────────────────────────────────────
     // PRIVATE
     // ──────────────────────────────────────────────────────────────
+
+    /** MT5 WebRequest không set Content-Type đúng → phải parse raw body thủ công */
+    private function body(Request $request): array
+    {
+        $parsed = $request->all();
+        if (!empty($parsed)) return $parsed;
+        return (array) (json_decode($request->getContent(), true) ?? []);
+    }
 
     private function verifySecret(Request $request): bool
     {
