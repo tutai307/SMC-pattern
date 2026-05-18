@@ -41,39 +41,47 @@ class MT5DataController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        // Tất cả trong query params, klines compact không có timestamp
         $symbol    = strtoupper(trim($request->query('symbol', '')));
-        $timeframe = strtoupper(trim($request->query('timeframe', '')));
+        $timeframe = strtoupper(trim($request->query('tf', $request->query('timeframe', ''))));
         $bid       = (float) $request->query('bid', 0);
-        $startTs   = (int) $request->query('ts', 0);
-        $klines    = $this->parseCompactKlines($request->query('k', ''), $startTs);
+        $startTs   = (int)   $request->query('ts', 0);
+        $batch     = (int)   $request->query('b',  0);
+        $total     = (int)   $request->query('t',  1);
+        $chunk     = $this->parseCompactKlines($request->query('k', ''), $startTs);
 
-        if (empty($symbol) || empty($timeframe) || empty($klines)) {
+        if (empty($symbol) || empty($chunk)) {
             return response()->json(['error' => 'Missing required fields'], 422);
         }
 
-        if (!is_array($klines) || count($klines) < 2) {
-            return response()->json(['error' => 'klines phải có ít nhất 2 nến'], 422);
+        // Chunked assembly: accumulate in cache, store when last chunk arrives
+        if ($batch > 0 && $total > 1) {
+            $cacheKey = "mt5_chunk_{$symbol}_M15_{$total}";
+            $chunks   = \Cache::get($cacheKey, []);
+            $chunks[$batch] = $chunk;
+            \Cache::put($cacheKey, $chunks, 120);
+
+            if (count($chunks) < $total) {
+                return response()->json(['ok' => true, 'chunk' => $batch, 'pending' => $total - count($chunks)]);
+            }
+
+            // All chunks arrived — assemble in order
+            ksort($chunks);
+            $klines = array_merge(...array_values($chunks));
+            \Cache::forget($cacheKey);
+        } else {
+            $klines = $chunk;
         }
 
-        // Validate format: mỗi kline phải có ít nhất 6 phần tử
-        $sample = $klines[0];
-        if (!is_array($sample) || count($sample) < 6) {
-            return response()->json(['error' => 'kline format: [timestamp_ms, open, high, low, close, volume]'], 422);
-        }
+        if (empty($timeframe)) $timeframe = 'M15';
 
         $this->marketData->storeKlines($symbol, $timeframe, $klines);
+        if ($bid > 0) $this->marketData->storePrice($symbol, $bid);
 
-        if ($bid > 0) {
-            $this->marketData->storePrice($symbol, $bid);
-        }
-
-        \Log::info("MT5 push klines: {$symbol}/{$timeframe} — " . count($klines) . " bars, bid={$bid}");
+        \Log::info("MT5 klines: {$symbol}/{$timeframe} — " . count($klines) . " bars");
 
         return response()->json([
             'ok'        => true,
             'symbol'    => $this->marketData->normalizeSymbol($symbol),
-            'timeframe' => $timeframe,
             'count'     => count($klines),
             'stored_at' => now()->toISOString(),
         ]);
@@ -153,7 +161,7 @@ class MT5DataController extends Controller
     {
         if (empty($k)) return [];
         $klines = [];
-        foreach (explode('~', $k) as $i => $row) {
+        foreach (explode('-', $k) as $i => $row) {
             $f = explode(',', $row);
             if (count($f) === 4) {
                 $ts = $startTs > 0 ? ($startTs + $i * 900) * 1000 : 0;
