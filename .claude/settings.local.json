@@ -12,7 +12,32 @@
       "Bash(php -l /Users/as-mi07/Projects/SMC-pattern/app/Services/TelegramService.php)",
       "Bash(rtk --version)",
       "Bash(brew search *)",
-      "Bash(brew install *)"
+      "Bash(brew install *)",
+      "Bash(rtk git *)",
+      "Bash(rtk grep *)",
+      "Bash(rtk wc *)",
+      "WebSearch",
+      "Bash(php *)",
+      "Bash(rtk read *)",
+      "Bash(rtk find *)",
+      "Bash(gh search *)",
+      "Bash(rtk curl *)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/KVignesh122/MT5-SMC-trading-bot/main/README.md\")",
+      "Bash(curl -s \"https://api.github.com/repos/Prasad1612/smart-money-concept/contents\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/Janis174756/Binance-Futures-Trading-Bot/main/README.md\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/Prasad1612/smart-money-concept/main/smart_money_concepts/smc.py\")",
+      "Bash(curl -s \"https://api.github.com/repos/Prasad1612/smart-money-concept/contents/smart_money_concepts\")",
+      "Bash(curl -s \"https://api.github.com/repos/Janis174756/Binance-Futures-Trading-Bot/contents\")",
+      "Bash(curl -s \"https://api.github.com/repos/Janis174756/Binance-Futures-Trading-Bot/contents/strategies\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/Janis174756/Binance-Futures-Trading-Bot/main/strategies/trading_strats.py\")",
+      "Bash(curl -s \"https://api.github.com/repos/KVignesh122/MT5-SMC-trading-bot/contents\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/KVignesh122/MT5-SMC-trading-bot/main/EA_Script.mq5\")",
+      "Bash(rtk ls *)",
+      "Bash(grep -v \"LocalScore [0-9]*/100$\\\\|LocalScore [0-9]* < \")",
+      "Bash(grep -v \"^  → LocalScore [0-9]*/100$\\\\|^  → LocalScore [0-9]* < \")",
+      "Bash(wait)",
+      "Bash(git checkout *)"
     ]
   }
 }

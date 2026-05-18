@@ -125,6 +125,19 @@ Không còn 2-bước confirm. "ok" lưu thẳng.
 | 2026-05-09 | /l dùng fresh=true → bypass cache, luôn data mới | TelegramBotCommand.php + PriceActionService.php |
 | 2026-05-09 | Fix AI cắt lỗ sớm: thêm slUsedPct calculation + hard rules (CẮT LỖ chỉ khi ≥60% SL, CHỐT LỜI chỉ khi ≥70% TP) | PriceActionService.php |
 | 2026-05-10 | Đổi scanner sang M15 cho 6 symbols (SOL/XAG/LINK/ETH/BTC/XAU), cập nhật backtestStats Jan-May 2026, thêm PnL 2% risk vào scan alert | ScanSignalsCommand.php, TelegramService.php |
+| 2026-05-14 | Thêm --method=crypto vào BacktestCommand: EMA 20/50/200 + ATR 1.5x SL + volume check, bỏ funding/LS ratio. Fix $isLong/$isLongEntry cho LONG/SHORT type. Thêm --crypto-rr option. | BacktestCommand.php |
+| 2026-05-14 | Fix generateCryptoSignal() v2: HTF EMA20/50 trend filter + OB/FVG pullback entry (inline detect) + dedup 20 candles. Entry = OB/FVG mid thay currentPrice. | BacktestCommand.php |
+| 2026-05-14 | Add ADX(14) >= 20 filter + session filter [07,17) UTC vào generateCryptoSignal() — thêm calcAdxLast() helper. | BacktestCommand.php |
+| 2026-05-14 | [v4] generateCryptoSignal() GitHub-research overhaul: OB 2-of-3 quality score (range>=1.5xATR, body>=60%range, vol>=1.5x), Fib61.8 entry, OB mitigation >50% check, rejection wick 15%, RSI(14) gate (<65 LONG/>35 SHORT), EMA9 momentum confirm, ADX 25, bỏ session filter. Thêm calcRsiLast(). | BacktestCommand.php |
+| 2026-05-14 | [v5] generateCryptoSignal() 4-layer filter: L1=daily EMA20 bias, L2=mini BOS confirm, L3=OB fresh<=10c+body>=70%+vol>=2.0x, L4=SL 0.5xATR+max2.5%. Truyền $dailyWin vào hàm. WR 40.7%, P&L +$24, signals 64. | BacktestCommand.php |
+| 2026-05-14 | Dọn dẹp crypto method: xóa CryptoSignalService.php, xóa generateCryptoSignal/calcAdxLast/calcRsiLast/--crypto-rr khỏi BacktestCommand, xóa METALS/scanCrypto/CryptoSignalService inject khỏi ScanSignalsCommand. Giữ nguyên SMC thuần. | CryptoSignalService.php (deleted), BacktestCommand.php, ScanSignalsCommand.php |
+| 2026-05-14 | Xóa toàn bộ Elliott Wave: detectElliotWaves/calculateElliotFibonacci/generateElliotSignal khỏi PriceActionService, bỏ method=elliot khỏi BacktestCommand + DashboardController, xóa $isElliot block khỏi TelegramService, xóa ELLIOT button + fibonacci UI + JS zigzag/fib khỏi welcome.blade.php. SMC-only. | PriceActionService.php, BacktestCommand.php, DashboardController.php, TelegramService.php, welcome.blade.php |
+| 2026-05-14 | Fix hardReviewCheck() cắt lỗ sớm: (1) Nâng consecutive LTF 4→5 candles; (2) HTF check yêu cầu đồng thời swing ngược + 3 candles HTF liên tiếp + P&L < -2% (trước: swing ngược + P&L < -1%). | ScanSignalsCommand.php |
+| 2026-05-15 | Fix routing "kèo/phân tích [coin]" → luôn gọi PriceActionService thật (không qua AI). Thêm Route 2: "[coin] giá/như nào" → quickPriceReply() trả giá + HTF + LTF trend ngay, không AI. Thêm extractSymbolFromText() helper. | TelegramBotCommand.php |
+| 2026-05-15 | Thêm OB width filter (< 0.3% skip) trong findHighQualityOB(). Thêm TP distance filter theo TF (15m:0.4%, 1h:0.8%, 4h:1.5%) trong generateSMCSignal() LONG+SHORT. Thêm TP min filter theo TF trong fireZoneApproach() thay thế flat 1.5%. | PriceActionService.php L439, L598-600, L699-701; ScanSignalsCommand.php L695-704 |
+| 2026-05-15 | Thêm volatility circuit breaker: isVolatilityCircuitBreakerActive() L724-757, check trong scanPair() L436-439. Range > 2.5x ATR(14) → pause 3 candles via Cache. Zone alerts tự tắt vì scanPair() return sớm trước checkZones(). | ScanSignalsCommand.php |
+| 2026-05-15 | Thêm emergency alert cho RUNNING signals trong circuit breaker (L770-792): khi black swan xảy ra, query RUNNING signals của symbol, tính P&L realtime, gửi sendRaw() cảnh báo khẩn từng lệnh. Ngoài if($cancelled>0), luôn chạy kể cả khi không có PENDING. | ScanSignalsCommand.php |
+| 2026-05-15 | Thêm FOMO opportunity alert trong circuit breaker (L771-790): gửi hướng nến (LONG/SHORT), movePct, suggestion TRƯỚC alert lệnh đang chạy — user thấy cơ hội trước rồi mới thấy cảnh báo. | ScanSignalsCommand.php |
 
 ---
 
@@ -134,7 +147,12 @@ Không còn 2-bước confirm. "ok" lưu thẳng.
 ---
 
 ## Last BA Analysis
-*Chưa có — chạy /ba để cập nhật*
+2026-05-14 | Backtest SOLUSDT 15m crypto method 2026-01-01→2026-05-14: 363 signals, WR 29.3% (106W/256L), P&L -$88 / capital cuối $12. Fill rate 100%. EMA-only filter tạo quá nhiều noise trên 15m — cần thêm OB/FVG hoặc session filter.
+2026-05-14 | Backtest SOLUSDT 4h crypto method 2026-01-01→2026-05-14: 26 signals, WR 26.9%, P&L -$3 (net -3%), EMA alignment-only filter quá weak. Cần thêm OB/FVG confirmation để cải thiện precision.
+2026-05-14 | [v2] Backtest SOLUSDT 15m crypto v2 (HTF 1h EMA + OB/FVG pullback) 2026-01-01→2026-05-14: 133 signals (-63%), WR 32.1% (35W/74L), P&L -$8 / capital $92. Fill rate 82%. Tín hiệu giảm mạnh, WR tăng nhẹ, P&L cải thiện từ -$88 → -$8. Vẫn cần cải thiện WR lên >40% để profitable ở R:R 2.5.
+2026-05-14 | [v3 ADX+Session] Backtest SOLUSDT 15m crypto v3 (ADX>=20 + session 07-17 UTC) 2026-01-01→2026-05-14: 78 signals, WR 27.1% (16W/43L), P&L -$22 / capital $78. Fill rate 75.6%. ADX/session filter TIDAK membantu — WR turun 32%→27%, P&L memburuk -$8→-$22. Tín hiệu giảm 133→78 nhưng signal quality xấu hơn. ADX 20 threshold có thể quá thấp; cần thử ADX 25-30 hoặc bỏ session filter.
+2026-05-14 | [v4 GitHub-research] Backtest SOLUSDT 15m crypto v4 2026-01-01→2026-05-14: 83 signals, WR 36.5% (23W/40L), P&L +$12 / capital $112. Fill rate 75.9%. BREAKTHROUGH.
+2026-05-14 | [v5 4-layer] Backtest SOLUSDT 15m crypto v5 2026-01-01→2026-05-14: 64 signals, WR 40.7% (22W/32L), P&L +$24 / capital $124. Fill rate 84.4%. WR tăng 36.5→40.7% (+4.2%), P&L tăng +$12→+$24 (×2). Signals giảm 83→64. Bottleneck còn lại: chuỗi thua nhiều lên tới 3 lệnh liên tiếp (Jan 9: -3L, Feb 4: -2L). WR 40.7% vẫn chưa đủ cho breakeven tại R:R 2.5 (cần 28.6%), nhưng chưa đủ margin an toàn để trade live — target WR >=45%.
 
 ---
 
