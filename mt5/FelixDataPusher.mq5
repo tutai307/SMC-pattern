@@ -9,7 +9,7 @@
 //--- Input parameters
 input string WebhookURL    = "https://smc-pattern-production.up.railway.app/api/mt5";  // Địa chỉ server Laravel
 input string WebhookSecret = "felix_mt5_a23c7eafc3a292cc";    // MT5_WEBHOOK_SECRET trong .env
-input int    KlineCount    = 100;                               // Số nến gửi mỗi lần push
+input int    KlineCount    = 60;                                // Số nến gửi mỗi lần push
 input int    TickInterval  = 10;                                // Giây push giá bid (timer)
 input bool   EnableLogging = true;                              // In log vào Experts tab
 
@@ -106,7 +106,12 @@ void PushKlines()
     ArrayResize(emptyBody, 0);
 
     int statusCode = WebRequest("POST", url, "", 5000, emptyBody, responseBody, responseHeaders);
-    string result  = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
+    if (statusCode == -1) {
+        int err = GetLastError();
+        Print("FelixDataPusher klines ERROR #", err, " (4014=URL chưa allow, 5203=timeout) url_len=", StringLen(url));
+        return;
+    }
+    string result = IntegerToString(statusCode) + ":" + CharArrayToString(responseBody);
 
     if (EnableLogging)
         Print("FelixDataPusher klines: ", copied, " bars — ", result);
