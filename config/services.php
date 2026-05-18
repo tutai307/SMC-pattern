@@ -46,4 +46,8 @@ return [
         'magic'          => env('EXNESS_MAGIC', 20260513),
     ],
 
+    'mt5' => [
+        'webhook_secret' => env('MT5_WEBHOOK_SECRET', ''),
+    ],
+
 ];

@@ -147,7 +147,7 @@ class MT5DataController extends Controller
 
     private function verifySecret(Request $request): bool
     {
-        $expected = env('MT5_WEBHOOK_SECRET', '');
+        $expected = config('services.mt5.webhook_secret', '');
         if (empty($expected)) return true; // dev mode: không cần secret
 
         return $request->input('secret') === $expected
