@@ -118,7 +118,8 @@ string PostJSON(const string url, const string body)
     uchar  responseBody[];
     string responseHeaders;
 
-    StringToCharArray(body, requestBody, 0, StringLen(body));
+    // count=-1 (default) copies ALL chars + null terminator → ArraySize = len+1
+    StringToCharArray(body, requestBody);
     int bodyLen = ArraySize(requestBody) - 1; // bỏ null terminator
     ArrayResize(requestBody, bodyLen);
 
