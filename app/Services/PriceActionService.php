@@ -71,7 +71,10 @@ class PriceActionService
             else break;
         }
 
-        if ($lhCount < 1 || $hlCount < 1) return $empty;
+        // Trả về counts thực để caller có thể log lý do bị loại
+        if ($lhCount < 1 || $hlCount < 1) {
+            return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+        }
 
         $upper = (float) end($highs)['price'];
         $lower = (float) end($lows)['price'];
