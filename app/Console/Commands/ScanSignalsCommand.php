@@ -128,17 +128,21 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        // ── 2. Top-Down: HTF bias từ H4 ───────────────────────────
-        // Tự build H4 từ M15 — EA chỉ push M15, không cần push H4 riêng
+        // ── 2. Top-Down: W1 / D1 / H4 analysis ───────────────────
         $h4Klines = $this->marketData->buildH4FromM15($klines);
+        $d1Klines = $this->marketData->buildD1FromM15($klines);
+
         $htfBias  = !empty($h4Klines) ? $this->priceActionService->getHTFBias($h4Klines) : null;
+        $w1Bias   = $this->priceActionService->getW1Bias($klines, $currentPrice);
+        $d1Bias   = $this->priceActionService->getD1Bias($d1Klines);
+        $h4Label  = $this->priceActionService->getH4Label($h4Klines);
 
         $htfLabel = match ($htfBias) {
             'LONG'  => '⬆ TĂNG',
             'SHORT' => '⬇ GIẢM',
             default => '➡ không rõ / không có data H4',
         };
-        $this->line("[{$ts}] [{$symbol}] HTF(H4): {$htfLabel}");
+        $this->line("[{$ts}] [{$symbol}] W1:{$w1Bias} | D1:{$d1Bias} | H4:{$htfLabel}");
 
         // ── 3. M15 Channel Detection (4 mô hình) ─────────────────
         $channel     = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 100);
@@ -225,8 +229,19 @@ class ScanSignalsCommand extends Command
         }
 
         // ── 9. Format + Send Telegram ─────────────────────────────
+        $h4Align = match ($htfBias) {
+            'LONG'  => 'thuận xu hướng H4 TĂNG',
+            'SHORT' => 'thuận xu hướng H4 GIẢM',
+            default => 'H4 không rõ — trade 2 chiều',
+        };
+        $analysis = [
+            'w1'     => $w1Bias,
+            'd1'     => $d1Bias,
+            'h4'     => $h4Label,
+            'reason' => "Phá vỡ Tam giác nén M15, {$h4Align}",
+        ];
         $msg = $this->signalFormatter->formatTelegramMessage(
-            $symbol, $timeframe, $channel, $signals, $currentPrice, $htfBias
+            $symbol, $timeframe, $channel, $signals, $currentPrice, $analysis
         );
         $this->telegramService->sendRaw($msg);
 

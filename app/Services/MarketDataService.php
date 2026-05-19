@@ -166,6 +166,44 @@ class MarketDataService
         return array_values($groups);
     }
 
+    /**
+     * Tổng hợp nến D1 từ M15. Cứ mỗi 24-hour boundary (UTC) = 1 nến ngày.
+     */
+    public function buildD1FromM15(array $m15Klines): array
+    {
+        return $this->aggregateKlinesByPeriod($m15Klines, 24 * 3600 * 1000);
+    }
+
+    /**
+     * Tổng hợp nến W1 từ M15. Cứ mỗi 7-day block (UTC epoch-aligned) = 1 nến tuần.
+     */
+    public function buildW1FromM15(array $m15Klines): array
+    {
+        return $this->aggregateKlinesByPeriod($m15Klines, 7 * 24 * 3600 * 1000);
+    }
+
+    private function aggregateKlinesByPeriod(array $klines, int $periodMs): array
+    {
+        if (empty($klines)) return [];
+        $groups = [];
+        foreach ($klines as $bar) {
+            $ts  = (int) $bar[0];
+            $pts = intdiv($ts, $periodMs) * $periodMs;
+            if (!isset($groups[$pts])) {
+                $groups[$pts] = [$pts, (float)$bar[1], (float)$bar[2],
+                                       (float)$bar[3], (float)$bar[4], (float)($bar[5] ?? 0)];
+            } else {
+                $g    = &$groups[$pts];
+                $g[2] = max($g[2], (float)$bar[2]);
+                $g[3] = min($g[3], (float)$bar[3]);
+                $g[4] = (float)$bar[4];
+                $g[5] += (float)($bar[5] ?? 0);
+            }
+        }
+        ksort($groups);
+        return array_values($groups);
+    }
+
     private function klinesKey(string $symbol, string $timeframe): string
     {
         return 'mt5_klines_' . strtoupper($symbol) . '_' . $this->normalizeTimeframe($timeframe);

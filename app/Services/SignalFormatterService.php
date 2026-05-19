@@ -20,12 +20,11 @@ namespace App\Services;
  */
 class SignalFormatterService
 {
-    // Buffer: 0.3 giá ($0.30) — tránh fakeout, không quá xa trendline
-    private const BUF_GIA = 0.3;
+    // Entry buffer — bắt buộc giá phá và chạy ≥ 1.0 giá mới lên tàu (chống fakeout)
+    private const BUF_GIA  = 1.0;
 
-    // TP/SL động — tính theo ATR và channel width
-    private const SL_ATR_MULT  = 1.5;  // SL = 1.5 × ATR(14)
-    private const TP_WIDTH_PCT = 0.8;  // TP = channel_width × 80%
+    // SL cố định — 2.0 giá từ điểm entry (bảo vệ tài khoản Cent)
+    private const SL_GIA   = 2.0;
 
     // Risk management
     private const RISK_PCT = 0.02;   // 2% vốn mỗi lệnh
@@ -134,32 +133,25 @@ class SignalFormatterService
         float  $atr
     ): ?array {
         $dec        = 2;
-        $bufGia     = self::BUF_GIA;
+        $bufGia     = self::BUF_GIA;        // 1.0 giá — anti-fakeout
+        $slGia      = self::SL_GIA;         // 2.0 giá cố định
+        $tpGia      = $this->calcTpGia($atr);
+        $rr         = round($tpGia / $slGia, 2);
+        $lot        = $this->calculateExnessLot($capital, $slGia);
         $channelDir = $channel['direction'] ?? null;
 
-        // Tính SL và TP động
-        $slGia = round(self::SL_ATR_MULT * $atr, 2);
-        $tpGia = round(($channel['upper'] - $channel['lower']) * self::TP_WIDTH_PCT, 2);
-
-        // Bộ lọc sống còn — BẮT BUỘC
-        if ($slGia <= 0 || $tpGia < $slGia) return null;
-
-        $rr  = round($tpGia / $slGia, 2);
-        $lot = $this->calculateExnessLot($capital, $slGia);
-
         if ($channelDir === null) {
-            // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────
-            $lE = round($channel['upper'] + $bufGia, $dec);  // BUY STOP trên đỉnh kênh
-            $sE = round($channel['lower'] - $bufGia, $dec);  // SELL STOP dưới đáy kênh
+            // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────────
+            $lE = round($channel['upper'] + $bufGia, $dec);
+            $sE = round($channel['lower'] - $bufGia, $dec);
             $orders = [
                 ['side' => 'BUY_STOP',  'entry' => $lE,
                  'tp'   => round($lE + $tpGia, $dec), 'sl' => round($lE - $slGia, $dec)],
                 ['side' => 'SELL_STOP', 'entry' => $sE,
                  'tp'   => round($sE - $tpGia, $dec), 'sl' => round($sE + $slGia, $dec)],
             ];
-
         } else {
-            // ── BÀI 2: Đánh Quét Biên (Bounce) ─────────────────
+            // ── BÀI 2: Đánh Quét Biên (Bounce) — DISABLED v5.4 ─────
             if ($channelDir === 'SHORT') {
                 $entry  = round($channel['upper'] - $bufGia, $dec);
                 $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
@@ -181,6 +173,20 @@ class SignalFormatterService
             'lot'    => $lot,
             'atr'    => round($atr, 2),
         ];
+    }
+
+    private function calcTpGia(float $atr): float
+    {
+        if ($atr < 1.5)  return 1.0; // Lực YẾU — đớp nhanh rút gọn
+        if ($atr <= 3.0) return 2.0; // Lực TB  — chuẩn bài
+        return 3.0;                   // Lực MẠNH/BÃO TIN
+    }
+
+    private function atrLabel(float $atr): string
+    {
+        if ($atr < 1.5)  return "Lực YẾU";
+        if ($atr <= 3.0) return "Lực TB";
+        return "Lực MẠNH";
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -240,12 +246,14 @@ class SignalFormatterService
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Format tin nhắn Telegram — copy-paste vào Exness trong 3 giây.
+     * Format tin nhắn Telegram — 5 bước phân tích Top-Down đầy đủ.
      *
-     * Thay thế AI score bằng thông số hình học thực tế:
-     * số swing points, compression, ATR, và HTF bias từ H4.
-     *
-     * @param string|null $htfBias  Xu hướng H4 macro: 'LONG'|'SHORT'|null
+     * @param array $analysis {
+     *   w1:     string  — W1 bias label
+     *   d1:     string  — D1 bias label
+     *   h4:     string  — H4 channel label
+     *   reason: string  — lý do vào lệnh
+     * }
      */
     public function formatTelegramMessage(
         string  $symbol,
@@ -253,15 +261,13 @@ class SignalFormatterService
         array   $channel,
         array   $signals,
         float   $currentPrice,
-        ?string $htfBias = null
+        array   $analysis = []
     ): string {
         $upper       = $channel['upper'];
         $lower       = $channel['lower'];
-        $channelType = $channel['type'] ?? 'triangle';
         $lhCount     = $channel['lh_count'] ?? 0;
         $hlCount     = $channel['hl_count'] ?? 0;
-        $hhCount     = $channel['hh_count'] ?? 0;
-        $llCount     = $channel['ll_count'] ?? 0;
+        $compression = round(($channel['compression'] ?? 0) * 100);
 
         $lot   = $signals['lot'];
         $slGia = $signals['sl_gia'];
@@ -271,62 +277,52 @@ class SignalFormatterService
 
         $time = now('Asia/Ho_Chi_Minh')->format('H:i d/m');
 
-        // Header theo loại kênh
-        [$header, $channelLabel] = match ($channelType) {
-            'descending' => [
-                "📉 <b>VÀNG BOUNCE SELL</b>",
-                "📉 Kênh GIẢM Song Song  ({$lhCount} LH · {$llCount} LL)",
-            ],
-            'ascending'  => [
-                "📈 <b>VÀNG BOUNCE BUY</b>",
-                "📈 Kênh TĂNG Song Song  ({$hhCount} HH · {$hlCount} HL)",
-            ],
-            default      => [
-                "🥇 <b>VÀNG BREAKOUT SETUP</b>",
-                "🗜 Tam Giác Nén " . round($channel['compression'] * 100) . "%  ({$lhCount} LH · {$hlCount} HL)",
-            ],
-        };
+        $w1     = $analysis['w1']     ?? 'không rõ';
+        $d1     = $analysis['d1']     ?? 'không rõ';
+        $h4     = $analysis['h4']     ?? 'không rõ';
+        $reason = $analysis['reason'] ?? 'Phá vỡ Tam giác nén M15';
 
-        // Với triangle: show cả 2 chiều; bounce: 1 chiều
+        $m15Pattern = "{$lhCount} đỉnh LH + {$hlCount} đáy HL → Tam Giác Nén {$compression}%";
+
         $ordersSection = '';
         foreach ($signals['orders'] as $order) {
             $note           = ($order['auto_corrected'] ?? false) ? '  <i>↺ tự điều chỉnh</i>' : '';
-            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia) . $note . "\n";
+            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia, $atr) . $note . "\n";
         }
 
-        // HTF bias line
-        $htfLine = match ($htfBias) {
-            'LONG'  => "📊 HTF(H4): ⬆ TĂNG  ✅ đồng thuận",
-            'SHORT' => "📊 HTF(H4): ⬇ GIẢM  ✅ đồng thuận",
-            default => "📊 HTF(H4): ➡ không rõ xu hướng",
-        };
-
-        return "{$header} — {$symbol} {$timeframe}  <i>{$time}</i>\n"
+        return "🥇 <b>VÀNG BREAKOUT SETUP</b> — {$symbol} {$timeframe}  <i>{$time}</i>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "{$channelLabel}\n"
+            . "📋 <b>PHÂN TÍCH ĐA KHUNG (Top-Down)</b>\n"
+            . "  ├ [W1 Bias]     {$w1}\n"
+            . "  ├ [D1 Bias]     {$d1}\n"
+            . "  ├ [H4 Trend]    {$h4}\n"
+            . "  ├ [M15 Mẫu]     {$m15Pattern}\n"
+            . "  └ [Lý do lệnh] {$reason}\n"
+            . "━━━━━━━━━━━━━━━━━━━━\n"
+            . "🗜 Tam Giác Nén {$compression}%  (LH:{$lhCount} · HL:{$hlCount})\n"
             . "   🏔 Upper : <code>{$upper}</code>   ⛰ Lower : <code>{$lower}</code>\n"
             . "   💰 Giá hiện tại : <code>{$currentPrice}</code>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
             . $ordersSection
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "📐 LH:{$lhCount}  HL:{$hlCount}  HH:{$hhCount}  LL:{$llCount}  |  ATR {$atr} giá\n"
-            . "{$htfLine}\n"
+            . "📐 ATR(14): {$atr} giá ({$this->atrLabel($atr)})  |  SL cố định: {$slGia} giá\n"
             . "💼 Lot: <b>{$lot}</b>  |  ❌ SL rủi ro: -\${$slUsd}";
     }
 
-    private function formatOrderBlock(array $order, float $tpGia, float $slGia): string
+    private function formatOrderBlock(array $order, float $tpGia, float $slGia, float $atr = 0): string
     {
-        $isSell = str_starts_with($order['side'], 'SELL');
-        $label  = str_replace('_', ' ', $order['side']);
-        $emoji  = $isSell ? '⬇' : '⬆';
-        $tpSign = $isSell ? '-' : '+';
-        $slSign = $isSell ? '+' : '-';
-        $rr     = round($tpGia / $slGia, 2);
+        $isSell   = str_starts_with($order['side'], 'SELL');
+        $label    = str_replace('_', ' ', $order['side']);
+        $emoji    = $isSell ? '⬇' : '⬆';
+        $tpSign   = $isSell ? '-' : '+';
+        $slSign   = $isSell ? '+' : '-';
+        $rr       = round($tpGia / $slGia, 2);
+        $atrLbl   = $atr > 0 ? '  <i>' . $this->atrLabel($atr) . "</i>" : '';
 
         return "{$emoji} <b>{$label}</b>\n"
             . "   📌 Entry : <code>{$order['entry']}</code>\n"
-            . "   🎯 TP    : <code>{$order['tp']}</code>  ({$tpSign}{$tpGia} Giá)\n"
-            . "   🛡 SL    : <code>{$order['sl']}</code>  ({$slSign}{$slGia} Giá)\n"
+            . "   🎯 TP    : <code>{$order['tp']}</code>  ({$tpSign}{$tpGia} giá{$atrLbl})\n"
+            . "   🛡 SL    : <code>{$order['sl']}</code>  ({$slSign}{$slGia} giá cố định)\n"
             . "   📊 R:R   : 1:{$rr}";
     }
 

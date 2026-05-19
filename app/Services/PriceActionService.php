@@ -192,6 +192,79 @@ class PriceActionService
     }
 
     /**
+     * Vị trí giá trên context W1 — dùng high/low toàn bộ M15 làm proxy.
+     * Chia range thành 3 vùng (30%/40%/30%).
+     *
+     * @return string 'ĐỈNH CHEN'|'ĐÁY CHEN'|'TRUNG CHIÊNG'|'không rõ'
+     */
+    public function getW1Bias(array $m15Klines, float $currentPrice): string
+    {
+        if (empty($m15Klines)) return 'không rõ';
+
+        $high  = max(array_map(fn($k) => (float) $k[2], $m15Klines));
+        $low   = min(array_map(fn($k) => (float) $k[3], $m15Klines));
+        $range = $high - $low;
+
+        if ($range <= 0 || $currentPrice <= 0) return 'không rõ';
+
+        $pos = ($currentPrice - $low) / $range;
+
+        if ($pos >= 0.70) return sprintf('ĐỈNH CHEN (%.0f%% range, H:%.2f)', $pos * 100, $high);
+        if ($pos <= 0.30) return sprintf('ĐÁY CHEN (%.0f%% range, L:%.2f)', $pos * 100, $low);
+        return sprintf('TRUNG CHIÊNG (%.0f%% range)', $pos * 100);
+    }
+
+    /**
+     * Xu hướng D1 từ 2 nến ngày cuối.
+     *
+     * @return string 'TĂNG MẠNH'|'HỒI PHỤC'|'GIẢM MẠNH'|'ĐIỀU CHỈNH'|'SIDEWAY'|'không rõ'
+     */
+    public function getD1Bias(array $d1Klines): string
+    {
+        $n = count($d1Klines);
+        if ($n < 2) return 'không rõ (cần ≥ 2 nến D1)';
+
+        $last      = $d1Klines[$n - 1];
+        $prev      = $d1Klines[$n - 2];
+        $lastClose = (float) $last[4];
+        $lastOpen  = (float) $last[1];
+        $prevClose = (float) $prev[4];
+        $body      = abs($lastClose - $lastOpen);
+        $range     = (float)$last[2] - (float)$last[3];
+        $bodyRatio = $range > 0 ? $body / $range : 0.0;
+        $isBull    = $lastClose >= $lastOpen;
+        $isStrong  = $bodyRatio >= 0.60;
+
+        if ($isBull  && $isStrong && $lastClose > $prevClose) return 'TĂNG MẠNH (nến thân xanh)';
+        if ($isBull  && $lastClose > $prevClose)               return 'HỒI PHỤC (nến xanh)';
+        if (!$isBull && $isStrong && $lastClose < $prevClose) return 'GIẢM MẠNH (nến thân đỏ)';
+        if (!$isBull && $lastClose < $prevClose)               return 'ĐIỀU CHỈNH (nến đỏ)';
+        return 'SIDEWAY (nến doji/pin)';
+    }
+
+    /**
+     * Nhãn mô tả kênh H4 để hiển thị trong Telegram.
+     */
+    public function getH4Label(array $h4Klines): string
+    {
+        if (count($h4Klines) < 10) return 'không rõ (cần ≥ 10 nến H4)';
+
+        $lookback = min(50, count($h4Klines) - 6);
+        if ($lookback < 2) return 'không rõ';
+
+        $ch = $this->detectUnpredictableChannel($h4Klines, lookback: $lookback);
+
+        return match ($ch['type']) {
+            'ascending'     => "Kênh TĂNG song song (HH={$ch['hh_count']} HL={$ch['hl_count']})",
+            'descending'    => "Kênh GIẢM song song (LH={$ch['lh_count']} LL={$ch['ll_count']})",
+            'triangle'      => 'Tam giác nén ' . round($ch['compression'] * 100) . "% (LH={$ch['lh_count']} HL={$ch['hl_count']})",
+            'triangle_weak' => 'Tam giác yếu ' . round($ch['compression'] * 100) . '% (chưa đủ nén)',
+            'expanding'     => 'EXPANDING — biên mở rộng 2 đầu',
+            default         => 'Sideway / không rõ cấu trúc',
+        };
+    }
+
+    /**
      * ATR Wilder smoothing — dùng cho SL động của bounce setup.
      * Trả về giá trị ATR cuối cùng (float, đơn vị: giá USD/oz).
      */
