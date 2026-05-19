@@ -136,10 +136,27 @@ class MT5DataController extends Controller
             ];
         }
 
+        // Bulk data stats (dùng bởi FelixBulkExporter + backtest:v53)
+        $bulk = [];
+        foreach (['XAUUSDT', 'XAGUSDT'] as $sym) {
+            foreach (['15m', '4h'] as $tf) {
+                $key  = "mt5_bulk_{$sym}_{$tf}";
+                $data = \Cache::get($key, []);
+                if (!empty($data)) {
+                    $bulk["{$sym}_{$tf}"] = [
+                        'bars'  => count($data),
+                        'from'  => date('Y-m-d', intdiv((int)$data[0][0], 1000)),
+                        'to'    => date('Y-m-d', intdiv((int)end($data)[0], 1000)),
+                    ];
+                }
+            }
+        }
+
         return response()->json([
             'status'     => 'ok',
             'server_time'=> now('Asia/Ho_Chi_Minh')->format('Y-m-d H:i:s T'),
             'pairs'      => $result,
+            'bulk'       => $bulk ?: null,
         ]);
     }
 
