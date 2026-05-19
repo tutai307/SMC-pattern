@@ -23,13 +23,9 @@ class SignalFormatterService
     // Buffer: 0.3 giá ($0.30) — tránh fakeout, không quá xa trendline
     private const BUF_GIA = 0.3;
 
-    // Bài 1 — Đánh Phá Vỡ (Triangle): TP/SL cố định theo mục tiêu scalp 3-5 giá
-    private const BREAKOUT_TP_GIA = 4.0;  // TP cố định
-    private const BREAKOUT_SL_GIA = 5.0;  // SL cố định
-
-    // Bài 2 — Đánh Quét Biên: hệ số ATR và biên độ kênh
-    private const BOUNCE_SL_ATR_MULT = 1.5;  // SL = 1.5 × ATR(14)
-    private const BOUNCE_TP_RATIO    = 0.8;  // TP = 80% chiều rộng kênh
+    // TP/SL cố định cho tất cả bài đánh — scalp ngắn 2-3 giá
+    private const TP_GIA = 2.0;   // TP cố định 2 giá = $2/lot × 0.01 = $0.02
+    private const SL_GIA = 3.0;   // SL cố định 3 giá = $3/lot × 0.01 = $0.03
 
     // Risk management
     private const RISK_PCT = 0.02;   // 2% vốn mỗi lệnh
@@ -140,14 +136,13 @@ class SignalFormatterService
         $bufGia     = self::BUF_GIA;
         $channelDir = $channel['direction'] ?? null;
 
+        $slGia = self::SL_GIA;
+        $tpGia = self::TP_GIA;
+        $rr    = round($tpGia / $slGia, 2);
+        $lot   = $this->calculateExnessLot($capital, $slGia);
+
         if ($channelDir === null) {
             // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────
-            // TP/SL cố định — ăn nhanh khi biên nén bùng nổ
-            $slGia = self::BREAKOUT_SL_GIA;
-            $tpGia = self::BREAKOUT_TP_GIA;
-            $rr    = round($tpGia / $slGia, 2);
-            $lot   = $this->calculateExnessLot($capital, $slGia);
-
             $lE = round($channel['upper'] + $bufGia, $dec);  // BUY STOP trên đỉnh kênh
             $sE = round($channel['lower'] - $bufGia, $dec);  // SELL STOP dưới đáy kênh
             $orders = [
@@ -159,24 +154,12 @@ class SignalFormatterService
 
         } else {
             // ── BÀI 2: Đánh Quét Biên (Bounce) ─────────────────
-            // SL bám ATR thị trường, TP bám biên độ kênh
-            $slGia = round(self::BOUNCE_SL_ATR_MULT * $atr, 2);
-            $tpGia = round(($channel['upper'] - $channel['lower']) * self::BOUNCE_TP_RATIO, 2);
-
-            // Lọc R:R: kênh quá hẹp so với volatility → không trade
-            if ($slGia <= 0 || $tpGia < $slGia) return null;
-
-            $rr  = round($tpGia / $slGia, 2);
-            $lot = $this->calculateExnessLot($capital, $slGia);
-
             if ($channelDir === 'SHORT') {
-                // SELL LIMIT: chờ giá hồi lên chạm đường kháng cự trên
                 $entry  = round($channel['upper'] - $bufGia, $dec);
                 $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
                              'tp'  => round($entry - $tpGia, $dec),
                              'sl'  => round($entry + $slGia, $dec)]];
             } else {
-                // BUY LIMIT: chờ giá kéo về chạm đường hỗ trợ dưới
                 $entry  = round($channel['lower'] + $bufGia, $dec);
                 $orders = [['side' => 'BUY_LIMIT', 'entry' => $entry,
                              'tp'  => round($entry + $tpGia, $dec),
