@@ -258,6 +258,29 @@ class MT5DataController extends Controller
     }
 
     // ──────────────────────────────────────────────────────────────
+    // GET /api/mt5/bulk-export  — download bulk klines về local để backtest
+    // ──────────────────────────────────────────────────────────────
+
+    public function bulkExport(Request $request): JsonResponse
+    {
+        if (!$this->verifySecret($request)) {
+            return response()->json(['error' => 'unauthorized'], 401);
+        }
+
+        $sym  = strtoupper($request->query('symbol', 'XAUUSDT'));
+        $tf   = strtolower($request->query('tf', '15m'));
+        $key  = "mt5_bulk_{$sym}_{$tf}";
+        $data = \Cache::get($key, []);
+
+        return response()->json([
+            'symbol' => $sym,
+            'tf'     => $tf,
+            'bars'   => count($data),
+            'klines' => $data,
+        ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────
     // GET /api/mt5/ping-telegram  — kiểm tra Telegram có hoạt động không
     // ──────────────────────────────────────────────────────────────
 

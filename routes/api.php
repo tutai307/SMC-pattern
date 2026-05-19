@@ -10,5 +10,6 @@ Route::prefix('mt5')->group(function () {
     Route::post('tick',         [MT5DataController::class, 'receiveTick']);
     Route::get('status',        [MT5DataController::class, 'status']);
     Route::get('scan',          [MT5DataController::class, 'scanNow']);
+    Route::get('bulk-export',   [MT5DataController::class, 'bulkExport']);
     Route::get('ping-telegram', [MT5DataController::class, 'pingTelegram']);
 });
