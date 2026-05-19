@@ -141,7 +141,19 @@ class ScanSignalsCommand extends Command
         // Trending channels: skip compression check, force AI direction
         if ($channelType === 'descending' || $channelType === 'ascending') {
             $this->line("[{$ts}] [{$symbol}] Kenh {$channelType} | upper={$upper} lower={$lower}");
-            // continue to step 2 (ATR), force direction after AI scoring
+
+            // Nguyên lý quét biên: giá phải chạm sát trendline (sai số ≤ 0.5 giá)
+            // để lệnh LIMIT có thể được fill trong phiên hiện tại
+            if ($channelType === 'descending' && $currentPrice < $upper - 0.5) {
+                $minPrice = round($upper - 0.5, 2);
+                $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm upper={$upper} (cần ≥ {$minPrice}) — skip");
+                return;
+            }
+            if ($channelType === 'ascending' && $currentPrice > $lower + 0.5) {
+                $maxPrice = round($lower + 0.5, 2);
+                $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm lower={$lower} (cần ≤ {$maxPrice}) — skip");
+                return;
+            }
         } else {
             // Triangle: apply compression filter
             $minComp = (float) $this->option('min-compression');
@@ -207,10 +219,10 @@ class ScanSignalsCommand extends Command
 
         $this->telegramService->sendRaw($msg);
 
-        $slPips = $signals['sl_pips'];
-        $tpPips = $signals['tp_pips'];
-        $rr     = $signals['rr'];
-        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpPips}p SL:{$slPips}p R:R=1:{$rr} | dir:{$aiDirection}");
+        $slGia = $signals['sl_gia'];
+        $tpGia = $signals['tp_gia'];
+        $rr    = $signals['rr'];
+        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} | dir:{$aiDirection}");
     }
 
     // ──────────────────────────────────────────────────────────────

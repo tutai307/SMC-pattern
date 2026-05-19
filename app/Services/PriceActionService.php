@@ -89,25 +89,13 @@ class PriceActionService
 
         // ── Kênh giảm: LH + LL (descending parallel channel) ──
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
-            if (count($highs) < 2 || count($lows) < 2)
-                return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-
-            // Slope = vector từ điểm ĐẦU đến điểm CUỐI của chuỗi LH/LL
-            // Dùng đầu chuỗi thay vì chỉ 2 điểm cuối để đường thẳng ổn định hơn khi có nhiều swings
-            $firstLH = $highs[count($highs) - 1 - $lhCount]; // điểm LH cũ nhất trong chuỗi
-            $lastLH  = end($highs);                            // điểm LH mới nhất
-            $firstLL = $lows[count($lows)  - 1 - $llCount];
-            $lastLL  = end($lows);
-
-            $uSlope = $lastLH['idx'] > $firstLH['idx']
-                ? ($lastLH['price'] - $firstLH['price']) / ($lastLH['idx'] - $firstLH['idx'])
-                : 0.0;
-            $dSlope = $lastLL['idx'] > $firstLL['idx']
-                ? ($lastLL['price'] - $firstLL['price']) / ($lastLL['idx'] - $firstLL['idx'])
-                : 0.0;
-
-            $projU = round($lastLH['price'] + $uSlope * ($currentIdx - $lastLH['idx']), 2);
-            $projL = round($lastLL['price'] + $dSlope * ($currentIdx - $lastLL['idx']), 2);
+            // OLS regression trên toàn chuỗi LH và LL — mỗi swing đều đóng góp vào slope,
+            // tránh bị lệch bởi một râu nến đơn lẻ khi chỉ dùng 2 điểm đầu/cuối.
+            // lhChain: $lhCount+1 điểm liên tiếp cuối mảng highs tạo thành chuỗi LH
+            $lhChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
+            $llChain = array_slice($lows,  count($lows)  - 1 - $llCount, $llCount + 1);
+            $projU   = $this->linearRegression($lhChain, $currentIdx);
+            $projL   = $this->linearRegression($llChain, $currentIdx);
 
             if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
             $w = $projU - $projL;
@@ -120,23 +108,10 @@ class PriceActionService
 
         // ── Kênh tăng: HH + HL (ascending parallel channel) ──
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
-            if (count($highs) < 2 || count($lows) < 2)
-                return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-
-            $firstHH = $highs[count($highs) - 1 - $hhCount];
-            $lastHH  = end($highs);
-            $firstHL = $lows[count($lows)  - 1 - $hlCount];
-            $lastHL  = end($lows);
-
-            $uSlope = $lastHH['idx'] > $firstHH['idx']
-                ? ($lastHH['price'] - $firstHH['price']) / ($lastHH['idx'] - $firstHH['idx'])
-                : 0.0;
-            $dSlope = $lastHL['idx'] > $firstHL['idx']
-                ? ($lastHL['price'] - $firstHL['price']) / ($lastHL['idx'] - $firstHL['idx'])
-                : 0.0;
-
-            $projU = round($lastHH['price'] + $uSlope * ($currentIdx - $lastHH['idx']), 2);
-            $projL = round($lastHL['price'] + $dSlope * ($currentIdx - $lastHL['idx']), 2);
+            $hhChain = array_slice($highs, count($highs) - 1 - $hhCount, $hhCount + 1);
+            $hlChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
+            $projU   = $this->linearRegression($hhChain, $currentIdx);
+            $projL   = $this->linearRegression($hlChain, $currentIdx);
 
             if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
             $w = $projU - $projL;
@@ -373,6 +348,50 @@ PROMPT;
             if ($isLow)  $lows[]  = ['idx' => $i, 'price' => $l, 'time' => $candles[$i]['time']];
         }
         return ['highs' => $highs, 'lows' => $lows];
+    }
+
+    /**
+     * Hồi quy tuyến tính OLS (Ordinary Least Squares) trên tập swing points.
+     *
+     * Phương trình đường thẳng: y = m·x + b
+     *   m = [n·Σ(xᵢ·yᵢ) - Σxᵢ·Σyᵢ] / [n·Σ(xᵢ²) - (Σxᵢ)²]
+     *   b = (Σyᵢ - m·Σxᵢ) / n
+     *
+     * Mỗi swing point đóng góp đều vào slope → ổn định hơn so với vector 2 điểm đầu/cuối
+     * khi tập dữ liệu có nhiễu (râu nến, spike giá đơn lẻ).
+     *
+     * @param  array $points  [['idx' => int, 'price' => float], ...]  đã sắp xếp theo thời gian
+     * @param  int   $atIdx   Bar index cần chiếu giá trị (thường = bar hiện tại)
+     * @return float          Giá trị đường xu hướng tại $atIdx (đơn vị: giá vàng USD/oz)
+     */
+    private function linearRegression(array $points, int $atIdx): float
+    {
+        $n = count($points);
+
+        if ($n === 1) {
+            return round($points[0]['price'], 2);
+        }
+
+        $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumX2 = 0.0;
+        foreach ($points as $p) {
+            $x     = (float) $p['idx'];
+            $y     = (float) $p['price'];
+            $sumX  += $x;
+            $sumY  += $y;
+            $sumXY += $x * $y;
+            $sumX2 += $x * $x;
+        }
+
+        // Mẫu số = 0 khi tất cả points cùng bar index (không thể xảy ra trong thực tế)
+        $denom = $n * $sumX2 - $sumX * $sumX;
+        if (abs($denom) < 1e-10) {
+            return round($sumY / $n, 2);
+        }
+
+        $slope     = ($n * $sumXY - $sumX * $sumY) / $denom;
+        $intercept = ($sumY - $slope * $sumX) / $n;
+
+        return round($slope * $atIdx + $intercept, 2);
     }
 
     private function flatten(mixed $value): string
