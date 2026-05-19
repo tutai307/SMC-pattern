@@ -3,69 +3,138 @@
 namespace App\Services;
 
 /**
- * v5.1 — Tính toán thông số lệnh + format Telegram message.
+ * v5.2 — Signal Generator + Formatter cho XAUUSD (Vàng).
  *
  * ĐƠN VỊ CHUẨN XAUUSD (đồng bộ biểu đồ MT5):
- *   1 Giá = $1.00 di chuyển (vd: 2400 → 2401)
- *   1 Pip  = 0.1 Giá = $0.10
- *   1 Lot Exness XAUUSD = 100 oz → mỗi 1 Giá × 1 Lot = $100 rủi ro
- *   Tất cả biến khoảng cách trong code đều tính bằng đơn vị "Giá" (không dùng Pip)
+ *   1 Giá  = $1.00 di chuyển (vd: 4400.00 → 4401.00)
+ *   1 Pip  = 0.1 Giá = $0.10  (không dùng trong code, chỉ để tham chiếu)
+ *   1 Lot Exness XAUUSD = 100 oz → 1 Giá × 1 Lot = $100 P&L
+ *   Tất cả biến khoảng cách đều tính bằng "Giá" (USD/oz) — không dùng Pip
  *
- * Chiến thuật:
- *   Triangle breakout:    BUY STOP  (upper + 0.3 giá) | SELL STOP  (lower - 0.3 giá)
- *   Descending (bounce):  SELL LIMIT (upper - 0.3 giá) — chặn đầu tại biên trên kênh giảm
- *   Ascending  (bounce):  BUY LIMIT  (lower + 0.3 giá) — chặn đầu tại biên dưới kênh tăng
+ * Chiến thuật sinh lệnh:
+ *   Triangle breakout: BUY STOP  (upper + 0.3 giá) | SELL STOP  (lower − 0.3 giá)
+ *   Descending bounce: SELL LIMIT (upper − 0.3 giá) — chặn đầu khi giá chạm biên trên
+ *   Ascending bounce:  BUY LIMIT  (lower + 0.3 giá) — chặn đầu khi giá chạm biên dưới
  *
- * R:R động:
- *   SL = 1.5 × ATR(14) theo giá     — bám theo market noise thực tế M15
- *   TP = channel_width × 0.8 theo giá — chiến thuật "cướp tàu", ăn 80% biên độ kênh
- *   Filter: R:R < 1:1 → trả về null (kênh quá hẹp so với volatility, không bõ rủi ro)
- *
- * Quản lý vốn Fixed Fractional 2%:
- *   Lot = (Capital × 2%) / (SL_giá × $100/lot)
- *   Clamp: Lot_min = 0.01
+ * 3 lớp bảo vệ cứng trong generateSafeSignal():
+ *   1. R:R filter:     TP < SL → null
+ *   2. Lot hard stop:  Raw lot < 0.01 → RuntimeException (vốn không đủ)
+ *   3. Order validate: Entry vs CurrentPrice sai loại lệnh → auto-correct hoặc null
  */
 class SignalFormatterService
 {
-    // Buffer: 0.3 giá ($0.30) — đủ để tránh fakeout, không quá xa so với trendline
-    private const BUF_GIA = 0.3;
+    // Buffer: 0.3 giá ($0.30) — đủ tránh fakeout, không quá xa trendline
+    private const BUF_GIA  = 0.3;
+    // Tỷ lệ rủi ro mỗi lệnh: 2% vốn
+    private const RISK_PCT = 0.02;
+    // Tỷ lệ TP trên biên độ kênh
+    private const TP_RATIO = 0.8;
+    // Hệ số SL theo ATR
+    private const SL_ATR_MULT = 1.5;
+    // Lot tối thiểu sàn Exness
+    private const MIN_LOT = 0.01;
+
+    // ──────────────────────────────────────────────────────────────
+    // PUBLIC: ENTRY POINT DUY NHẤT NÊN DÙNG TỪ COMMAND
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Generator tín hiệu an toàn — 3 lớp kiểm tra cứng.
+     *
+     * Sử dụng hàm này thay vì buildSignals() để đảm bảo:
+     *   - Lệnh không vi phạm quy tắc Entry vs CurrentPrice
+     *   - Tài khoản đủ vốn để gánh SL (không ép vào 0.01 lot khi vốn quá nhỏ)
+     *
+     * @param array $marketData {
+     *   symbol:        string,
+     *   current_price: float,   Giá bid hiện tại (USD/oz)
+     *   channel:       array,   Kết quả detectUnpredictableChannel()
+     *   atr:           float,   Kết quả calculateATR(14)
+     * }
+     * @param float $accountCapital  Vốn tài khoản USD
+     * @return array|null            null = không có setup hợp lệ (không phát alert)
+     * @throws \RuntimeException     Khi vốn không đủ để gánh SL tối thiểu 0.01 lot
+     */
+    public function generateSafeSignal(array $marketData, float $accountCapital): ?array
+    {
+        $currentPrice = (float) ($marketData['current_price'] ?? 0);
+        $channel      = $marketData['channel'];
+        $atr          = (float) ($marketData['atr'] ?? 0);
+        $symbol       = (string) ($marketData['symbol'] ?? 'XAUUSD');
+
+        // ── Layer 1: Build signals (tích hợp R:R filter) ─────────
+        $signals = $this->buildSignals($symbol, $channel, $accountCapital, $atr);
+        if ($signals === null) {
+            return null; // TP < SL: kênh quá hẹp so với ATR
+        }
+
+        // ── Layer 2: Lot Hard Stop ────────────────────────────────
+        // Tính RAW lot (chưa clamp) để detect vốn quá nhỏ
+        // Không dùng $signals['lot'] vì đó đã bị max(0.01,...) trong buildSignals
+        $slGia  = $signals['sl_gia'];
+        $rawLot = ($accountCapital > 0 && $slGia > 0)
+            ? ($accountCapital * self::RISK_PCT) / ($slGia * 100.0)
+            : 0.0;
+
+        if ($rawLot < self::MIN_LOT) {
+            // Vốn tối thiểu: ngược lại công thức lot, rủi ro 2%, lot = 0.01
+            $minCapital = (int) ceil(self::MIN_LOT * $slGia * 100.0 / self::RISK_PCT);
+            throw new \RuntimeException(
+                "Tài khoản \${$accountCapital} không đủ vốn cho Setup này. "
+                . "SL = {$slGia} giá → Lot tính được = " . round($rawLot, 5) . " (< 0.01 tối thiểu). "
+                . "Cần ít nhất \${$minCapital} vốn để vào 0.01 lot với rủi ro " . (self::RISK_PCT * 100) . "%."
+            );
+        }
+
+        // ── Layer 3: Validate + auto-correct loại lệnh ───────────
+        $validOrders = [];
+        foreach ($signals['orders'] as $order) {
+            $validated = $this->validateAndCorrectOrder($order, $currentPrice);
+            if ($validated !== null) {
+                $validOrders[] = $validated;
+            } else {
+                \Log::warning(
+                    "Signal rejected: {$order['side']}@{$order['entry']} "
+                    . "— entry vs currentPrice={$currentPrice} mâu thuẫn, không auto-correct được."
+                );
+            }
+        }
+
+        if (empty($validOrders)) {
+            return null; // Mọi lệnh đều sai logic entry vs price
+        }
+
+        return array_merge($signals, ['orders' => $validOrders]);
+    }
 
     // ──────────────────────────────────────────────────────────────
     // LOT SIZING — Fixed Fractional 2%
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Tính Lot Size theo Fixed Fractional — rủi ro $riskPct% vốn mỗi lệnh.
+     * Tính Lot Size theo Fixed Fractional với clamp về 0.01.
      *
-     * Exness XAUUSD chuẩn quốc tế:
-     *   1 Lot × 1 Giá ($1 price move) × 100 oz/lot = $100 P&L
-     *   → Lot = (Capital × %Risk) / (SL_giá × $100)
+     * Dùng trong buildSignals() cho mục đích hiển thị.
+     * Để check vốn có đủ không → dùng raw lot trong generateSafeSignal().
      *
-     * @param float $slGia    SL tính bằng Giá (đơn vị USD/oz), vd: 4.5 giá
-     * @param float $riskPct  Tỷ lệ rủi ro (mặc định 2%)
+     * Exness XAUUSD: 1 Lot × 1 Giá ($1) × 100 oz = $100 P&L
+     * → Lot = (Capital × %Risk) / (SL_giá × $100)
      */
     public function calculateExnessLot(float $capital, float $slGia, float $riskPct = 0.02): float
     {
-        if ($capital <= 0 || $slGia <= 0) return 0.01;
-        // $100/lot/giá là pip_value chuẩn Exness XAUUSD (1 lot = 100 oz, 1 giá = $1)
-        return max(0.01, round(($capital * $riskPct) / ($slGia * 100.0), 2));
+        if ($capital <= 0 || $slGia <= 0) return self::MIN_LOT;
+        return max(self::MIN_LOT, round(($capital * $riskPct) / ($slGia * 100.0), 2));
     }
 
     // ──────────────────────────────────────────────────────────────
-    // SIGNAL BUILDER
+    // SIGNAL BUILDER (internal — gọi qua generateSafeSignal())
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Xây dựng tham số lệnh từ channel data + ATR.
+     * Xây dựng tham số lệnh từ channel + ATR.
+     * Không validate entry vs currentPrice — đó là việc của generateSafeSignal().
      *
-     * Triangle:          BUY STOP  (upper + 0.3 giá) + SELL STOP  (lower - 0.3 giá)
-     * Descending (SHORT): SELL LIMIT (upper - 0.3 giá) — Bounce bán tại đường trendline giảm
-     * Ascending  (LONG):  BUY LIMIT  (lower + 0.3 giá) — Bounce mua tại đường trendline tăng
-     *
-     * SL = 1.5 × ATR(14) [giá]  |  TP = channel_width × 0.8 [giá]
-     * Trả về null nếu TP < SL (R:R < 1:1) → kênh không đủ biên độ.
-     *
-     * @return array{orders: array, sl_gia: float, tp_gia: float, rr: float, lot: float}|null
+     * @return array{orders, sl_gia, tp_gia, rr, lot}|null  null nếu R:R < 1:1
      */
     public function buildSignals(
         string $symbol,
@@ -76,13 +145,12 @@ class SignalFormatterService
         $dec    = 2;
         $bufGia = self::BUF_GIA;  // 0.3 giá buffer
 
-        // ── Dynamic SL / TP (đơn vị: Giá USD/oz) ────────────────
-        // SL: 1.5 × ATR(14) — đủ xa market noise của khung M15
-        $slGia = round(1.5 * $atr, 2);
-        // TP: 80% chiều rộng kênh — không ăn trọn sóng, tránh reversal cuối kênh
-        $tpGia = round(($channel['upper'] - $channel['lower']) * 0.8, 2);
+        // SL: 1.5 × ATR(14) — theo market noise thực tế
+        $slGia = round(self::SL_ATR_MULT * $atr, 2);
+        // TP: 80% chiều rộng kênh — không ăn trọn sóng
+        $tpGia = round(($channel['upper'] - $channel['lower']) * self::TP_RATIO, 2);
 
-        // Filter R:R: kênh quá hẹp so với ATR → setup không bõ rủi ro
+        // R:R filter: kênh quá hẹp so với volatility
         if ($slGia <= 0 || $tpGia < $slGia) return null;
 
         $rr  = round($tpGia / $slGia, 2);
@@ -91,22 +159,19 @@ class SignalFormatterService
         $channelDir = $channel['direction'] ?? null;
 
         if ($channelDir === 'SHORT') {
-            // Bounce bán: SELL LIMIT ngay sát biên trên trendline giảm
-            // Giá phải chạm upper_now thì lệnh mới được fill → đặt trừ 0.3 giá để vào sớm
             $entry  = round($channel['upper'] - $bufGia, $dec);
             $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
                          'tp'  => round($entry - $tpGia, $dec),
                          'sl'  => round($entry + $slGia, $dec)]];
 
         } elseif ($channelDir === 'LONG') {
-            // Bounce mua: BUY LIMIT ngay sát biên dưới trendline tăng
             $entry  = round($channel['lower'] + $bufGia, $dec);
             $orders = [['side' => 'BUY_LIMIT',  'entry' => $entry,
                          'tp'  => round($entry + $tpGia, $dec),
                          'sl'  => round($entry - $slGia, $dec)]];
 
         } else {
-            // Triangle breakout: 2 lệnh STOP chờ giá phá vỡ biên
+            // Triangle: 2 lệnh STOP chờ breakout
             $lE = round($channel['upper'] + $bufGia, $dec);
             $sE = round($channel['lower'] - $bufGia, $dec);
             $orders = [
@@ -122,6 +187,62 @@ class SignalFormatterService
             'rr'     => $rr,
             'lot'    => $lot,
         ];
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // PRIVATE: ORDER TYPE VALIDATOR
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Validate loại lệnh vs giá hiện tại — quy tắc cứng sàn Exness/MT5:
+     *
+     *   BUY STOP:   Entry > CurrentPrice  ✓  (đặt chờ breakout lên)
+     *   SELL STOP:  Entry < CurrentPrice  ✓  (đặt chờ breakdown xuống)
+     *   BUY LIMIT:  Entry < CurrentPrice  ✓  (đặt chờ giá kéo về)
+     *   SELL LIMIT: Entry > CurrentPrice  ✓  (đặt chờ giá hồi phục)
+     *
+     * Nếu vi phạm → auto-correct sang loại lệnh đối lập (cùng hướng BUY/SELL).
+     * Ví dụ: BUY STOP với entry < price → đổi thành BUY LIMIT (logic vẫn đúng: mua).
+     *
+     * Trả về null nếu side không xác định (lỗi logic nghiêm trọng).
+     */
+    private function validateAndCorrectOrder(array $order, float $currentPrice): ?array
+    {
+        // entry phải CAO HƠN currentPrice để loại lệnh này hợp lệ
+        $entryMustBeAbove = [
+            'BUY_STOP'   => true,   // chờ price tăng lên chạm entry → mua
+            'SELL_LIMIT' => true,   // chờ price tăng lên chạm entry → bán
+            'BUY_LIMIT'  => false,  // chờ price giảm xuống chạm entry → mua
+            'SELL_STOP'  => false,  // chờ price giảm xuống chạm entry → bán
+        ];
+
+        // Khi entry vs price bị ngược: đổi cơ chế STOP ↔ LIMIT, giữ hướng BUY/SELL
+        $counterpart = [
+            'BUY_STOP'   => 'BUY_LIMIT',
+            'BUY_LIMIT'  => 'BUY_STOP',
+            'SELL_STOP'  => 'SELL_LIMIT',
+            'SELL_LIMIT' => 'SELL_STOP',
+        ];
+
+        $side  = $order['side'];
+        $entry = $order['entry'];
+
+        if (!isset($entryMustBeAbove[$side])) return null;
+
+        $mustBeAbove  = $entryMustBeAbove[$side];
+        $entryIsAbove = $entry > $currentPrice;
+
+        if ($mustBeAbove === $entryIsAbove) {
+            return $order; // ✓ Logic đúng — giữ nguyên
+        }
+
+        // ✗ Logic sai → auto-correct sang counterpart
+        $correctedSide = $counterpart[$side] ?? null;
+        if ($correctedSide === null) return null;
+
+        \Log::info("OrderType auto-corrected: {$side}@{$entry} → {$correctedSide} (currentPrice={$currentPrice})");
+
+        return array_merge($order, ['side' => $correctedSide, 'auto_corrected' => true]);
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -165,7 +286,6 @@ class SignalFormatterService
         $tpGia = $signals['tp_gia'];
         $slUsd = round($lot * $slGia * 100.0, 2);  // P&L = lot × giá × $100/lot/giá
 
-        // Header + channel description by type
         if ($channelType === 'descending') {
             $header       = "📉 <b>VÀNG BOUNCE SELL</b>";
             $channelLabel = "📉 Kênh GIẢM Song Song";
@@ -180,7 +300,7 @@ class SignalFormatterService
             $channelLabel = "🗜 Kênh NÉN <b>{$compression}%</b>  ({$lhCount} LH · {$hlCount} HL)";
         }
 
-        // Với Triangle: lọc theo AI direction để chỉ show lệnh phù hợp
+        // Triangle: lọc lệnh theo AI direction
         $orders = $signals['orders'];
         if (($channel['direction'] ?? null) === null) {
             if ($breakoutDirection === 'LONG') {
@@ -192,7 +312,8 @@ class SignalFormatterService
 
         $ordersSection = '';
         foreach ($orders as $order) {
-            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia) . "\n";
+            $correctedNote  = ($order['auto_corrected'] ?? false) ? ' <i>(tự điều chỉnh)</i>' : '';
+            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia) . $correctedNote . "\n";
         }
 
         $dirLabel = match ($breakoutDirection) {
@@ -217,24 +338,21 @@ class SignalFormatterService
     }
 
     /**
-     * Format 1 order block trong tin nhắn Telegram.
-     *
-     * @param float $tpGia  Khoảng cách TP tính bằng Giá (USD/oz)
-     * @param float $slGia  Khoảng cách SL tính bằng Giá (USD/oz)
+     * Format 1 order block — hiển thị khoảng cách bằng đơn vị Giá (không dùng Pips).
      */
     private function formatOrderBlock(array $order, float $tpGia, float $slGia): string
     {
         $isSell = str_starts_with($order['side'], 'SELL');
         $emoji  = $isSell ? '⬇' : '⬆';
-        $label  = str_replace('_', ' ', $order['side']);  // "SELL LIMIT", "BUY STOP", ...
+        $label  = str_replace('_', ' ', $order['side']);
         $tpSign = $isSell ? '-' : '+';
         $slSign = $isSell ? '+' : '-';
         $rr     = round($tpGia / $slGia, 2);
 
         return "{$emoji} <b>{$label}</b>\n"
             . "   📌 Entry : <code>{$order['entry']}</code>\n"
-            . "   🎯 TP    : <code>{$order['tp']}</code>  ({$tpSign}{$tpGia} giá)\n"
-            . "   🛡 SL    : <code>{$order['sl']}</code>  ({$slSign}{$slGia} giá)\n"
+            . "   🎯 TP    : <code>{$order['tp']}</code>  ({$tpSign}{$tpGia} Giá)\n"
+            . "   🛡 SL    : <code>{$order['sl']}</code>  ({$slSign}{$slGia} Giá)\n"
             . "   📊 R:R   : 1:{$rr}";
     }
 
@@ -243,12 +361,12 @@ class SignalFormatterService
      */
     public function formatDailyTargetMessage(
         string $symbol,
-        float  $pipsWon,
-        float  $targetPips
+        float  $gainGia,
+        float  $targetGia
     ): string {
         return "🏆 <b>ĐẠT MỤC TIÊU NGÀY — {$symbol}</b>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "Tổng giá hôm nay: <b>{$pipsWon}</b> / mục tiêu <b>{$targetPips}</b>\n\n"
+            . "Tổng Giá hôm nay: <b>{$gainGia}</b> / mục tiêu <b>{$targetGia}</b>\n\n"
             . "✅ Felix đã khóa scan — <i>Nghỉ ngơi, đừng tham!</i>\n"
             . "🔄 Quét lại lúc đầu phiên ngày mai.";
     }

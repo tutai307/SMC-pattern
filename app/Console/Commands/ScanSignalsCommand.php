@@ -204,11 +204,22 @@ class ScanSignalsCommand extends Command
         }
         Cache::put($dedupKey, true, now()->addHours(2));
 
-        // ── 5. Build tham số lệnh (dynamic SL/TP) ──
-        $signals = $this->signalFormatter->buildSignals($symbol, $channel, $capital, $atr);
+        // ── 5. Generate safe signal — 3 lớp bảo vệ cứng ──
+        try {
+            $signals = $this->signalFormatter->generateSafeSignal([
+                'symbol'        => $symbol,
+                'current_price' => $currentPrice,
+                'channel'       => $channel,
+                'atr'           => $atr,
+            ], $capital);
+        } catch (\RuntimeException $e) {
+            // Vốn không đủ để gánh SL — log và skip, không phát alert
+            $this->warn("[{$ts}] [{$symbol}] ❌ Vốn không đủ: " . $e->getMessage());
+            return;
+        }
 
         if ($signals === null) {
-            $this->line("[{$ts}] [{$symbol}] R:R < 1:1 (TP < SL dựa ATR) — skip");
+            $this->line("[{$ts}] [{$symbol}] Setup bị hủy — R:R < 1:1 hoặc lệnh mâu thuẫn entry/price");
             return;
         }
 
@@ -222,7 +233,8 @@ class ScanSignalsCommand extends Command
         $slGia = $signals['sl_gia'];
         $tpGia = $signals['tp_gia'];
         $rr    = $signals['rr'];
-        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} | dir:{$aiDirection}");
+        $lot   = $signals['lot'];
+        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} Lot:{$lot} | dir:{$aiDirection}");
     }
 
     // ──────────────────────────────────────────────────────────────
