@@ -112,14 +112,50 @@ class PriceActionService
             return array_merge($empty, $counts, ['type' => 'expanding']);
         }
 
-        // ── Ưu tiên 2: Descending — tạm disabled v5.4 (backtest WR 13%)
+        // ── Ưu tiên 2: Descending — v5.5 RE-ENABLED (sweep-catch SELL LIMIT)
+        // LH (đỉnh thấp dần) + LL (đáy thấp dần) → kênh giảm song song
+        // Bài: chờ whale chọc râu vượt đỉnh kênh rồi cắn SELL LIMIT để đón đầu pullback
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
-            return array_merge($empty, $counts, ['type' => 'descending']);
+            $upperChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
+            $lowerChain = array_slice($lows,  count($lows)  - 1 - $llCount, $llCount + 1);
+            $projU = $this->linearRegression($upperChain, $currentIdx);
+            $projL = $this->linearRegression($lowerChain, $currentIdx);
+
+            if ($projU <= $projL || !$this->isChannelWideEnough($projU, $projL)) {
+                return array_merge($empty, $counts, ['type' => 'descending']);
+            }
+
+            return array_merge($counts, [
+                'is_channel'  => true,
+                'upper'       => $projU,
+                'lower'       => $projL,
+                'compression' => 0.0,
+                'type'        => 'descending',
+                'direction'   => 'SHORT',
+            ]);
         }
 
-        // ── Ưu tiên 3: Ascending — tạm disabled v5.4 (backtest WR 25%)
+        // ── Ưu tiên 3: Ascending — v5.5 RE-ENABLED (sweep-catch BUY LIMIT)
+        // HH (đỉnh cao dần) + HL (đáy cao dần) → kênh tăng song song
+        // Bài: chờ whale chọc râu thủng đáy kênh rồi cắn BUY LIMIT để đón đầu bounce
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
-            return array_merge($empty, $counts, ['type' => 'ascending']);
+            $upperChain = array_slice($highs, count($highs) - 1 - $hhCount, $hhCount + 1);
+            $lowerChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
+            $projU = $this->linearRegression($upperChain, $currentIdx);
+            $projL = $this->linearRegression($lowerChain, $currentIdx);
+
+            if ($projU <= $projL || !$this->isChannelWideEnough($projU, $projL)) {
+                return array_merge($empty, $counts, ['type' => 'ascending']);
+            }
+
+            return array_merge($counts, [
+                'is_channel'  => true,
+                'upper'       => $projU,
+                'lower'       => $projL,
+                'compression' => 0.0,
+                'type'        => 'ascending',
+                'direction'   => 'LONG',
+            ]);
         }
 
         // ── Ưu tiên 4: Tam Giác Nén ── BUY STOP + SELL STOP (Kênh cháy loại 2 hợp lệ)

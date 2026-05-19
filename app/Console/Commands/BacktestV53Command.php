@@ -26,8 +26,8 @@ class BacktestV53Command extends Command
 {
     protected $signature = 'backtest:v53
         {--symbol=XAUUSDT     : Symbol (phải khớp với key mt5_bulk_*)}
-        {--from=2026-05-01    : Ngày bắt đầu (dùng khi --seed)}
-        {--to=2026-05-19      : Ngày kết thúc (dùng khi --seed)}
+        {--from=              : Lọc window đặt lệnh từ ngày (YYYY-MM-DD, HCM TZ)}
+        {--to=                : Lọc window đặt lệnh đến ngày (YYYY-MM-DD, HCM TZ)}
         {--seed               : Tự fetch data từ Binance Futures nếu cache trống}
         {--capital=100        : Vốn USD — dùng để tính lot 2% cố định}
         {--expiry-bars=16     : Hủy lệnh pending sau N nến M15 không khớp}
@@ -175,6 +175,10 @@ class BacktestV53Command extends Command
             // ── B. Skip non-scan bars ──────────────────────────────
             if ($i % $scanEvery !== 0) continue;
 
+            // ── B2. Time filter — phiên Âu+Mỹ 14h-23h HCM (7h-16h UTC) ──
+            $barHourUtc = (int) gmdate('H', intdiv($barTs, 1000));
+            if ($barHourUtc < 7 || $barHourUtc >= 16) continue;
+
             // ── C. Channel detection ───────────────────────────────
             // detectUnpredictableChannel cần count >= lookback+6
             $winSize = $lookback + 6;
@@ -205,9 +209,9 @@ class BacktestV53Command extends Command
                 continue;
             }
 
-            // ── F. Proximity check (bounce channels) ──────────────
-            if ($channelType === 'descending' && $barClose < $channel['upper'] - 0.5) continue;
-            if ($channelType === 'ascending'  && $barClose > $channel['lower'] + 0.5) continue;
+            // ── F. Proximity check — giá phải sát biên kênh ≤ 2.0 giá
+            if ($channelType === 'descending' && $barClose < $channel['upper'] - 2.0) continue;
+            if ($channelType === 'ascending'  && $barClose > $channel['lower'] + 2.0) continue;
 
             // ── G. ATR + build signals ─────────────────────────────
             $atr     = $pa->calculateATR($window, 14);
@@ -219,7 +223,7 @@ class BacktestV53Command extends Command
             if ($reportTo   && $barTs > $reportTo)   continue;
 
             // ── H2. Dedup ──────────────────────────────────────────
-            $fp = round($channel['upper'], 0) . '_' . round($channel['lower'], 0);
+            $fp = $channelType . '_' . round($channel['upper'], 0) . '_' . round($channel['lower'], 0);
             if (isset($channelDedup[$fp]) && $i - $channelDedup[$fp] < $dedupBars) continue;
             $channelDedup[$fp] = $i;
 

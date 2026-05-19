@@ -114,6 +114,13 @@ class ScanSignalsCommand extends Command
         $ts      = now()->format('H:i:s');
         $capital = (float) $this->option('capital');
 
+        // ── 0. Time filter — phiên Âu+Mỹ 14h-23h HCM ────────────
+        $hhmmHCM = (int) now('Asia/Ho_Chi_Minh')->format('Hi'); // 1430 = 14:30
+        if ($hhmmHCM < 1400 || $hhmmHCM >= 2300) {
+            $this->line("[{$ts}] [{$symbol}] Ngoài phiên Âu+Mỹ (14h-23h HCM) — skip");
+            return;
+        }
+
         // ── 1. Kiểm tra data từ MT5 EA ────────────────────────────
         if (!$this->marketData->hasData($symbol, $timeframe)) {
             $this->warn("[{$ts}] [{$symbol}] Chưa có data từ EA — chờ EA push");
@@ -163,12 +170,6 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        // v5.4: Bounce channels tạm vô hiệu hóa — chỉ trade Triangle
-        if (in_array($channelType, ['ascending', 'descending'])) {
-            $this->line("[{$ts}] [{$symbol}] Kênh {$channelType} (disabled v5.4) — LH={$lh} HL={$hl} HH={$hh} LL={$ll}");
-            return;
-        }
-
         $upper = $channel['upper'];
         $lower = $channel['lower'];
         $this->line("[{$ts}] [{$symbol}] Kênh {$channelType} | upper={$upper} lower={$lower} | LH={$lh} HL={$hl} HH={$hh} LL={$ll}");
@@ -181,17 +182,15 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        // ── 5. Proximity check (Bounce channels) ─────────────────
-        // SELL LIMIT chỉ kích hoạt khi giá đang sát biên trên (± 0.5 giá)
-        // BUY LIMIT chỉ kích hoạt khi giá đang sát biên dưới (± 0.5 giá)
-        if ($channelType === 'descending' && $currentPrice < $upper - 0.5) {
-            $minPx = round($upper - 0.5, 2);
-            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm upper={$upper} (cần ≥ {$minPx}) — chờ quét biên");
+        // ── 5. Proximity check — chỉ alert khi giá sát biên cần sweep (≤ 2.0 giá)
+        // SELL LIMIT tại upper+1.0 → cần price đang ≥ upper-2.0 (sắp chọc râu)
+        // BUY LIMIT tại lower-1.0  → cần price đang ≤ lower+2.0 (sắp chọc râu)
+        if ($channelType === 'descending' && $currentPrice < $upper - 2.0) {
+            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} còn cách upper={$upper} quá xa — chờ tiếp cận");
             return;
         }
-        if ($channelType === 'ascending' && $currentPrice > $lower + 0.5) {
-            $maxPx = round($lower + 0.5, 2);
-            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm lower={$lower} (cần ≤ {$maxPx}) — chờ quét biên");
+        if ($channelType === 'ascending' && $currentPrice > $lower + 2.0) {
+            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} còn cách lower={$lower} quá xa — chờ tiếp cận");
             return;
         }
 
@@ -200,7 +199,7 @@ class ScanSignalsCommand extends Command
         $this->line("[{$ts}] [{$symbol}] ATR(14) = {$atr} giá");
 
         // ── 7. Dedup — cùng kênh chỉ báo 1 lần/8 giờ ─────────────
-        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_" . round($upper, 0) . '_' . round($lower, 0);
+        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_{$channelType}_" . round($upper, 0) . '_' . round($lower, 0);
         if (Cache::has($dedupKey)) {
             $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 8h)");
             return;

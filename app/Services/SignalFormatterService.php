@@ -24,7 +24,10 @@ class SignalFormatterService
     private const BUF_GIA  = 1.0;
 
     // SL cố định — 2.0 giá từ điểm entry (bảo vệ tài khoản Cent)
-    private const SL_GIA   = 2.0;
+    private const SL_GIA        = 2.0;
+
+    // TP bounce (sweep-catch LIMIT) — đớp nhanh rút gọn theo thầy Quyết
+    private const TP_BOUNCE_GIA = 1.5;
 
     // Risk management
     private const RISK_PCT = 0.02;   // 2% vốn mỗi lệnh
@@ -133,15 +136,17 @@ class SignalFormatterService
         float  $atr
     ): ?array {
         $dec        = 2;
-        $bufGia     = self::BUF_GIA;        // 1.0 giá — anti-fakeout
-        $slGia      = self::SL_GIA;         // 2.0 giá cố định
-        $tpGia      = $this->calcTpGia($atr);
-        $rr         = round($tpGia / $slGia, 2);
-        $lot        = $this->calculateExnessLot($capital, $slGia);
+        $bufGia     = self::BUF_GIA;         // 1.0 giá — anti-fakeout / sweep depth
+        $slGia      = self::SL_GIA;          // 2.0 giá cố định
         $channelDir = $channel['direction'] ?? null;
 
         if ($channelDir === null) {
             // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────────
+            // BUY/SELL STOP — ép thị trường phải phá breakout thật
+            $tpGia  = $this->calcTpGia($atr);  // ATR-tiered: 1/2/3 giá
+            $rr     = round($tpGia / $slGia, 2);
+            $lot    = $this->calculateExnessLot($capital, $slGia);
+
             $lE = round($channel['upper'] + $bufGia, $dec);
             $sE = round($channel['lower'] - $bufGia, $dec);
             $orders = [
@@ -150,29 +155,46 @@ class SignalFormatterService
                 ['side' => 'SELL_STOP', 'entry' => $sE,
                  'tp'   => round($sE - $tpGia, $dec), 'sl' => round($sE + $slGia, $dec)],
             ];
-        } else {
-            // ── BÀI 2: Đánh Quét Biên (Bounce) — DISABLED v5.4 ─────
-            if ($channelDir === 'SHORT') {
-                $entry  = round($channel['upper'] - $bufGia, $dec);
-                $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
-                             'tp'  => round($entry - $tpGia, $dec),
-                             'sl'  => round($entry + $slGia, $dec)]];
-            } else {
-                $entry  = round($channel['lower'] + $bufGia, $dec);
-                $orders = [['side' => 'BUY_LIMIT', 'entry' => $entry,
-                             'tp'  => round($entry + $tpGia, $dec),
-                             'sl'  => round($entry - $slGia, $dec)]];
-            }
-        }
 
-        return [
-            'orders' => $orders,
-            'sl_gia' => $slGia,
-            'tp_gia' => $tpGia,
-            'rr'     => $rr,
-            'lot'    => $lot,
-            'atr'    => round($atr, 2),
-        ];
+            return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
+                    'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
+
+        } elseif ($channelDir === 'LONG') {
+            // ── BÀI 2: Sweep-Catch BUY LIMIT (Ascending channel) ───
+            // Chờ whale chọc râu thủng đáy kênh 1 giá → cắn BUY LIMIT → đón bounce lên
+            $tpGia  = self::TP_BOUNCE_GIA;   // 1.5 giá cố định
+            $rr     = round($tpGia / $slGia, 2);
+            $lot    = $this->calculateExnessLot($capital, $slGia);
+
+            $entry  = round($channel['lower'] - $bufGia, $dec);  // 1.0 giá dưới đáy kênh
+            $orders = [[
+                'side'  => 'BUY_LIMIT',
+                'entry' => $entry,
+                'tp'    => round($entry + $tpGia, $dec),
+                'sl'    => round($entry - $slGia, $dec),
+            ]];
+
+            return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
+                    'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
+
+        } else {
+            // ── BÀI 3: Sweep-Catch SELL LIMIT (Descending channel) ─
+            // Chờ whale chọc râu vượt đỉnh kênh 1 giá → cắn SELL LIMIT → đón pullback xuống
+            $tpGia  = self::TP_BOUNCE_GIA;   // 1.5 giá cố định
+            $rr     = round($tpGia / $slGia, 2);
+            $lot    = $this->calculateExnessLot($capital, $slGia);
+
+            $entry  = round($channel['upper'] + $bufGia, $dec);  // 1.0 giá trên đỉnh kênh
+            $orders = [[
+                'side'  => 'SELL_LIMIT',
+                'entry' => $entry,
+                'tp'    => round($entry - $tpGia, $dec),
+                'sl'    => round($entry + $slGia, $dec),
+            ]];
+
+            return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
+                    'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
+        }
     }
 
     private function calcTpGia(float $atr): float
@@ -290,7 +312,14 @@ class SignalFormatterService
             $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia, $atr) . $note . "\n";
         }
 
-        return "🥇 <b>VÀNG BREAKOUT SETUP</b> — {$symbol} {$timeframe}  <i>{$time}</i>\n"
+        $channelType = $channel['type'] ?? 'triangle';
+        $header = match ($channelType) {
+            'descending' => "📉 <b>VÀNG SELL LIMIT — Chặn Râu Đỉnh</b>",
+            'ascending'  => "📈 <b>VÀNG BUY LIMIT — Chặn Râu Đáy</b>",
+            default      => "🥇 <b>VÀNG BREAKOUT SETUP</b>",
+        };
+
+        return "{$header} — {$symbol} {$timeframe}  <i>{$time}</i>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
             . "📋 <b>PHÂN TÍCH ĐA KHUNG (Top-Down)</b>\n"
             . "  ├ [W1 Bias]     {$w1}\n"
