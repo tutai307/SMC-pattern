@@ -135,6 +135,37 @@ class MarketDataService
         };
     }
 
+    /**
+     * Tổng hợp nến H4 từ M15. Cứ mỗi 4-hour boundary (UTC) = 1 nến H4.
+     * Không cần EA push H4 riêng — tái dụng M15 đã có sẵn.
+     */
+    public function buildH4FromM15(array $m15Klines): array
+    {
+        if (empty($m15Klines)) return [];
+
+        $h4Ms   = 4 * 3600 * 1000;
+        $groups = [];
+
+        foreach ($m15Klines as $bar) {
+            $ts    = (int)   $bar[0];
+            $h4Ts  = intdiv($ts, $h4Ms) * $h4Ms;
+
+            if (!isset($groups[$h4Ts])) {
+                $groups[$h4Ts] = [$h4Ts, (float)$bar[1], (float)$bar[2],
+                                          (float)$bar[3], (float)$bar[4], (float)($bar[5] ?? 0)];
+            } else {
+                $g              = &$groups[$h4Ts];
+                $g[2]           = max($g[2], (float)$bar[2]);  // high
+                $g[3]           = min($g[3], (float)$bar[3]);  // low
+                $g[4]           = (float)$bar[4];               // close = last M15 bar
+                $g[5]          += (float)($bar[5] ?? 0);        // volume sum
+            }
+        }
+
+        ksort($groups);
+        return array_values($groups);
+    }
+
     private function klinesKey(string $symbol, string $timeframe): string
     {
         return 'mt5_klines_' . strtoupper($symbol) . '_' . $this->normalizeTimeframe($timeframe);

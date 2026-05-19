@@ -129,11 +129,9 @@ class ScanSignalsCommand extends Command
         }
 
         // ── 2. Top-Down: HTF bias từ H4 ───────────────────────────
-        // Nếu EA chưa push H4 data → htfBias = null (không lọc hướng)
-        $h4Klines = $this->marketData->getKlines($symbol, '4h', 100);
-        $htfBias  = !empty($h4Klines)
-            ? $this->priceActionService->getHTFBias($h4Klines)
-            : null;
+        // Tự build H4 từ M15 — EA chỉ push M15, không cần push H4 riêng
+        $h4Klines = $this->marketData->buildH4FromM15($klines);
+        $htfBias  = !empty($h4Klines) ? $this->priceActionService->getHTFBias($h4Klines) : null;
 
         $htfLabel = match ($htfBias) {
             'LONG'  => '⬆ TĂNG',
@@ -158,6 +156,12 @@ class ScanSignalsCommand extends Command
                 default         => "Không có mô hình (LH={$lh} HL={$hl} HH={$hh} LL={$ll})",
             };
             $this->line("[{$ts}] [{$symbol}] {$reason}");
+            return;
+        }
+
+        // v5.4: Bounce channels tạm vô hiệu hóa — chỉ trade Triangle
+        if (in_array($channelType, ['ascending', 'descending'])) {
+            $this->line("[{$ts}] [{$symbol}] Kênh {$channelType} (disabled v5.4) — LH={$lh} HL={$hl} HH={$hh} LL={$ll}");
             return;
         }
 

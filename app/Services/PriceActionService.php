@@ -112,49 +112,14 @@ class PriceActionService
             return array_merge($empty, $counts, ['type' => 'expanding']);
         }
 
-        // ── Ưu tiên 2: Kênh Giảm Song Song ── CHỈ SELL LIMIT
-        // LH (đỉnh thấp dần) + LL (đáy thấp dần), KHÔNG có HL
-        // Xu hướng GIẢM thuần — đường kháng cự và hỗ trợ cùng nghiêng xuống
+        // ── Ưu tiên 2: Descending — tạm disabled v5.4 (backtest WR 13%)
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
-            // Kẻ trendline bằng OLS trên TOÀN chuỗi LH và LL
-            $lhChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
-            $llChain = array_slice($lows,  count($lows)  - 1 - $llCount, $llCount + 1);
-            $projU   = $this->linearRegression($lhChain, $currentIdx);
-            $projL   = $this->linearRegression($llChain, $currentIdx);
-
-            if ($projU <= $projL) return array_merge($empty, $counts);
-            if (!$this->isChannelWideEnough($projU, $projL)) return array_merge($empty, $counts);
-
-            return array_merge($counts, [
-                'is_channel'  => true,
-                'upper'       => $projU,
-                'lower'       => $projL,
-                'compression' => 0.5, // giá trị placeholder, không dùng cho kênh có hướng
-                'type'        => 'descending',
-                'direction'   => 'SHORT',
-            ]);
+            return array_merge($empty, $counts, ['type' => 'descending']);
         }
 
-        // ── Ưu tiên 3: Kênh Tăng Song Song ── CHỈ BUY LIMIT
-        // HH (đỉnh cao dần) + HL (đáy cao dần), KHÔNG có LH
-        // Xu hướng TĂNG thuần — cả kháng cự và hỗ trợ đều nghiêng lên
+        // ── Ưu tiên 3: Ascending — tạm disabled v5.4 (backtest WR 25%)
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
-            $hhChain = array_slice($highs, count($highs) - 1 - $hhCount, $hhCount + 1);
-            $hlChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
-            $projU   = $this->linearRegression($hhChain, $currentIdx);
-            $projL   = $this->linearRegression($hlChain, $currentIdx);
-
-            if ($projU <= $projL) return array_merge($empty, $counts);
-            if (!$this->isChannelWideEnough($projU, $projL)) return array_merge($empty, $counts);
-
-            return array_merge($counts, [
-                'is_channel'  => true,
-                'upper'       => $projU,
-                'lower'       => $projL,
-                'compression' => 0.5,
-                'type'        => 'ascending',
-                'direction'   => 'LONG',
-            ]);
+            return array_merge($empty, $counts, ['type' => 'ascending']);
         }
 
         // ── Ưu tiên 4: Tam Giác Nén ── BUY STOP + SELL STOP (Kênh cháy loại 2 hợp lệ)
@@ -212,10 +177,13 @@ class PriceActionService
      */
     public function getHTFBias(array $h4Klines): ?string
     {
-        if (count($h4Klines) < 20) return null;
+        $n = count($h4Klines);
+        if ($n < 10) return null;
 
-        // 50 nến H4 ≈ 200h ≈ 8 ngày — đủ thấy xu hướng tuần
-        $channel = $this->detectUnpredictableChannel($h4Klines, lookback: 50);
+        $lookback = min(50, $n - 6);
+        if ($lookback < 2) return null;
+
+        $channel = $this->detectUnpredictableChannel($h4Klines, lookback: $lookback);
 
         if (!$channel['is_channel']) return null;
 

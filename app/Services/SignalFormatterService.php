@@ -3,29 +3,29 @@
 namespace App\Services;
 
 /**
- * v5.3 — Signal Generator + Formatter cho XAUUSD.
+ * v5.4 — Signal Generator + Formatter cho XAUUSD.
  *
  * ĐƠN VỊ CHUẨN XAUUSD (đồng bộ biểu đồ MT5):
  *   1 Giá = $1.00 di chuyển (vd: 4400.00 → 4401.00)
  *   1 Lot Exness XAUUSD = 100 oz → 1 Giá × 1 Lot = $100 P&L
  *
  * Hai bài đánh:
- *   BÀI 1 — Đánh Phá Vỡ (Triangle):  BUY/SELL STOP, TP=4.0 giá cố định, SL=5.0 giá cố định
- *   BÀI 2 — Đánh Quét Biên (Bounce): BUY/SELL LIMIT, SL=1.5×ATR, TP=width×0.8, lọc R:R≥1
+ *   BÀI 1 — Đánh Phá Vỡ (Triangle):  BUY/SELL STOP, TP/SL động theo ATR + channel width
+ *   BÀI 2 — Đánh Quét Biên (Bounce): DISABLED v5.4 (backtest WR 13-25%, không đủ lợi nhuận)
  *
  * 3 lớp bảo vệ trong generateSafeSignal():
- *   L1. R:R filter (bounce):  TP < SL → null
- *   L2. Lot hard stop:        Raw lot < 0.01 → RuntimeException
- *   L3. Order validate:       Entry vs CurrentPrice sai loại → auto-correct hoặc null
+ *   L1. Survival filter:  SL<=0 hoặc TP<SL → null
+ *   L2. Lot hard stop:    Raw lot < 0.01 → RuntimeException
+ *   L3. Order validate:   Entry vs CurrentPrice sai loại → auto-correct hoặc null
  */
 class SignalFormatterService
 {
     // Buffer: 0.3 giá ($0.30) — tránh fakeout, không quá xa trendline
     private const BUF_GIA = 0.3;
 
-    // TP/SL cố định cho tất cả bài đánh — scalp ngắn 2-3 giá
-    private const TP_GIA = 2.0;   // TP cố định 2 giá = $2/lot × 0.01 = $0.02
-    private const SL_GIA = 3.0;   // SL cố định 3 giá = $3/lot × 0.01 = $0.03
+    // TP/SL động — tính theo ATR và channel width
+    private const SL_ATR_MULT  = 1.5;  // SL = 1.5 × ATR(14)
+    private const TP_WIDTH_PCT = 0.8;  // TP = channel_width × 80%
 
     // Risk management
     private const RISK_PCT = 0.02;   // 2% vốn mỗi lệnh
@@ -116,13 +116,14 @@ class SignalFormatterService
     /**
      * Tính tham số lệnh theo bài đánh tương ứng với loại kênh.
      *
-     * BÀI 1 (Triangle — type=null):
-     *   TP = 4.0 giá cố định | SL = 5.0 giá cố định | Scalp nhanh 3-5 giá
-     *   Không lọc R:R (4/5=0.8 được chấp nhận vì tốc độ bùng nổ)
+     * BÀI 1 (Triangle — direction=null):
+     *   SL = 1.5 × ATR(14)   — SL động theo biến động thị trường
+     *   TP = channel_width × 80%   — TP bằng 80% chiều rộng kênh tại điểm phá vỡ
+     *   Bộ lọc sống còn: SL <= 0 hoặc TP < SL → return null
+     *   Loại lệnh: BUY STOP (trên upper) + SELL STOP (dưới lower)
      *
-     * BÀI 2 (Bounce — type=SHORT/LONG):
-     *   TP = channel_width × 0.8 | SL = 1.5 × ATR(14)
-     *   Lọc R:R: TP < SL → return null
+     * BÀI 2 (Bounce — direction=SHORT/LONG): DISABLED v5.4
+     *   ascending/descending bị lọc trước ở ScanSignalsCommand — không vào đây
      *
      * @return array{orders, sl_gia, tp_gia, rr, lot, atr}|null
      */
@@ -136,10 +137,15 @@ class SignalFormatterService
         $bufGia     = self::BUF_GIA;
         $channelDir = $channel['direction'] ?? null;
 
-        $slGia = self::SL_GIA;
-        $tpGia = self::TP_GIA;
-        $rr    = round($tpGia / $slGia, 2);
-        $lot   = $this->calculateExnessLot($capital, $slGia);
+        // Tính SL và TP động
+        $slGia = round(self::SL_ATR_MULT * $atr, 2);
+        $tpGia = round(($channel['upper'] - $channel['lower']) * self::TP_WIDTH_PCT, 2);
+
+        // Bộ lọc sống còn — BẮT BUỘC
+        if ($slGia <= 0 || $tpGia < $slGia) return null;
+
+        $rr  = round($tpGia / $slGia, 2);
+        $lot = $this->calculateExnessLot($capital, $slGia);
 
         if ($channelDir === null) {
             // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────
