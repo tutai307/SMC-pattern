@@ -67,12 +67,21 @@ class BacktestV53Command extends Command
             return 1;
         }
 
+        // ── Window báo cáo (--from / --to) — chỉ đặt lệnh trong range ──
+        // Toàn bộ M15 data vẫn dùng cho lookback/warmup, không cắt bỏ.
+        $fromOpt    = $this->option('from');
+        $toOpt      = $this->option('to');
+        // strtotime không dùng UTC suffix — dùng server TZ (Asia/Ho_Chi_Minh)
+        // để khớp với date display trong báo cáo (HCM local time)
+        $reportFrom = $fromOpt ? strtotime($fromOpt . ' 00:00:00') * 1000 : null;
+        $reportTo   = $toOpt   ? strtotime($toOpt   . ' 23:59:59') * 1000 : null;
+
         // ── Load H4 data ───────────────────────────────────────────
         $h4Klines = Cache::get($h4Key, []);
         $hasH4    = count($h4Klines) >= $htfLookback;
 
-        $dateFrom = date('Y-m-d', intdiv((int)$m15Klines[0][0], 1000));
-        $dateTo   = date('Y-m-d', intdiv((int)end($m15Klines)[0], 1000));
+        $dateFrom = $fromOpt ?? date('Y-m-d', intdiv((int)$m15Klines[0][0], 1000));
+        $dateTo   = $toOpt   ?? date('Y-m-d', intdiv((int)end($m15Klines)[0], 1000));
 
         $this->info('╔══════════════════════════════════════════════════════╗');
         $this->info("║  FELIX v5.3 BACKTEST — {$symbol} M15                 ║");
@@ -205,7 +214,11 @@ class BacktestV53Command extends Command
             $signals = $sf->buildSignals($symbol, $channel, $capital, $atr);
             if ($signals === null) continue; // R:R < 1:1
 
-            // ── H. Dedup ───────────────────────────────────────────
+            // ── H. Report window gate — chỉ đặt lệnh trong from/to ──
+            if ($reportFrom && $barTs < $reportFrom) continue;
+            if ($reportTo   && $barTs > $reportTo)   continue;
+
+            // ── H2. Dedup ──────────────────────────────────────────
             $fp = round($channel['upper'], 0) . '_' . round($channel['lower'], 0);
             if (isset($channelDedup[$fp]) && $i - $channelDedup[$fp] < $dedupBars) continue;
             $channelDedup[$fp] = $i;
