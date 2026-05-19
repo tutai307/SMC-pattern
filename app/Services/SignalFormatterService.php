@@ -3,47 +3,44 @@
 namespace App\Services;
 
 /**
- * v5.2 — Signal Generator + Formatter cho XAUUSD (Vàng).
+ * v5.3 — Signal Generator + Formatter cho XAUUSD.
  *
  * ĐƠN VỊ CHUẨN XAUUSD (đồng bộ biểu đồ MT5):
- *   1 Giá  = $1.00 di chuyển (vd: 4400.00 → 4401.00)
- *   1 Pip  = 0.1 Giá = $0.10  (không dùng trong code, chỉ để tham chiếu)
+ *   1 Giá = $1.00 di chuyển (vd: 4400.00 → 4401.00)
  *   1 Lot Exness XAUUSD = 100 oz → 1 Giá × 1 Lot = $100 P&L
- *   Tất cả biến khoảng cách đều tính bằng "Giá" (USD/oz) — không dùng Pip
  *
- * Chiến thuật sinh lệnh:
- *   Triangle breakout: BUY STOP  (upper + 0.3 giá) | SELL STOP  (lower − 0.3 giá)
- *   Descending bounce: SELL LIMIT (upper − 0.3 giá) — chặn đầu khi giá chạm biên trên
- *   Ascending bounce:  BUY LIMIT  (lower + 0.3 giá) — chặn đầu khi giá chạm biên dưới
+ * Hai bài đánh:
+ *   BÀI 1 — Đánh Phá Vỡ (Triangle):  BUY/SELL STOP, TP=4.0 giá cố định, SL=5.0 giá cố định
+ *   BÀI 2 — Đánh Quét Biên (Bounce): BUY/SELL LIMIT, SL=1.5×ATR, TP=width×0.8, lọc R:R≥1
  *
- * 3 lớp bảo vệ cứng trong generateSafeSignal():
- *   1. R:R filter:     TP < SL → null
- *   2. Lot hard stop:  Raw lot < 0.01 → RuntimeException (vốn không đủ)
- *   3. Order validate: Entry vs CurrentPrice sai loại lệnh → auto-correct hoặc null
+ * 3 lớp bảo vệ trong generateSafeSignal():
+ *   L1. R:R filter (bounce):  TP < SL → null
+ *   L2. Lot hard stop:        Raw lot < 0.01 → RuntimeException
+ *   L3. Order validate:       Entry vs CurrentPrice sai loại → auto-correct hoặc null
  */
 class SignalFormatterService
 {
-    // Buffer: 0.3 giá ($0.30) — đủ tránh fakeout, không quá xa trendline
-    private const BUF_GIA  = 0.3;
-    // Tỷ lệ rủi ro mỗi lệnh: 2% vốn
-    private const RISK_PCT = 0.02;
-    // Tỷ lệ TP trên biên độ kênh
-    private const TP_RATIO = 0.8;
-    // Hệ số SL theo ATR
-    private const SL_ATR_MULT = 1.5;
-    // Lot tối thiểu sàn Exness
-    private const MIN_LOT = 0.01;
+    // Buffer: 0.3 giá ($0.30) — tránh fakeout, không quá xa trendline
+    private const BUF_GIA = 0.3;
+
+    // Bài 1 — Đánh Phá Vỡ (Triangle): TP/SL cố định theo mục tiêu scalp 3-5 giá
+    private const BREAKOUT_TP_GIA = 4.0;  // TP cố định
+    private const BREAKOUT_SL_GIA = 5.0;  // SL cố định
+
+    // Bài 2 — Đánh Quét Biên: hệ số ATR và biên độ kênh
+    private const BOUNCE_SL_ATR_MULT = 1.5;  // SL = 1.5 × ATR(14)
+    private const BOUNCE_TP_RATIO    = 0.8;  // TP = 80% chiều rộng kênh
+
+    // Risk management
+    private const RISK_PCT = 0.02;   // 2% vốn mỗi lệnh
+    private const MIN_LOT  = 0.01;   // Lot tối thiểu sàn Exness
 
     // ──────────────────────────────────────────────────────────────
-    // PUBLIC: ENTRY POINT DUY NHẤT NÊN DÙNG TỪ COMMAND
+    // ENTRY POINT CHÍNH — gọi từ ScanSignalsCommand
     // ──────────────────────────────────────────────────────────────
 
     /**
      * Generator tín hiệu an toàn — 3 lớp kiểm tra cứng.
-     *
-     * Sử dụng hàm này thay vì buildSignals() để đảm bảo:
-     *   - Lệnh không vi phạm quy tắc Entry vs CurrentPrice
-     *   - Tài khoản đủ vốn để gánh SL (không ép vào 0.01 lot khi vốn quá nhỏ)
      *
      * @param array $marketData {
      *   symbol:        string,
@@ -52,8 +49,8 @@ class SignalFormatterService
      *   atr:           float,   Kết quả calculateATR(14)
      * }
      * @param float $accountCapital  Vốn tài khoản USD
-     * @return array|null            null = không có setup hợp lệ (không phát alert)
-     * @throws \RuntimeException     Khi vốn không đủ để gánh SL tối thiểu 0.01 lot
+     * @return array|null            null = không có setup hợp lệ
+     * @throws \RuntimeException     Khi vốn không đủ để gánh SL với 2% risk
      */
     public function generateSafeSignal(array $marketData, float $accountCapital): ?array
     {
@@ -62,79 +59,76 @@ class SignalFormatterService
         $atr          = (float) ($marketData['atr'] ?? 0);
         $symbol       = (string) ($marketData['symbol'] ?? 'XAUUSD');
 
-        // ── Layer 1: Build signals (tích hợp R:R filter) ─────────
+        // ── L1: Build signals (tích hợp R:R filter cho bounce) ───
         $signals = $this->buildSignals($symbol, $channel, $accountCapital, $atr);
         if ($signals === null) {
-            return null; // TP < SL: kênh quá hẹp so với ATR
+            return null; // Bounce: TP < SL
         }
 
-        // ── Layer 2: Lot Hard Stop ────────────────────────────────
-        // Tính RAW lot (chưa clamp) để detect vốn quá nhỏ
-        // Không dùng $signals['lot'] vì đó đã bị max(0.01,...) trong buildSignals
+        // ── L2: Lot Hard Stop ─────────────────────────────────────
+        // Tính RAW lot trước khi clamp để bắt vốn quá nhỏ
         $slGia  = $signals['sl_gia'];
         $rawLot = ($accountCapital > 0 && $slGia > 0)
             ? ($accountCapital * self::RISK_PCT) / ($slGia * 100.0)
             : 0.0;
 
         if ($rawLot < self::MIN_LOT) {
-            // Vốn tối thiểu: ngược lại công thức lot, rủi ro 2%, lot = 0.01
             $minCapital = (int) ceil(self::MIN_LOT * $slGia * 100.0 / self::RISK_PCT);
             throw new \RuntimeException(
-                "Tài khoản \${$accountCapital} không đủ vốn cho Setup này. "
-                . "SL = {$slGia} giá → Lot tính được = " . round($rawLot, 5) . " (< 0.01 tối thiểu). "
-                . "Cần ít nhất \${$minCapital} vốn để vào 0.01 lot với rủi ro " . (self::RISK_PCT * 100) . "%."
+                "Tài khoản \${$accountCapital} không đủ vốn. "
+                . "SL = {$slGia} giá → Lot = " . round($rawLot, 5) . " (< 0.01 min). "
+                . "Cần ít nhất \${$minCapital}."
             );
         }
 
-        // ── Layer 3: Validate + auto-correct loại lệnh ───────────
+        // ── L3: Validate + auto-correct loại lệnh ────────────────
         $validOrders = [];
         foreach ($signals['orders'] as $order) {
             $validated = $this->validateAndCorrectOrder($order, $currentPrice);
             if ($validated !== null) {
                 $validOrders[] = $validated;
             } else {
-                \Log::warning(
-                    "Signal rejected: {$order['side']}@{$order['entry']} "
-                    . "— entry vs currentPrice={$currentPrice} mâu thuẫn, không auto-correct được."
-                );
+                \Log::warning("Signal rejected: {$order['side']}@{$order['entry']} vs price={$currentPrice}");
             }
         }
 
-        if (empty($validOrders)) {
-            return null; // Mọi lệnh đều sai logic entry vs price
-        }
+        if (empty($validOrders)) return null;
 
         return array_merge($signals, ['orders' => $validOrders]);
     }
 
     // ──────────────────────────────────────────────────────────────
-    // LOT SIZING — Fixed Fractional 2%
+    // LOT SIZING
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Tính Lot Size theo Fixed Fractional với clamp về 0.01.
-     *
-     * Dùng trong buildSignals() cho mục đích hiển thị.
-     * Để check vốn có đủ không → dùng raw lot trong generateSafeSignal().
+     * Fixed Fractional lot sizing.
      *
      * Exness XAUUSD: 1 Lot × 1 Giá ($1) × 100 oz = $100 P&L
-     * → Lot = (Capital × %Risk) / (SL_giá × $100)
+     * Lot = (Capital × 2%) / (SL_giá × $100), clamp ≥ 0.01
      */
-    public function calculateExnessLot(float $capital, float $slGia, float $riskPct = 0.02): float
+    public function calculateExnessLot(float $capital, float $slGia): float
     {
         if ($capital <= 0 || $slGia <= 0) return self::MIN_LOT;
-        return max(self::MIN_LOT, round(($capital * $riskPct) / ($slGia * 100.0), 2));
+        return max(self::MIN_LOT, round(($capital * self::RISK_PCT) / ($slGia * 100.0), 2));
     }
 
     // ──────────────────────────────────────────────────────────────
-    // SIGNAL BUILDER (internal — gọi qua generateSafeSignal())
+    // SIGNAL BUILDER
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Xây dựng tham số lệnh từ channel + ATR.
-     * Không validate entry vs currentPrice — đó là việc của generateSafeSignal().
+     * Tính tham số lệnh theo bài đánh tương ứng với loại kênh.
      *
-     * @return array{orders, sl_gia, tp_gia, rr, lot}|null  null nếu R:R < 1:1
+     * BÀI 1 (Triangle — type=null):
+     *   TP = 4.0 giá cố định | SL = 5.0 giá cố định | Scalp nhanh 3-5 giá
+     *   Không lọc R:R (4/5=0.8 được chấp nhận vì tốc độ bùng nổ)
+     *
+     * BÀI 2 (Bounce — type=SHORT/LONG):
+     *   TP = channel_width × 0.8 | SL = 1.5 × ATR(14)
+     *   Lọc R:R: TP < SL → return null
+     *
+     * @return array{orders, sl_gia, tp_gia, rr, lot, atr}|null
      */
     public function buildSignals(
         string $symbol,
@@ -142,42 +136,52 @@ class SignalFormatterService
         float  $capital,
         float  $atr
     ): ?array {
-        $dec    = 2;
-        $bufGia = self::BUF_GIA;  // 0.3 giá buffer
-
-        // SL: 1.5 × ATR(14) — theo market noise thực tế
-        $slGia = round(self::SL_ATR_MULT * $atr, 2);
-        // TP: 80% chiều rộng kênh — không ăn trọn sóng
-        $tpGia = round(($channel['upper'] - $channel['lower']) * self::TP_RATIO, 2);
-
-        // R:R filter: kênh quá hẹp so với volatility
-        if ($slGia <= 0 || $tpGia < $slGia) return null;
-
-        $rr  = round($tpGia / $slGia, 2);
-        $lot = $this->calculateExnessLot($capital, $slGia);
-
+        $dec        = 2;
+        $bufGia     = self::BUF_GIA;
         $channelDir = $channel['direction'] ?? null;
 
-        if ($channelDir === 'SHORT') {
-            $entry  = round($channel['upper'] - $bufGia, $dec);
-            $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
-                         'tp'  => round($entry - $tpGia, $dec),
-                         'sl'  => round($entry + $slGia, $dec)]];
+        if ($channelDir === null) {
+            // ── BÀI 1: Đánh Phá Vỡ (Triangle) ─────────────────
+            // TP/SL cố định — ăn nhanh khi biên nén bùng nổ
+            $slGia = self::BREAKOUT_SL_GIA;
+            $tpGia = self::BREAKOUT_TP_GIA;
+            $rr    = round($tpGia / $slGia, 2);
+            $lot   = $this->calculateExnessLot($capital, $slGia);
 
-        } elseif ($channelDir === 'LONG') {
-            $entry  = round($channel['lower'] + $bufGia, $dec);
-            $orders = [['side' => 'BUY_LIMIT',  'entry' => $entry,
-                         'tp'  => round($entry + $tpGia, $dec),
-                         'sl'  => round($entry - $slGia, $dec)]];
+            $lE = round($channel['upper'] + $bufGia, $dec);  // BUY STOP trên đỉnh kênh
+            $sE = round($channel['lower'] - $bufGia, $dec);  // SELL STOP dưới đáy kênh
+            $orders = [
+                ['side' => 'BUY_STOP',  'entry' => $lE,
+                 'tp'   => round($lE + $tpGia, $dec), 'sl' => round($lE - $slGia, $dec)],
+                ['side' => 'SELL_STOP', 'entry' => $sE,
+                 'tp'   => round($sE - $tpGia, $dec), 'sl' => round($sE + $slGia, $dec)],
+            ];
 
         } else {
-            // Triangle: 2 lệnh STOP chờ breakout
-            $lE = round($channel['upper'] + $bufGia, $dec);
-            $sE = round($channel['lower'] - $bufGia, $dec);
-            $orders = [
-                ['side' => 'BUY_STOP',  'entry' => $lE, 'tp' => round($lE + $tpGia, $dec), 'sl' => round($lE - $slGia, $dec)],
-                ['side' => 'SELL_STOP', 'entry' => $sE, 'tp' => round($sE - $tpGia, $dec), 'sl' => round($sE + $slGia, $dec)],
-            ];
+            // ── BÀI 2: Đánh Quét Biên (Bounce) ─────────────────
+            // SL bám ATR thị trường, TP bám biên độ kênh
+            $slGia = round(self::BOUNCE_SL_ATR_MULT * $atr, 2);
+            $tpGia = round(($channel['upper'] - $channel['lower']) * self::BOUNCE_TP_RATIO, 2);
+
+            // Lọc R:R: kênh quá hẹp so với volatility → không trade
+            if ($slGia <= 0 || $tpGia < $slGia) return null;
+
+            $rr  = round($tpGia / $slGia, 2);
+            $lot = $this->calculateExnessLot($capital, $slGia);
+
+            if ($channelDir === 'SHORT') {
+                // SELL LIMIT: chờ giá hồi lên chạm đường kháng cự trên
+                $entry  = round($channel['upper'] - $bufGia, $dec);
+                $orders = [['side' => 'SELL_LIMIT', 'entry' => $entry,
+                             'tp'  => round($entry - $tpGia, $dec),
+                             'sl'  => round($entry + $slGia, $dec)]];
+            } else {
+                // BUY LIMIT: chờ giá kéo về chạm đường hỗ trợ dưới
+                $entry  = round($channel['lower'] + $bufGia, $dec);
+                $orders = [['side' => 'BUY_LIMIT', 'entry' => $entry,
+                             'tp'  => round($entry + $tpGia, $dec),
+                             'sl'  => round($entry - $slGia, $dec)]];
+            }
         }
 
         return [
@@ -186,37 +190,36 @@ class SignalFormatterService
             'tp_gia' => $tpGia,
             'rr'     => $rr,
             'lot'    => $lot,
+            'atr'    => round($atr, 2),
         ];
     }
 
     // ──────────────────────────────────────────────────────────────
-    // PRIVATE: ORDER TYPE VALIDATOR
+    // ORDER TYPE VALIDATOR
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Validate loại lệnh vs giá hiện tại — quy tắc cứng sàn Exness/MT5:
+     * Validate loại lệnh vs giá hiện tại — quy tắc cứng MT5/Exness:
      *
-     *   BUY STOP:   Entry > CurrentPrice  ✓  (đặt chờ breakout lên)
-     *   SELL STOP:  Entry < CurrentPrice  ✓  (đặt chờ breakdown xuống)
-     *   BUY LIMIT:  Entry < CurrentPrice  ✓  (đặt chờ giá kéo về)
-     *   SELL LIMIT: Entry > CurrentPrice  ✓  (đặt chờ giá hồi phục)
+     *   BUY STOP:   Entry PHẢI > CurrentPrice  (chờ breakout lên)
+     *   SELL STOP:  Entry PHẢI < CurrentPrice  (chờ breakdown xuống)
+     *   BUY LIMIT:  Entry PHẢI < CurrentPrice  (chờ pullback về)
+     *   SELL LIMIT: Entry PHẢI > CurrentPrice  (chờ hồi phục lên)
      *
-     * Nếu vi phạm → auto-correct sang loại lệnh đối lập (cùng hướng BUY/SELL).
-     * Ví dụ: BUY STOP với entry < price → đổi thành BUY LIMIT (logic vẫn đúng: mua).
-     *
-     * Trả về null nếu side không xác định (lỗi logic nghiêm trọng).
+     * Nếu sai → auto-correct STOP ↔ LIMIT (giữ hướng BUY/SELL).
+     * Vẫn sai sau correct (logic phá vỡ chiến thuật) → null.
      */
     private function validateAndCorrectOrder(array $order, float $currentPrice): ?array
     {
-        // entry phải CAO HƠN currentPrice để loại lệnh này hợp lệ
-        $entryMustBeAbove = [
-            'BUY_STOP'   => true,   // chờ price tăng lên chạm entry → mua
-            'SELL_LIMIT' => true,   // chờ price tăng lên chạm entry → bán
-            'BUY_LIMIT'  => false,  // chờ price giảm xuống chạm entry → mua
-            'SELL_STOP'  => false,  // chờ price giảm xuống chạm entry → bán
+        // entry PHẢI CAO HƠN currentPrice với các loại lệnh này
+        $mustBeAbove = [
+            'BUY_STOP'   => true,
+            'SELL_LIMIT' => true,
+            'BUY_LIMIT'  => false,
+            'SELL_STOP'  => false,
         ];
 
-        // Khi entry vs price bị ngược: đổi cơ chế STOP ↔ LIMIT, giữ hướng BUY/SELL
+        // Đổi cơ chế chờ khi entry vs price bị ngược (giữ hướng BUY/SELL)
         $counterpart = [
             'BUY_STOP'   => 'BUY_LIMIT',
             'BUY_LIMIT'  => 'BUY_STOP',
@@ -227,20 +230,18 @@ class SignalFormatterService
         $side  = $order['side'];
         $entry = $order['entry'];
 
-        if (!isset($entryMustBeAbove[$side])) return null;
+        if (!isset($mustBeAbove[$side])) return null;
 
-        $mustBeAbove  = $entryMustBeAbove[$side];
         $entryIsAbove = $entry > $currentPrice;
 
-        if ($mustBeAbove === $entryIsAbove) {
-            return $order; // ✓ Logic đúng — giữ nguyên
-        }
+        // ✓ Logic đúng — giữ nguyên
+        if ($mustBeAbove[$side] === $entryIsAbove) return $order;
 
         // ✗ Logic sai → auto-correct sang counterpart
         $correctedSide = $counterpart[$side] ?? null;
         if ($correctedSide === null) return null;
 
-        \Log::info("OrderType auto-corrected: {$side}@{$entry} → {$correctedSide} (currentPrice={$currentPrice})");
+        \Log::info("OrderType corrected: {$side}@{$entry} → {$correctedSide} (price={$currentPrice})");
 
         return array_merge($order, ['side' => $correctedSide, 'auto_corrected' => true]);
     }
@@ -252,75 +253,63 @@ class SignalFormatterService
     /**
      * Format tin nhắn Telegram — copy-paste vào Exness trong 3 giây.
      *
-     * @param string $breakoutDirection  'LONG'|'SHORT'|'BOTH'|'WAIT' (từ AI)
+     * Thay thế AI score bằng thông số hình học thực tế:
+     * số swing points, compression, ATR, và HTF bias từ H4.
+     *
+     * @param string|null $htfBias  Xu hướng H4 macro: 'LONG'|'SHORT'|null
      */
     public function formatTelegramMessage(
-        string $symbol,
-        string $timeframe,
-        array  $channel,
-        array  $signals,
-        array  $aiResult,
-        float  $currentPrice,
-        string $breakoutDirection = 'BOTH'
+        string  $symbol,
+        string  $timeframe,
+        array   $channel,
+        array   $signals,
+        float   $currentPrice,
+        ?string $htfBias = null
     ): string {
         $upper       = $channel['upper'];
         $lower       = $channel['lower'];
         $channelType = $channel['type'] ?? 'triangle';
+        $lhCount     = $channel['lh_count'] ?? 0;
+        $hlCount     = $channel['hl_count'] ?? 0;
+        $hhCount     = $channel['hh_count'] ?? 0;
+        $llCount     = $channel['ll_count'] ?? 0;
 
-        $score      = $aiResult['score']      ?? 0;
-        $analysis   = $aiResult['analysis']   ?? '';
-        $riskNote   = $aiResult['risk_note']  ?? '';
-        $confidence = $aiResult['confidence'] ?? 'LOW';
-        $cached     = ($aiResult['cached'] ?? false) ? ' ♻' : '';
-
-        $scoreBar  = str_repeat('█', intdiv($score, 10)) . str_repeat('░', 10 - intdiv($score, 10));
-        $confEmoji = match ($confidence) {
-            'HIGH'   => '🟢',
-            'MEDIUM' => '🟡',
-            default  => '🔴',
-        };
-
-        $time  = now('Asia/Ho_Chi_Minh')->format('H:i d/m');
         $lot   = $signals['lot'];
         $slGia = $signals['sl_gia'];
         $tpGia = $signals['tp_gia'];
-        $slUsd = round($lot * $slGia * 100.0, 2);  // P&L = lot × giá × $100/lot/giá
+        $atr   = $signals['atr'] ?? 0;
+        $slUsd = round($lot * $slGia * 100.0, 2);
 
-        if ($channelType === 'descending') {
-            $header       = "📉 <b>VÀNG BOUNCE SELL</b>";
-            $channelLabel = "📉 Kênh GIẢM Song Song";
-        } elseif ($channelType === 'ascending') {
-            $header       = "📈 <b>VÀNG BOUNCE BUY</b>";
-            $channelLabel = "📈 Kênh TĂNG Song Song";
-        } else {
-            $compression  = round($channel['compression'] * 100);
-            $lhCount      = $channel['lh_count'];
-            $hlCount      = $channel['hl_count'];
-            $header       = "🥇 <b>VÀNG BREAKOUT SETUP</b>";
-            $channelLabel = "🗜 Kênh NÉN <b>{$compression}%</b>  ({$lhCount} LH · {$hlCount} HL)";
-        }
+        $time = now('Asia/Ho_Chi_Minh')->format('H:i d/m');
 
-        // Triangle: lọc lệnh theo AI direction
-        $orders = $signals['orders'];
-        if (($channel['direction'] ?? null) === null) {
-            if ($breakoutDirection === 'LONG') {
-                $orders = array_values(array_filter($orders, fn($o) => str_starts_with($o['side'], 'BUY')));
-            } elseif ($breakoutDirection === 'SHORT') {
-                $orders = array_values(array_filter($orders, fn($o) => str_starts_with($o['side'], 'SELL')));
-            }
-        }
+        // Header theo loại kênh
+        [$header, $channelLabel] = match ($channelType) {
+            'descending' => [
+                "📉 <b>VÀNG BOUNCE SELL</b>",
+                "📉 Kênh GIẢM Song Song  ({$lhCount} LH · {$llCount} LL)",
+            ],
+            'ascending'  => [
+                "📈 <b>VÀNG BOUNCE BUY</b>",
+                "📈 Kênh TĂNG Song Song  ({$hhCount} HH · {$hlCount} HL)",
+            ],
+            default      => [
+                "🥇 <b>VÀNG BREAKOUT SETUP</b>",
+                "🗜 Tam Giác Nén " . round($channel['compression'] * 100) . "%  ({$lhCount} LH · {$hlCount} HL)",
+            ],
+        };
 
+        // Với triangle: show cả 2 chiều; bounce: 1 chiều
         $ordersSection = '';
-        foreach ($orders as $order) {
-            $correctedNote  = ($order['auto_corrected'] ?? false) ? ' <i>(tự điều chỉnh)</i>' : '';
-            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia) . $correctedNote . "\n";
+        foreach ($signals['orders'] as $order) {
+            $note           = ($order['auto_corrected'] ?? false) ? '  <i>↺ tự điều chỉnh</i>' : '';
+            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia) . $note . "\n";
         }
 
-        $dirLabel = match ($breakoutDirection) {
-            'LONG'  => '⬆ CHỈ BUY',
-            'SHORT' => '⬇ CHỈ SELL',
-            'WAIT'  => '⏳ CHỜ THÊM',
-            default => '⬆⬇ HAI CHIỀU',
+        // HTF bias line
+        $htfLine = match ($htfBias) {
+            'LONG'  => "📊 HTF(H4): ⬆ TĂNG  ✅ đồng thuận",
+            'SHORT' => "📊 HTF(H4): ⬇ GIẢM  ✅ đồng thuận",
+            default => "📊 HTF(H4): ➡ không rõ xu hướng",
         };
 
         return "{$header} — {$symbol} {$timeframe}  <i>{$time}</i>\n"
@@ -331,20 +320,16 @@ class SignalFormatterService
             . "━━━━━━━━━━━━━━━━━━━━\n"
             . $ordersSection
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "🤖 AI <b>{$score}/100</b>  {$scoreBar}  {$confEmoji}{$cached}  [{$dirLabel}]\n"
-            . "<i>{$analysis}</i>\n"
-            . ($riskNote ? "⚠️ <i>{$riskNote}</i>\n" : '')
-            . "\n💼 Lot: <b>{$lot}</b>  |  ❌ SL rủi ro: -\${$slUsd}";
+            . "📐 LH:{$lhCount}  HL:{$hlCount}  HH:{$hhCount}  LL:{$llCount}  |  ATR {$atr} giá\n"
+            . "{$htfLine}\n"
+            . "💼 Lot: <b>{$lot}</b>  |  ❌ SL rủi ro: -\${$slUsd}";
     }
 
-    /**
-     * Format 1 order block — hiển thị khoảng cách bằng đơn vị Giá (không dùng Pips).
-     */
     private function formatOrderBlock(array $order, float $tpGia, float $slGia): string
     {
         $isSell = str_starts_with($order['side'], 'SELL');
-        $emoji  = $isSell ? '⬇' : '⬆';
         $label  = str_replace('_', ' ', $order['side']);
+        $emoji  = $isSell ? '⬇' : '⬆';
         $tpSign = $isSell ? '-' : '+';
         $slSign = $isSell ? '+' : '-';
         $rr     = round($tpGia / $slGia, 2);

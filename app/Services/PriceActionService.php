@@ -2,41 +2,46 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Cache;
-
 /**
- * v4 — Gold/Silver Price Action Engine.
+ * v5.3 — Gold Price Action Engine — Toán học thuần túy, không AI.
  *
- * Chỉ làm 3 việc:
- *   1. detectUnpredictableChannel() — phát hiện tam giác nén M15
- *   2. calculateATR()               — ATR thô để tính SL
- *   3. scoreWithAI()                — gọi GPT-4o chấm điểm breakout
+ * Phương pháp: Hình học kênh giá ông Quyết (Top-Down Analysis)
+ *   W1/D1 → H4 (macro bias) → M15 (micro entry)
+ *
+ * 4 mô hình kênh giá (ưu tiên từ trên xuống):
+ *   1. Expanding  (HH + LL): Biên mở rộng hai đầu → NGỒI CHƠI, null
+ *   2. Descending (LH + LL, không HL): Xu hướng giảm → SELL LIMIT
+ *   3. Ascending  (HH + HL, không LH): Xu hướng tăng → BUY LIMIT
+ *   4. Triangle   (LH + HL, nén ≥ 50%): Bùng nổ → BUY+SELL STOP
  */
 class PriceActionService
 {
+    // Nén tối thiểu để Tam Giác được coi là hội tụ đủ mạnh (Kênh cháy loại 2 hợp lệ)
+    private const MIN_TRIANGLE_COMPRESSION = 0.50;  // 50%
+
+    // Độ rộng kênh tối thiểu so với giá giữa (tránh kênh quá hẹp)
+    private const MIN_CHANNEL_WIDTH_RATIO = 0.0015; // 0.15%
+
     // ──────────────────────────────────────────────────────────────
-    // PUBLIC API
+    // PUBLIC: PHÁT HIỆN KÊNH GIÁ
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Phát hiện kênh giá phân vân / tam giác nén (Compression Triangle).
+     * Phân tích cấu trúc swing và phân loại kênh giá theo 4 mô hình.
      *
-     * Điều kiện xác nhận:
-     *   - Swing Highs liên tiếp tạo Lower Highs (LH ≥ 1 chuỗi)
-     *   - Swing Lows  liên tiếp tạo Higher Lows (HL ≥ 1 chuỗi)
-     *   - Cả hai cùng tồn tại trong cửa sổ lookback
+     * Lookback: 100 nến M15 ≈ 25 giờ (đủ bắt kênh trong ngày + qua đêm).
      *
      * @return array{
      *   is_channel: bool,
-     *   upper: float,        Đỉnh cứng — entry BUY STOP = upper + 3 pips
-     *   lower: float,        Đáy cứng  — entry SELL STOP = lower - 3 pips
-     *   compression: float,  0-1, càng gần 1 = nén càng chặt
-     *   lh_count: int,
-     *   hl_count: int,
-     *   type: string
+     *   upper: float,      Đường kháng cự trên (chiếu đến bar hiện tại)
+     *   lower: float,      Đường hỗ trợ dưới
+     *   compression: float, 0-1 (chỉ có nghĩa với triangle)
+     *   type: string,      'descending'|'ascending'|'triangle'|'expanding'|'none'
+     *   direction: string|null, 'SHORT'|'LONG'|null (null = đánh hai chiều)
+     *   lh_count: int,  hl_count: int,  hh_count: int,  ll_count: int
      * }
      */
-    public function detectUnpredictableChannel(array $klines, int $lookback = 40): array
+    public function detectUnpredictableChannel(array $klines, int $lookback = 100): array
     {
         $empty = [
             'is_channel'  => false,
@@ -45,118 +50,182 @@ class PriceActionService
             'compression' => 0.0,
             'lh_count'    => 0,
             'hl_count'    => 0,
+            'hh_count'    => 0,
+            'll_count'    => 0,
             'type'        => 'none',
+            'direction'   => null,
         ];
 
         if (count($klines) < $lookback + 6) return $empty;
 
-        $candles = $this->formatCandles(array_slice($klines, -($lookback + 6)));
-        $swings  = $this->detectSwingPoints($candles, wing: 2);
-        $highs   = array_slice($swings['highs'], -8);
-        $lows    = array_slice($swings['lows'],  -8);
+        $candles    = $this->formatCandles(array_slice($klines, -($lookback + 6)));
+        $swings     = $this->detectSwingPoints($candles, wing: 2);
+        $highs      = array_slice($swings['highs'], -8);
+        $lows       = array_slice($swings['lows'],  -8);
+        $currentIdx = count($candles) - 1;
 
         if (count($highs) < 2 || count($lows) < 2) return $empty;
 
-        // ── Chuỗi LH (Lower Highs) liên tiếp từ cuối trở về ──
+        // ── Đếm các chuỗi swing liên tiếp từ cuối về ──────────────
+
+        // LH: Lower High — Đỉnh thấp dần (dấu hiệu áp lực bán)
         $lhCount = 0;
         for ($i = count($highs) - 1; $i >= 1; $i--) {
             if ($highs[$i]['price'] < $highs[$i - 1]['price']) $lhCount++;
             else break;
         }
 
-        // ── Chuỗi HL (Higher Lows) liên tiếp từ cuối trở về ──
+        // HL: Higher Low — Đáy cao dần (dấu hiệu áp lực mua)
         $hlCount = 0;
         for ($i = count($lows) - 1; $i >= 1; $i--) {
             if ($lows[$i]['price'] > $lows[$i - 1]['price']) $hlCount++;
             else break;
         }
 
-        // ── Chuỗi LL (Lower Lows) liên tiếp từ cuối trở về ──
+        // LL: Lower Low — Đáy thấp dần (xác nhận xu hướng giảm)
         $llCount = 0;
         for ($i = count($lows) - 1; $i >= 1; $i--) {
             if ($lows[$i]['price'] < $lows[$i - 1]['price']) $llCount++;
             else break;
         }
 
-        // ── Chuỗi HH (Higher Highs) liên tiếp từ cuối trở về ──
+        // HH: Higher High — Đỉnh cao dần (xác nhận xu hướng tăng)
         $hhCount = 0;
         for ($i = count($highs) - 1; $i >= 1; $i--) {
             if ($highs[$i]['price'] > $highs[$i - 1]['price']) $hhCount++;
             else break;
         }
 
-        $currentIdx = count($candles) - 1;
+        $counts = [
+            'lh_count' => $lhCount, 'hl_count' => $hlCount,
+            'hh_count' => $hhCount, 'll_count' => $llCount,
+        ];
 
-        // ── Kênh giảm: LH + LL (descending parallel channel) ──
+        // ══════════════════════════════════════════════════════════
+        // PHÂN LOẠI 4 MÔ HÌNH — theo thứ tự ưu tiên
+        // ══════════════════════════════════════════════════════════
+
+        // ── Ưu tiên 1: Kênh Cháy Tài Khoản Loại 1 ── TUYỆT ĐỐI KHÔNG TRADE
+        // HH (đỉnh cao dần) đồng thời với LL (đáy thấp dần) → biên giãn 2 đầu
+        // Giá đang trong giai đoạn bùng nổ không kiểm soát, cực kỳ nguy hiểm
+        if ($hhCount >= 1 && $llCount >= 1) {
+            return array_merge($empty, $counts, ['type' => 'expanding']);
+        }
+
+        // ── Ưu tiên 2: Kênh Giảm Song Song ── CHỈ SELL LIMIT
+        // LH (đỉnh thấp dần) + LL (đáy thấp dần), KHÔNG có HL
+        // Xu hướng GIẢM thuần — đường kháng cự và hỗ trợ cùng nghiêng xuống
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
-            // OLS regression trên toàn chuỗi LH và LL — mỗi swing đều đóng góp vào slope,
-            // tránh bị lệch bởi một râu nến đơn lẻ khi chỉ dùng 2 điểm đầu/cuối.
-            // lhChain: $lhCount+1 điểm liên tiếp cuối mảng highs tạo thành chuỗi LH
+            // Kẻ trendline bằng OLS trên TOÀN chuỗi LH và LL
             $lhChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
             $llChain = array_slice($lows,  count($lows)  - 1 - $llCount, $llCount + 1);
             $projU   = $this->linearRegression($lhChain, $currentIdx);
             $projL   = $this->linearRegression($llChain, $currentIdx);
 
-            if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            $w = $projU - $projL;
-            $mid = ($projU + $projL) / 2;
-            if ($mid > 0 && ($w / $mid) < 0.0015) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            return ['is_channel' => true, 'upper' => $projU, 'lower' => $projL,
-                    'compression' => 0.5, 'lh_count' => $lhCount, 'hl_count' => $hlCount,
-                    'll_count' => $llCount, 'direction' => 'SHORT', 'type' => 'descending'];
+            if ($projU <= $projL) return array_merge($empty, $counts);
+            if (!$this->isChannelWideEnough($projU, $projL)) return array_merge($empty, $counts);
+
+            return array_merge($counts, [
+                'is_channel'  => true,
+                'upper'       => $projU,
+                'lower'       => $projL,
+                'compression' => 0.5, // giá trị placeholder, không dùng cho kênh có hướng
+                'type'        => 'descending',
+                'direction'   => 'SHORT',
+            ]);
         }
 
-        // ── Kênh tăng: HH + HL (ascending parallel channel) ──
+        // ── Ưu tiên 3: Kênh Tăng Song Song ── CHỈ BUY LIMIT
+        // HH (đỉnh cao dần) + HL (đáy cao dần), KHÔNG có LH
+        // Xu hướng TĂNG thuần — cả kháng cự và hỗ trợ đều nghiêng lên
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
             $hhChain = array_slice($highs, count($highs) - 1 - $hhCount, $hhCount + 1);
             $hlChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
             $projU   = $this->linearRegression($hhChain, $currentIdx);
             $projL   = $this->linearRegression($hlChain, $currentIdx);
 
-            if ($projU <= $projL) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            $w = $projU - $projL;
-            $mid = ($projU + $projL) / 2;
-            if ($mid > 0 && ($w / $mid) < 0.0015) return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
-            return ['is_channel' => true, 'upper' => $projU, 'lower' => $projL,
-                    'compression' => 0.5, 'lh_count' => $lhCount, 'hl_count' => $hlCount,
-                    'hh_count' => $hhCount, 'direction' => 'LONG', 'type' => 'ascending'];
+            if ($projU <= $projL) return array_merge($empty, $counts);
+            if (!$this->isChannelWideEnough($projU, $projL)) return array_merge($empty, $counts);
+
+            return array_merge($counts, [
+                'is_channel'  => true,
+                'upper'       => $projU,
+                'lower'       => $projL,
+                'compression' => 0.5,
+                'type'        => 'ascending',
+                'direction'   => 'LONG',
+            ]);
         }
 
-        // Trả về counts thực để caller có thể log lý do bị loại
-        if ($lhCount < 1 || $hlCount < 1) {
-            return array_merge($empty, ['lh_count' => $lhCount, 'hl_count' => $hlCount]);
+        // ── Ưu tiên 4: Tam Giác Nén ── BUY STOP + SELL STOP (Kênh cháy loại 2 hợp lệ)
+        // LH (đỉnh thấp dần) + HL (đáy cao dần) đồng thời → biên đang CO LẠI
+        // Áp lực tích lũy sắp bùng nổ. Bộ lọc: compression ≥ 50%
+        if ($lhCount >= 1 && $hlCount >= 1) {
+            $lhChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
+            $hlChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
+            $projU   = $this->linearRegression($lhChain, $currentIdx);
+            $projL   = $this->linearRegression($hlChain, $currentIdx);
+
+            if ($projU <= $projL) return array_merge($empty, $counts);
+            if (!$this->isChannelWideEnough($projU, $projL)) return array_merge($empty, $counts);
+
+            // Compression: chiều rộng kênh ĐÃ co lại bao nhiêu % so với điểm đầu chuỗi
+            $origWidth   = abs(
+                $highs[count($highs) - 1 - $lhCount]['price'] -
+                $lows[count($lows)   - 1 - $hlCount]['price']
+            );
+            $currWidth   = $projU - $projL;
+            $compression = $origWidth > 0 ? max(0.0, round(1 - ($currWidth / $origWidth), 3)) : 0.0;
+
+            if ($compression < self::MIN_TRIANGLE_COMPRESSION) {
+                // Nén chưa đủ chặt → nguy cơ tín hiệu giả cao, bỏ qua
+                return array_merge($empty, $counts, [
+                    'type'        => 'triangle_weak',
+                    'compression' => $compression,
+                ]);
+            }
+
+            return array_merge($counts, [
+                'is_channel'  => true,
+                'upper'       => $projU,
+                'lower'       => $projL,
+                'compression' => $compression,
+                'type'        => 'triangle',
+                'direction'   => null, // Hai chiều — STOP cả BUY lẫn SELL
+            ]);
         }
 
-        $upper = (float) end($highs)['price'];
-        $lower = (float) end($lows)['price'];
-
-        if ($upper <= $lower) return $empty;
-
-        $channelWidth = $upper - $lower;
-        $midPrice     = ($upper + $lower) / 2;
-
-        // Kênh phải đủ rộng tối thiểu 0.15% (≈ $3.5 trên gold @ $2350)
-        if ($midPrice > 0 && ($channelWidth / $midPrice) < 0.0015) return $empty;
-
-        // Compression: so kênh hiện tại vs kênh đầu chuỗi swing
-        $origWidth   = abs($highs[0]['price'] - $lows[0]['price']);
-        $compression = $origWidth > 0 ? round(1 - ($channelWidth / $origWidth), 3) : 0.0;
-
-        return [
-            'is_channel'  => true,
-            'upper'       => round($upper, 2),
-            'lower'       => round($lower, 2),
-            'compression' => max(0.0, $compression),
-            'lh_count'    => $lhCount,
-            'hl_count'    => $hlCount,
-            'direction'   => null,
-            'type'        => 'triangle',
-        ];
+        // Không khớp mô hình nào → bỏ qua phiên này
+        return array_merge($empty, $counts);
     }
 
     /**
-     * ATR Wilder smoothing — dùng cho tính SL.
-     * Trả về giá trị ATR cuối cùng (float, không phải array).
+     * Xác định xu hướng macro từ H4 để làm bộ lọc định hướng M15.
+     *
+     * Nguyên lý Top-Down: M15 entry PHẢI cùng chiều H4 macro.
+     * H4 ascending → chỉ chấp nhận M15 BUY LIMIT.
+     * H4 descending → chỉ chấp nhận M15 SELL LIMIT.
+     * H4 triangle / không rõ → không lọc, chấp nhận M15 tín hiệu bất kỳ.
+     *
+     * @param  array $h4Klines  Klines khung H4 (tối thiểu 20 nến)
+     * @return string|null      'LONG' | 'SHORT' | null (xu hướng không rõ hoặc không đủ data)
+     */
+    public function getHTFBias(array $h4Klines): ?string
+    {
+        if (count($h4Klines) < 20) return null;
+
+        // 50 nến H4 ≈ 200h ≈ 8 ngày — đủ thấy xu hướng tuần
+        $channel = $this->detectUnpredictableChannel($h4Klines, lookback: 50);
+
+        if (!$channel['is_channel']) return null;
+
+        // Triangle trên H4 = không rõ macro → không lọc hướng M15
+        return $channel['direction'];
+    }
+
+    /**
+     * ATR Wilder smoothing — dùng cho SL động của bounce setup.
+     * Trả về giá trị ATR cuối cùng (float, đơn vị: giá USD/oz).
      */
     public function calculateATR(array $klines, int $period = 14): float
     {
@@ -178,139 +247,16 @@ class PriceActionService
         return round($atr, 4);
     }
 
-    /**
-     * Chấm điểm breakout qua GPT-4o (OpenRouter).
-     * Cache 30 phút per channel fingerprint — không gọi AI lặp cho cùng 1 setup.
-     *
-     * @return array{score: int, analysis: string, breakout_direction: string,
-     *               confidence: string, risk_note: string, cached: bool}
-     */
-    public function scoreWithAI(
-        string $symbol,
-        string $timeframe,
-        array  $channel,
-        float  $atr,
-        float  $currentPrice,
-        array  $klines
-    ): array {
-        $fallback = [
-            'score'               => 50,
-            'analysis'            => 'AI không khả dụng',
-            'breakout_direction'  => 'BOTH',
-            'confidence'          => 'LOW',
-            'risk_note'           => '',
-            'cached'              => false,
-        ];
-
-        $apiKey = env('OPENROUTER_API_KEY');
-        if (!$apiKey) return $fallback;
-
-        $cacheKey = 'ai_channel_' . md5(
-            $symbol . $timeframe .
-            round($channel['upper'], 1) .
-            round($channel['lower'], 1) .
-            round($channel['compression'], 2)
-        );
-
-        $cached = Cache::get($cacheKey);
-        if ($cached) {
-            return array_merge($cached, ['cached' => true]);
-        }
-
-        try {
-            $candles  = $this->formatCandles(array_slice($klines, -40));
-            $last5    = array_slice($candles, -5);
-            $bullCount = count(array_filter($last5, fn($c) => $c['close'] > $c['open']));
-            $bearCount = 5 - $bullCount;
-
-            $lastCandle  = end($candles);
-            $bodySize    = $atr > 0 ? round(abs($lastCandle['close'] - $lastCandle['open']) / $atr, 2) : 0;
-            $bodyQuality = $bodySize >= 1.5 ? 'mạnh' : ($bodySize >= 0.7 ? 'bình thường' : 'yếu/do dự');
-
-            $distToUpper = $channel['upper'] > 0
-                ? round(($channel['upper'] - $currentPrice) / $currentPrice * 100, 3)
-                : 0;
-            $distToLower = $channel['lower'] > 0
-                ? round(($currentPrice - $channel['lower']) / $currentPrice * 100, 3)
-                : 0;
-
-            $prompt = <<<PROMPT
-SYMBOL: {$symbol} | TIMEFRAME: {$timeframe}
-CURRENT PRICE: {$currentPrice}
-
-=== CHANNEL COMPRESSION ===
-Đỉnh cứng (Upper): {$channel['upper']} — cách giá {$distToUpper}%
-Đáy cứng (Lower):  {$channel['lower']} — cách giá {$distToLower}%
-Nén: {$channel['compression']} (0=không nén, 1=nén hoàn toàn)
-LH chain: {$channel['lh_count']} | HL chain: {$channel['hl_count']}
-
-=== ATR & MOMENTUM ===
-ATR(14) M15: {$atr}
-5 nến gần nhất: {$bullCount} tăng / {$bearCount} giảm
-Nến cuối body vs ATR: {$bodySize}x ({$bodyQuality})
-
-Đây là kênh nén (Compression Triangle) trên M15 Gold/Silver.
-Hãy đánh giá xác suất breakout và hướng breakout ưu thế.
-
-Yêu cầu: CITE giá thực tế. KHÔNG dùng câu chung chung.
-breakout_direction: "LONG" (breakout lên) | "SHORT" (breakout xuống) | "BOTH" (cả hai có thể) | "WAIT" (chưa đủ điều kiện)
-
-JSON output:
-{
-  "score": 0-100,
-  "analysis": "2-3 câu cite giá cụ thể: nhận xét compression, momentum, vị trí giá trong kênh",
-  "breakout_direction": "LONG|SHORT|BOTH|WAIT",
-  "confidence": "HIGH|MEDIUM|LOW",
-  "risk_note": "1 rủi ro cụ thể với giá"
-}
-PROMPT;
-
-            $client   = new \GuzzleHttp\Client(['timeout' => 12, 'connect_timeout' => 4]);
-            $response = $client->post('https://openrouter.ai/api/v1/chat/completions', [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $apiKey,
-                    'Content-Type'  => 'application/json',
-                    'HTTP-Referer'  => 'https://tomai.app',
-                ],
-                'json' => [
-                    'model'           => 'openai/gpt-4o-mini',
-                    'temperature'     => 0.15,
-                    'messages'        => [
-                        [
-                            'role'    => 'system',
-                            'content' => 'Bạn là senior gold/silver trader chuyên Price Action và Compression Breakout. Phân tích LUÔN dùng số liệu cụ thể. Chỉ trả về JSON hợp lệ.',
-                        ],
-                        ['role' => 'user', 'content' => $prompt],
-                    ],
-                    'response_format' => ['type' => 'json_object'],
-                ],
-            ]);
-
-            $body    = json_decode($response->getBody(), true);
-            $content = $body['choices'][0]['message']['content'] ?? '{}';
-            $data    = json_decode($content, true) ?? [];
-
-            $result = [
-                'score'              => is_numeric($data['score'] ?? null) ? min(100, max(0, (int) $data['score'])) : 50,
-                'analysis'           => $this->flatten($data['analysis']           ?? ''),
-                'breakout_direction' => strtoupper($data['breakout_direction']     ?? 'BOTH'),
-                'confidence'         => strtoupper($data['confidence']             ?? 'LOW'),
-                'risk_note'          => $this->flatten($data['risk_note']          ?? ''),
-                'cached'             => false,
-            ];
-
-            Cache::put($cacheKey, $result, now()->addMinutes(30));
-            return $result;
-
-        } catch (\Exception $e) {
-            \Log::warning('PriceActionService AI score: ' . $e->getMessage());
-            return $fallback;
-        }
-    }
-
     // ──────────────────────────────────────────────────────────────
     // PRIVATE HELPERS
     // ──────────────────────────────────────────────────────────────
+
+    /** Kiểm tra kênh đủ rộng tối thiểu 0.15% giá giữa */
+    private function isChannelWideEnough(float $upper, float $lower): bool
+    {
+        $mid = ($upper + $lower) / 2;
+        return $mid > 0 && (($upper - $lower) / $mid) >= self::MIN_CHANNEL_WIDTH_RATIO;
+    }
 
     private function formatCandles(array $klines): array
     {
@@ -325,8 +271,8 @@ PROMPT;
     }
 
     /**
-     * Phát hiện Swing Highs và Swing Lows.
-     * wing: số nến mỗi bên phải thấp/cao hơn để xác nhận 1 swing point.
+     * Phát hiện Swing Highs và Swing Lows bằng thuật toán wing=2.
+     * Một điểm là swing high nếu cao hơn tất cả 2 nến ở mỗi bên.
      */
     private function detectSwingPoints(array $candles, int $wing = 2): array
     {
@@ -351,26 +297,18 @@ PROMPT;
     }
 
     /**
-     * Hồi quy tuyến tính OLS (Ordinary Least Squares) trên tập swing points.
+     * Hồi quy tuyến tính OLS trên tập swing points.
      *
-     * Phương trình đường thẳng: y = m·x + b
      *   m = [n·Σ(xᵢ·yᵢ) - Σxᵢ·Σyᵢ] / [n·Σ(xᵢ²) - (Σxᵢ)²]
-     *   b = (Σyᵢ - m·Σxᵢ) / n
+     *   b = (Σy - m·Σx) / n
+     *   → projected = m·atIdx + b
      *
-     * Mỗi swing point đóng góp đều vào slope → ổn định hơn so với vector 2 điểm đầu/cuối
-     * khi tập dữ liệu có nhiễu (râu nến, spike giá đơn lẻ).
-     *
-     * @param  array $points  [['idx' => int, 'price' => float], ...]  đã sắp xếp theo thời gian
-     * @param  int   $atIdx   Bar index cần chiếu giá trị (thường = bar hiện tại)
-     * @return float          Giá trị đường xu hướng tại $atIdx (đơn vị: giá vàng USD/oz)
+     * Mỗi swing point đóng góp đều vào slope → ổn định hơn vector 2 điểm.
      */
     private function linearRegression(array $points, int $atIdx): float
     {
         $n = count($points);
-
-        if ($n === 1) {
-            return round($points[0]['price'], 2);
-        }
+        if ($n === 1) return round($points[0]['price'], 2);
 
         $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumX2 = 0.0;
         foreach ($points as $p) {
@@ -382,21 +320,12 @@ PROMPT;
             $sumX2 += $x * $x;
         }
 
-        // Mẫu số = 0 khi tất cả points cùng bar index (không thể xảy ra trong thực tế)
         $denom = $n * $sumX2 - $sumX * $sumX;
-        if (abs($denom) < 1e-10) {
-            return round($sumY / $n, 2);
-        }
+        if (abs($denom) < 1e-10) return round($sumY / $n, 2);
 
         $slope     = ($n * $sumXY - $sumX * $sumY) / $denom;
         $intercept = ($sumY - $slope * $sumX) / $n;
 
         return round($slope * $atIdx + $intercept, 2);
-    }
-
-    private function flatten(mixed $value): string
-    {
-        if (is_array($value)) return implode(' ', array_map('strval', $value));
-        return (string) $value;
     }
 }

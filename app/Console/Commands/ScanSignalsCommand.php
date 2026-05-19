@@ -10,24 +10,24 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * v4 — Gold/Silver Price Action Terminal Scanner.
+ * v5.3 — Felix Gold Scanner — Pure Math, No AI.
  *
- * Chỉ quét XAUUSD + XAGUSDT.
- * Không tự bắn lệnh — chỉ gửi Telegram để user copy-paste vào Exness.
+ * Luồng phân tích Top-Down:
+ *   H4 (macro bias) → M15 (channel detect) → Entry/TP/SL
+ *
+ * Không có AI scoring. Tín hiệu dựa hoàn toàn vào hình học swing points.
  *
  * Chạy:
- *   php artisan signals:scan --capital=1000 --daily-target=50 --ai-score=70
+ *   php artisan signals:scan --capital=1000 --interval=300
  */
 class ScanSignalsCommand extends Command
 {
     protected $signature = 'signals:scan
-        {--interval=300         : Giây giữa mỗi lần quét (mặc định 5 phút)}
-        {--capital=0            : Vốn tài khoản USD}
-        {--daily-target=50      : Mục tiêu ngày (pips) — đạt rồi khóa máy nghỉ}
-        {--ai-score=70          : Ngưỡng AI score tối thiểu để gửi alert}
-        {--min-compression=0.2  : Bỏ qua kênh nén < giá trị này (0.2 = 20%)}';
+        {--interval=300     : Giây giữa mỗi lần quét (mặc định 5 phút)}
+        {--capital=0        : Vốn tài khoản USD}
+        {--daily-target=50  : Mục tiêu ngày (giá) — đạt rồi khóa máy nghỉ}';
 
-    protected $description = 'v5 — Quét kênh nén/trending Gold/Silver + gửi Telegram setup';
+    protected $description = 'v5.3 — Quét kênh giá Gold/Silver theo hình học thuần túy + Telegram';
 
     private int   $lastScanAt = 0;
     private array $watchlist  = [];
@@ -57,11 +57,11 @@ class ScanSignalsCommand extends Command
         $interval = (int) $this->option('interval');
         $symbols  = implode(', ', array_map(fn($w) => "{$w['symbol']}({$w['timeframe']})", $this->watchlist));
 
-        $this->info("Felix v4 Gold Scanner — {$symbols} — mỗi {$interval}s");
+        $this->info("Felix v5.3 Gold Scanner — {$symbols} — mỗi {$interval}s — Pure Math, No AI");
         $this->telegramService->sendRaw(
-            "🥇 <b>Felix v4 Gold Scanner khởi động</b>\n"
+            "🥇 <b>Felix v5.3 Gold Scanner</b>\n"
             . "Watchlist: <code>{$symbols}</code>\n"
-            . "⏱ Scan mỗi <b>{$interval}s</b> | AI ≥ <b>{$this->option('ai-score')}</b>"
+            . "⏱ Scan mỗi <b>{$interval}s</b> | Phương pháp: Hình học kênh giá ông Quyết"
         );
 
         while (true) {
@@ -98,21 +98,25 @@ class ScanSignalsCommand extends Command
     }
 
     /**
-     * Pipeline quét cho 1 cặp:
-     *   1. Fetch klines từ Binance
-     *   2. detectUnpredictableChannel()
-     *   3. Nếu không có kênh → skip
-     *   4. scoreWithAI() — không chặn nếu AI chậm (fallback score=50)
-     *   5. Nếu AI score ≥ ngưỡng → format + gửi Telegram
+     * Pipeline Top-Down cho 1 cặp:
+     *   1. Check data availability
+     *   2. H4 macro bias (optional, graceful fallback nếu không có data)
+     *   3. M15 channel detection (4 mô hình)
+     *   4. HTF alignment filter
+     *   5. Proximity check (bounce channels)
+     *   6. ATR calculation
+     *   7. Dedup
+     *   8. generateSafeSignal (3 lớp bảo vệ)
+     *   9. Telegram alert
      */
     private function scanGold(string $symbol, string $timeframe): void
     {
-        $ts          = now()->format('H:i:s');
-        $aiThreshold = (int)   $this->option('ai-score');
-        $capital     = (float) $this->option('capital');
+        $ts      = now()->format('H:i:s');
+        $capital = (float) $this->option('capital');
 
+        // ── 1. Kiểm tra data từ MT5 EA ────────────────────────────
         if (!$this->marketData->hasData($symbol, $timeframe)) {
-            $this->warn("[{$ts}] [{$symbol}] Chưa có data từ MT5 EA — chờ EA push");
+            $this->warn("[{$ts}] [{$symbol}] Chưa có data từ EA — chờ EA push");
             return;
         }
 
@@ -124,87 +128,78 @@ class ScanSignalsCommand extends Command
             return;
         }
 
-        // ── 1. Phát hiện kênh nén ──
-        $channel = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 100);
+        // ── 2. Top-Down: HTF bias từ H4 ───────────────────────────
+        // Nếu EA chưa push H4 data → htfBias = null (không lọc hướng)
+        $h4Klines = $this->marketData->getKlines($symbol, '4h', 100);
+        $htfBias  = !empty($h4Klines)
+            ? $this->priceActionService->getHTFBias($h4Klines)
+            : null;
 
-        if (!$channel['is_channel']) {
-            $lh = $channel['lh_count']; $hl = $channel['hl_count'];
-            $this->line("[{$ts}] [{$symbol}] Không có kênh — LH={$lh} HL={$hl} (cần >=1 mỗi loại)");
-            return;
-        }
+        $htfLabel = match ($htfBias) {
+            'LONG'  => '⬆ TĂNG',
+            'SHORT' => '⬇ GIẢM',
+            default => '➡ không rõ / không có data H4',
+        };
+        $this->line("[{$ts}] [{$symbol}] HTF(H4): {$htfLabel}");
 
-        $upper       = $channel['upper'];
-        $lower       = $channel['lower'];
-        $channelType = $channel['type'] ?? 'triangle';
+        // ── 3. M15 Channel Detection (4 mô hình) ─────────────────
+        $channel     = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 100);
+        $channelType = $channel['type'] ?? 'none';
         $channelDir  = $channel['direction'] ?? null;
 
-        // Trending channels: skip compression check, force AI direction
-        if ($channelType === 'descending' || $channelType === 'ascending') {
-            $this->line("[{$ts}] [{$symbol}] Kenh {$channelType} | upper={$upper} lower={$lower}");
+        $lh = $channel['lh_count']; $hl = $channel['hl_count'];
+        $hh = $channel['hh_count']; $ll = $channel['ll_count'];
 
-            // Nguyên lý quét biên: giá phải chạm sát trendline (sai số ≤ 0.5 giá)
-            // để lệnh LIMIT có thể được fill trong phiên hiện tại
-            if ($channelType === 'descending' && $currentPrice < $upper - 0.5) {
-                $minPrice = round($upper - 0.5, 2);
-                $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm upper={$upper} (cần ≥ {$minPrice}) — skip");
-                return;
-            }
-            if ($channelType === 'ascending' && $currentPrice > $lower + 0.5) {
-                $maxPrice = round($lower + 0.5, 2);
-                $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm lower={$lower} (cần ≤ {$maxPrice}) — skip");
-                return;
-            }
-        } else {
-            // Triangle: apply compression filter
-            $minComp = (float) $this->option('min-compression');
-            if ($channel['compression'] < $minComp) {
-                $comp = round($channel['compression'] * 100);
-                $this->line("[{$ts}] [{$symbol}] Kenh nen yeu {$comp}% < " . round($minComp * 100) . "% — skip");
-                return;
-            }
-            $compression = round($channel['compression'] * 100);
-            $this->line("[{$ts}] [{$symbol}] Kenh nen {$compression}% | upper={$upper} lower={$lower}");
+        if (!$channel['is_channel']) {
+            // Log lý do bị loại
+            $reason = match ($channelType) {
+                'expanding'     => "EXPANDING (HH={$hh} LL={$ll}) — Biên mở rộng, NGỒI CHƠI",
+                'triangle_weak' => "TRIANGLE yếu " . round($channel['compression'] * 100) . "% < 50% — chưa đủ nén",
+                default         => "Không có mô hình (LH={$lh} HL={$hl} HH={$hh} LL={$ll})",
+            };
+            $this->line("[{$ts}] [{$symbol}] {$reason}");
+            return;
         }
 
-        // ── 2. Tính ATR ──
+        $upper = $channel['upper'];
+        $lower = $channel['lower'];
+        $this->line("[{$ts}] [{$symbol}] Kênh {$channelType} | upper={$upper} lower={$lower} | LH={$lh} HL={$hl} HH={$hh} LL={$ll}");
+
+        // ── 4. HTF alignment filter ───────────────────────────────
+        // M15 direction PHẢI khớp với H4 macro (nếu H4 có data rõ ràng)
+        // Triangle (dir=null) được chấp nhận bất kể HTF vì đánh cả hai chiều
+        if ($htfBias !== null && $channelDir !== null && $htfBias !== $channelDir) {
+            $this->line("[{$ts}] [{$symbol}] HTF={$htfBias} ngược chiều M15={$channelDir} — skip (top-down filter)");
+            return;
+        }
+
+        // ── 5. Proximity check (Bounce channels) ─────────────────
+        // SELL LIMIT chỉ kích hoạt khi giá đang sát biên trên (± 0.5 giá)
+        // BUY LIMIT chỉ kích hoạt khi giá đang sát biên dưới (± 0.5 giá)
+        if ($channelType === 'descending' && $currentPrice < $upper - 0.5) {
+            $minPx = round($upper - 0.5, 2);
+            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm upper={$upper} (cần ≥ {$minPx}) — chờ quét biên");
+            return;
+        }
+        if ($channelType === 'ascending' && $currentPrice > $lower + 0.5) {
+            $maxPx = round($lower + 0.5, 2);
+            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} chưa chạm lower={$lower} (cần ≤ {$maxPx}) — chờ quét biên");
+            return;
+        }
+
+        // ── 6. ATR ────────────────────────────────────────────────
         $atr = $this->priceActionService->calculateATR($klines, 14);
+        $this->line("[{$ts}] [{$symbol}] ATR(14) = {$atr} giá");
 
-        // ── 3. AI scoring ──
-        $aiResult = $this->priceActionService->scoreWithAI(
-            $symbol, $timeframe, $channel, $atr, $currentPrice, $klines
-        );
-
-        $aiScore     = $aiResult['score'] ?? 0;
-        $aiDirection = $aiResult['breakout_direction'] ?? 'BOTH';
-        $cachedLabel = ($aiResult['cached'] ?? false) ? '[cache]' : '[live]';
-        $this->line("[{$ts}] [{$symbol}] AI={$aiScore}/100 dir={$aiDirection} {$cachedLabel}");
-
-        // Force direction for trending channels regardless of AI
-        if ($channelDir !== null) {
-            $aiDirection = $channelDir;
-        }
-
-        // Trending channels đã có xác nhận cấu trúc → dùng ngưỡng thấp hơn (55 vs 70)
-        $effectiveThreshold = ($channelDir !== null) ? 55 : $aiThreshold;
-        if ($aiScore < $effectiveThreshold) {
-            $this->line("[{$ts}] [{$symbol}] AI {$aiScore} < threshold {$effectiveThreshold} — skip");
-            return;
-        }
-
-        if ($aiDirection === 'WAIT') {
-            $this->line("[{$ts}] [{$symbol}] AI khuyên CHỜ — skip");
-            return;
-        }
-
-        // ── 4. Dedup — tránh spam cùng kênh trong 2 giờ ──
-        $dedupKey = "v4_scan_{$symbol}_{$timeframe}_" . round($upper, 0) . '_' . round($lower, 0);
+        // ── 7. Dedup — cùng kênh chỉ báo 1 lần/2 giờ ─────────────
+        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_" . round($upper, 0) . '_' . round($lower, 0);
         if (Cache::has($dedupKey)) {
-            $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip");
+            $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 2h)");
             return;
         }
         Cache::put($dedupKey, true, now()->addHours(2));
 
-        // ── 5. Generate safe signal — 3 lớp bảo vệ cứng ──
+        // ── 8. Generate safe signal — 3 lớp bảo vệ ──────────────
         try {
             $signals = $this->signalFormatter->generateSafeSignal([
                 'symbol'        => $symbol,
@@ -213,52 +208,49 @@ class ScanSignalsCommand extends Command
                 'atr'           => $atr,
             ], $capital);
         } catch (\RuntimeException $e) {
-            // Vốn không đủ để gánh SL — log và skip, không phát alert
-            $this->warn("[{$ts}] [{$symbol}] ❌ Vốn không đủ: " . $e->getMessage());
+            // Vốn không đủ — log, không phát Telegram, xóa dedup để thử lại sau
+            Cache::forget($dedupKey);
+            $this->warn("[{$ts}] [{$symbol}] ❌ {$e->getMessage()}");
             return;
         }
 
         if ($signals === null) {
-            $this->line("[{$ts}] [{$symbol}] Setup bị hủy — R:R < 1:1 hoặc lệnh mâu thuẫn entry/price");
+            Cache::forget($dedupKey);
+            $this->line("[{$ts}] [{$symbol}] Setup không đạt: R:R < 1 hoặc entry mâu thuẫn giá — skip");
             return;
         }
 
+        // ── 9. Format + Send Telegram ─────────────────────────────
         $msg = $this->signalFormatter->formatTelegramMessage(
-            $symbol, $timeframe, $channel, $signals,
-            $aiResult, $currentPrice, $aiDirection
+            $symbol, $timeframe, $channel, $signals, $currentPrice, $htfBias
         );
-
         $this->telegramService->sendRaw($msg);
 
         $slGia = $signals['sl_gia'];
         $tpGia = $signals['tp_gia'];
         $rr    = $signals['rr'];
         $lot   = $signals['lot'];
-        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi — Score:{$aiScore} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} Lot:{$lot} | dir:{$aiDirection}");
+        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi | {$channelType} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} Lot:{$lot}");
     }
 
     // ──────────────────────────────────────────────────────────────
-    // DAILY TARGET — "1 hiệp trong ngày"
+    // DAILY TARGET
     // ──────────────────────────────────────────────────────────────
 
-    /**
-     * Gọi từ ngoài (TelegramBotCommand hoặc webhook) khi user báo WIN.
-     * Tích lũy pips thắng trong ngày, khóa scan nếu đạt target.
-     */
-    public function recordDailyWin(string $symbol, float $pipsWon): void
+    public function recordDailyWin(string $symbol, float $gainGia): void
     {
         $target  = (float) $this->option('daily-target');
         $key     = $this->dailyKey($symbol);
         $current = (float) Cache::get($key, 0.0);
-        $new     = round($current + $pipsWon, 1);
+        $new     = round($current + $gainGia, 1);
 
         Cache::put($key, $new, now()->endOfDay());
-        $this->line('[' . now()->format('H:i:s') . "] [{$symbol}] Pips hôm nay: {$new} / {$target}");
+        $this->line('[' . now()->format('H:i:s') . "] [{$symbol}] Giá hôm nay: {$new} / {$target}");
 
         if ($new >= $target) {
             $msg = $this->signalFormatter->formatDailyTargetMessage($symbol, $new, $target);
             $this->telegramService->sendRaw($msg);
-            $this->info("[{$symbol}] 🏆 Đạt mục tiêu ngày ({$new} pips) — scan đã khóa đến ngày mai");
+            $this->info("[{$symbol}] 🏆 Đạt mục tiêu ngày ({$new} giá) — scan đã khóa đến ngày mai");
         }
     }
 
@@ -270,6 +262,6 @@ class ScanSignalsCommand extends Command
 
     private function dailyKey(string $symbol): string
     {
-        return 'v4_daily_pips_' . strtoupper($symbol) . '_' . now()->format('Y-m-d');
+        return 'v5_daily_gia_' . strtoupper($symbol) . '_' . now()->format('Y-m-d');
     }
 }

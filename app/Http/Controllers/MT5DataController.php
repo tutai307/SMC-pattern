@@ -163,34 +163,27 @@ class MT5DataController extends Controller
                 continue;
             }
 
-            $channel = $this->priceAction->detectUnpredictableChannel($klines, lookback: 100);
-            $atr     = $this->priceAction->calculateATR($klines, 14);
-
-            $ai = ['score' => 'n/a', 'direction' => 'n/a', 'analysis' => ''];
-            if ($channel['is_channel']) {
-                $ai = $this->priceAction->scoreWithAI($sym, '15m', $channel, $atr, (float)$price, $klines);
-            }
+            $channel  = $this->priceAction->detectUnpredictableChannel($klines, lookback: 100);
+            $atr      = $this->priceAction->calculateATR($klines, 14);
+            $h4Klines = $this->marketData->getKlines($sym, '4h', 100);
+            $htfBias  = !empty($h4Klines) ? $this->priceAction->getHTFBias($h4Klines) : null;
 
             $result[$sym] = [
-                'bars'         => count($klines),
-                'price'        => $price,
-                'atr'          => round($atr, 2),
-                'is_channel'   => $channel['is_channel'],
-                'type'         => $channel['type']        ?? 'none',
-                'direction'    => $channel['direction']   ?? null,
-                'upper'        => $channel['upper']       ?? null,
-                'lower'        => $channel['lower']       ?? null,
-                'compression'  => $channel['compression'] ?? 0,
-                'lh_count'     => $channel['lh_count']    ?? 0,
-                'hl_count'     => $channel['hl_count']    ?? 0,
-                'll_count'     => $channel['ll_count']    ?? 0,
-                'hh_count'     => $channel['hh_count']    ?? 0,
-                'ai_score'     => $ai['score']               ?? 'n/a',
-                'ai_direction' => $ai['breakout_direction']  ?? 'n/a',
-                'ai_analysis'  => $ai['analysis']            ?? '',
-                'ai_cached'    => $ai['cached']              ?? false,
-                'would_fire'   => ($channel['is_channel'] && is_int($ai['score'] ?? null)
-                                    && ($ai['score'] ?? 0) >= (($channel['direction'] ?? null) ? 55 : 70)),
+                'bars'        => count($klines),
+                'price'       => $price,
+                'atr'         => round($atr, 2),
+                'htf_bias'    => $htfBias,
+                'is_channel'  => $channel['is_channel'],
+                'type'        => $channel['type']        ?? 'none',
+                'direction'   => $channel['direction']   ?? null,
+                'upper'       => $channel['upper']       ?? null,
+                'lower'       => $channel['lower']       ?? null,
+                'compression' => $channel['compression'] ?? 0,
+                'lh_count'    => $channel['lh_count']    ?? 0,
+                'hl_count'    => $channel['hl_count']    ?? 0,
+                'll_count'    => $channel['ll_count']    ?? 0,
+                'hh_count'    => $channel['hh_count']    ?? 0,
+                'would_fire'  => $channel['is_channel'],
             ];
         }
 
