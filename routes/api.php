@@ -1,7 +1,17 @@
 <?php
 
 use App\Http\Controllers\MT5DataController;
+use App\Http\Controllers\Api\AutoTradeController;
 use Illuminate\Support\Facades\Route;
+
+// ── Auto Trader — xác thực qua X-Auto-Trade-Token header ────────────────────
+Route::prefix('auto-trade')
+    ->middleware(\App\Http\Middleware\AutoTradeAuth::class)
+    ->group(function () {
+        Route::get('signals',               [AutoTradeController::class, 'pendingSignals']);
+        Route::post('signals/{id}/executed', [AutoTradeController::class, 'markExecuted']);
+        Route::post('signals/{id}/closed',   [AutoTradeController::class, 'markClosed']);
+    });
 
 // MT5 EA data bridge — không cần auth middleware (secret check di trong controller)
 Route::prefix('mt5')->group(function () {

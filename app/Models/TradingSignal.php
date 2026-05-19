@@ -24,6 +24,12 @@ class TradingSignal extends Model
         'capital',
         'filled_at',
         'notified_expiry',
+        'order_type',
+        'lot_size',
+        'is_auto_traded',
+        'auto_traded_at',
+        'mt5_ticket',
+        'mt5_close_price',
     ];
 
     protected $casts = [
@@ -35,5 +41,10 @@ class TradingSignal extends Model
         'notified_expiry'          => 'boolean',
         'capital'                  => 'decimal:2',
         'filled_at'                => 'datetime',
+        'lot_size'                 => 'decimal:4',
+        'is_auto_traded'           => 'boolean',
+        'auto_traded_at'           => 'datetime',
+        'mt5_ticket'               => 'integer',
+        'mt5_close_price'          => 'decimal:8',
     ];
 }
