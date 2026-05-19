@@ -306,22 +306,22 @@ class PriceActionService
      */
     public function calculateATR(array $klines, int $period = 14): float
     {
-        if (count($klines) < $period + 2) return 0.0;
+        $needed = $period + 1;
+        if (count($klines) < $needed) return 0.0;
 
-        $candles = $this->formatCandles($klines);
-        $tr      = [0.0];
+        // Chỉ dùng $period+1 nến gần nhất — đo xung lực thực tế hiện tại
+        // Tránh Wilder smoothing bị kéo lên bởi spike cũ trong 200 nến lịch sử
+        $candles = $this->formatCandles(array_slice($klines, -$needed));
+
+        $trSum = 0.0;
         for ($i = 1; $i < count($candles); $i++) {
             $h  = $candles[$i]['high'];
             $l  = $candles[$i]['low'];
             $pc = $candles[$i - 1]['close'];
-            $tr[] = max($h - $l, abs($h - $pc), abs($l - $pc));
+            $trSum += max($h - $l, abs($h - $pc), abs($l - $pc));
         }
 
-        $atr = array_sum(array_slice($tr, 1, $period)) / $period;
-        for ($i = $period + 1; $i < count($tr); $i++) {
-            $atr = ($atr * ($period - 1) + $tr[$i]) / $period;
-        }
-        return round($atr, 4);
+        return round($trSum / $period, 4);
     }
 
     // ──────────────────────────────────────────────────────────────

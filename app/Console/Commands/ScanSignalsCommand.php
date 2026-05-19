@@ -233,11 +233,16 @@ class ScanSignalsCommand extends Command
             'SHORT' => 'thuận xu hướng H4 GIẢM',
             default => 'H4 không rõ — trade 2 chiều',
         };
+        $reason = match ($channelType) {
+            'descending' => "Whale quét râu đỉnh kênh giảm, đón pullback xuống ({$h4Align})",
+            'ascending'  => "Whale quét râu đáy kênh tăng, đón bounce lên ({$h4Align})",
+            default      => "Phá vỡ Tam giác nén M15, {$h4Align}",
+        };
         $analysis = [
             'w1'     => $w1Bias,
             'd1'     => $d1Bias,
             'h4'     => $h4Label,
-            'reason' => "Phá vỡ Tam giác nén M15, {$h4Align}",
+            'reason' => $reason,
         ];
         $msg = $this->signalFormatter->formatTelegramMessage(
             $symbol, $timeframe, $channel, $signals, $currentPrice, $analysis

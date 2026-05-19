@@ -223,25 +223,17 @@ class SignalFormatterService
      *   BUY LIMIT:  Entry PHẢI < CurrentPrice  (chờ pullback về)
      *   SELL LIMIT: Entry PHẢI > CurrentPrice  (chờ hồi phục lên)
      *
-     * Nếu sai → auto-correct STOP ↔ LIMIT (giữ hướng BUY/SELL).
-     * Vẫn sai sau correct (logic phá vỡ chiến thuật) → null.
+     * Không auto-correct: sai entry position → reject (null).
+     * Triangle STOP sai vị trí = giá đã phá vỡ rồi → tín hiệu lỗi thời, bỏ qua.
+     * Bounce LIMIT sai vị trí = trendline đã bị phá → không còn setup hợp lệ.
      */
     private function validateAndCorrectOrder(array $order, float $currentPrice): ?array
     {
-        // entry PHẢI CAO HƠN currentPrice với các loại lệnh này
         $mustBeAbove = [
-            'BUY_STOP'   => true,
-            'SELL_LIMIT' => true,
-            'BUY_LIMIT'  => false,
-            'SELL_STOP'  => false,
-        ];
-
-        // Đổi cơ chế chờ khi entry vs price bị ngược (giữ hướng BUY/SELL)
-        $counterpart = [
-            'BUY_STOP'   => 'BUY_LIMIT',
-            'BUY_LIMIT'  => 'BUY_STOP',
-            'SELL_STOP'  => 'SELL_LIMIT',
-            'SELL_LIMIT' => 'SELL_STOP',
+            'BUY_STOP'   => true,   // entry trên giá → chờ breakout lên
+            'SELL_LIMIT' => true,   // entry trên giá → chờ hồi phục lên chặn râu
+            'BUY_LIMIT'  => false,  // entry dưới giá → chờ quét râu xuống
+            'SELL_STOP'  => false,  // entry dưới giá → chờ breakdown xuống
         ];
 
         $side  = $order['side'];
@@ -251,16 +243,12 @@ class SignalFormatterService
 
         $entryIsAbove = $entry > $currentPrice;
 
-        // ✓ Logic đúng — giữ nguyên
-        if ($mustBeAbove[$side] === $entryIsAbove) return $order;
+        if ($mustBeAbove[$side] !== $entryIsAbove) {
+            \Log::warning("Signal rejected (stale): {$side}@{$entry} vs price={$currentPrice}");
+            return null;
+        }
 
-        // ✗ Logic sai → auto-correct sang counterpart
-        $correctedSide = $counterpart[$side] ?? null;
-        if ($correctedSide === null) return null;
-
-        \Log::info("OrderType corrected: {$side}@{$entry} → {$correctedSide} (price={$currentPrice})");
-
-        return array_merge($order, ['side' => $correctedSide, 'auto_corrected' => true]);
+        return $order;
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -289,7 +277,10 @@ class SignalFormatterService
         $lower       = $channel['lower'];
         $lhCount     = $channel['lh_count'] ?? 0;
         $hlCount     = $channel['hl_count'] ?? 0;
+        $hhCount     = $channel['hh_count'] ?? 0;
+        $llCount     = $channel['ll_count'] ?? 0;
         $compression = round(($channel['compression'] ?? 0) * 100);
+        $channelType = $channel['type'] ?? 'triangle';
 
         $lot   = $signals['lot'];
         $slGia = $signals['sl_gia'];
@@ -302,22 +293,38 @@ class SignalFormatterService
         $w1     = $analysis['w1']     ?? 'không rõ';
         $d1     = $analysis['d1']     ?? 'không rõ';
         $h4     = $analysis['h4']     ?? 'không rõ';
-        $reason = $analysis['reason'] ?? 'Phá vỡ Tam giác nén M15';
 
-        $m15Pattern = "{$lhCount} đỉnh LH + {$hlCount} đáy HL → Tam Giác Nén {$compression}%";
+        // Label và reason tách biệt theo từng bài đánh
+        [$header, $m15Pattern, $channelBlock, $reason] = match ($channelType) {
+            'descending' => [
+                "📉 <b>VÀNG SELL LIMIT — Chặn Râu Đỉnh</b>",
+                "{$lhCount} đỉnh LH + {$llCount} đáy LL → Kênh Giảm Song Song",
+                "📉 Kênh Giảm Song Song  (LH:{$lhCount} · LL:{$llCount})\n"
+                    . "   🏔 Upper (đỉnh kênh): <code>{$upper}</code>\n"
+                    . "   ⛰ Lower (đáy kênh) : <code>{$lower}</code>",
+                $analysis['reason'] ?? 'Whale quét râu đỉnh kênh giảm, đón pullback xuống',
+            ],
+            'ascending' => [
+                "📈 <b>VÀNG BUY LIMIT — Chặn Râu Đáy</b>",
+                "{$hhCount} đỉnh HH + {$hlCount} đáy HL → Kênh Tăng Song Song",
+                "📈 Kênh Tăng Song Song  (HH:{$hhCount} · HL:{$hlCount})\n"
+                    . "   🏔 Upper (đỉnh kênh): <code>{$upper}</code>\n"
+                    . "   ⛰ Lower (đáy kênh) : <code>{$lower}</code>",
+                $analysis['reason'] ?? 'Whale quét râu đáy kênh tăng, đón bounce lên',
+            ],
+            default => [
+                "🥇 <b>VÀNG BREAKOUT SETUP — Tam Giác Nén</b>",
+                "{$lhCount} đỉnh LH + {$hlCount} đáy HL → Tam Giác Nén {$compression}%",
+                "🗜 Tam Giác Nén {$compression}%  (LH:{$lhCount} · HL:{$hlCount})\n"
+                    . "   🏔 Upper : <code>{$upper}</code>   ⛰ Lower : <code>{$lower}</code>",
+                $analysis['reason'] ?? 'Phá vỡ Tam giác nén M15',
+            ],
+        };
 
         $ordersSection = '';
         foreach ($signals['orders'] as $order) {
-            $note           = ($order['auto_corrected'] ?? false) ? '  <i>↺ tự điều chỉnh</i>' : '';
-            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia, $atr) . $note . "\n";
+            $ordersSection .= $this->formatOrderBlock($order, $tpGia, $slGia, $atr) . "\n";
         }
-
-        $channelType = $channel['type'] ?? 'triangle';
-        $header = match ($channelType) {
-            'descending' => "📉 <b>VÀNG SELL LIMIT — Chặn Râu Đỉnh</b>",
-            'ascending'  => "📈 <b>VÀNG BUY LIMIT — Chặn Râu Đáy</b>",
-            default      => "🥇 <b>VÀNG BREAKOUT SETUP</b>",
-        };
 
         return "{$header} — {$symbol} {$timeframe}  <i>{$time}</i>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
@@ -328,13 +335,12 @@ class SignalFormatterService
             . "  ├ [M15 Mẫu]     {$m15Pattern}\n"
             . "  └ [Lý do lệnh] {$reason}\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "🗜 Tam Giác Nén {$compression}%  (LH:{$lhCount} · HL:{$hlCount})\n"
-            . "   🏔 Upper : <code>{$upper}</code>   ⛰ Lower : <code>{$lower}</code>\n"
+            . "{$channelBlock}\n"
             . "   💰 Giá hiện tại : <code>{$currentPrice}</code>\n"
             . "━━━━━━━━━━━━━━━━━━━━\n"
             . $ordersSection
             . "━━━━━━━━━━━━━━━━━━━━\n"
-            . "📐 ATR(14): {$atr} giá ({$this->atrLabel($atr)})  |  SL cố định: {$slGia} giá\n"
+            . "📐 ATR(14)M15: {$atr} giá ({$this->atrLabel($atr)})  |  SL cố định: {$slGia} giá\n"
             . "💼 Lot: <b>{$lot}</b>  |  ❌ SL rủi ro: -\${$slUsd}";
     }
 
