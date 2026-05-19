@@ -20,8 +20,8 @@ namespace App\Services;
  */
 class SignalFormatterService
 {
-    // Entry buffer — bắt buộc giá phá và chạy ≥ 1.0 giá mới lên tàu (chống fakeout)
-    private const BUF_GIA  = 1.0;
+    // Entry buffer — râu nến 1.5 giá để tránh fakeout cạn (v5.6)
+    private const BUF_GIA  = 1.5;
 
     // SL cố định — 2.0 giá từ điểm entry (bảo vệ tài khoản Cent)
     private const SL_GIA        = 2.0;
