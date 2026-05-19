@@ -237,11 +237,14 @@ class MT5DataController extends Controller
         $tf  = $this->marketData->normalizeTimeframe($timeframe);
         $key = "mt5_bulk_{$sym}_{$tf}";
 
-        // Merge với batch cũ → dedup theo timestamp → sort tăng dần
+        // Merge với batch cũ → dedup theo M15 boundary → sort tăng dần
+        // Normalize: round ts về boundary 15 phút (900_000 ms) để tránh off-by-1s từ EA
         $existing = \Cache::get($key, []);
         $byTs     = [];
         foreach (array_merge($existing, $newBatch) as $bar) {
-            $byTs[(int)$bar[0]] = $bar;
+            $ts15 = intdiv((int)$bar[0], 900000) * 900000;
+            $bar[0] = $ts15;
+            $byTs[$ts15] = $bar;
         }
         ksort($byTs);
         $merged = array_values($byTs);

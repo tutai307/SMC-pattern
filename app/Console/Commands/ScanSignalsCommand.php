@@ -199,7 +199,8 @@ class ScanSignalsCommand extends Command
         $this->line("[{$ts}] [{$symbol}] ATR(14) = {$atr} giá");
 
         // ── 7. Dedup — cùng kênh chỉ báo 1 lần/8 giờ ─────────────
-        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_{$channelType}_" . round($upper, 0) . '_' . round($lower, 0);
+        // Round về band 25-giá: OLS drift ~0.7/bar × 32 bars = 22 giá → band 25 ổn định suốt 8h dedup
+        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_{$channelType}_" . (round($upper / 25) * 25) . '_' . (round($lower / 25) * 25);
         if (Cache::has($dedupKey)) {
             $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 8h)");
             return;

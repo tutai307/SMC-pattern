@@ -17,7 +17,7 @@ namespace App\Services;
 class PriceActionService
 {
     // Nén tối thiểu để Tam Giác được coi là hội tụ đủ mạnh (Kênh cháy loại 2 hợp lệ)
-    private const MIN_TRIANGLE_COMPRESSION = 0.50;  // 50%
+    private const MIN_TRIANGLE_COMPRESSION = 0.20;  // 20% — bẫy sớm khi có LH+HL dù chưa nén chặt
 
     // Độ rộng kênh tối thiểu so với giá giữa (tránh kênh quá hẹp)
     private const MIN_CHANNEL_WIDTH_RATIO = 0.0015; // 0.15%
@@ -112,50 +112,14 @@ class PriceActionService
             return array_merge($empty, $counts, ['type' => 'expanding']);
         }
 
-        // ── Ưu tiên 2: Descending — v5.5 RE-ENABLED (sweep-catch SELL LIMIT)
-        // LH (đỉnh thấp dần) + LL (đáy thấp dần) → kênh giảm song song
-        // Bài: chờ whale chọc râu vượt đỉnh kênh rồi cắn SELL LIMIT để đón đầu pullback
+        // ── Ưu tiên 2: Descending — DISABLED v5.6 (backtest WR 39.5%, lỗ $117)
         if ($lhCount >= 1 && $llCount >= 1 && $hlCount < 1) {
-            $upperChain = array_slice($highs, count($highs) - 1 - $lhCount, $lhCount + 1);
-            $lowerChain = array_slice($lows,  count($lows)  - 1 - $llCount, $llCount + 1);
-            $projU = $this->linearRegression($upperChain, $currentIdx);
-            $projL = $this->linearRegression($lowerChain, $currentIdx);
-
-            if ($projU <= $projL || !$this->isChannelWideEnough($projU, $projL)) {
-                return array_merge($empty, $counts, ['type' => 'descending']);
-            }
-
-            return array_merge($counts, [
-                'is_channel'  => true,
-                'upper'       => $projU,
-                'lower'       => $projL,
-                'compression' => 0.0,
-                'type'        => 'descending',
-                'direction'   => 'SHORT',
-            ]);
+            return array_merge($empty, $counts, ['type' => 'descending']);
         }
 
-        // ── Ưu tiên 3: Ascending — v5.5 RE-ENABLED (sweep-catch BUY LIMIT)
-        // HH (đỉnh cao dần) + HL (đáy cao dần) → kênh tăng song song
-        // Bài: chờ whale chọc râu thủng đáy kênh rồi cắn BUY LIMIT để đón đầu bounce
+        // ── Ưu tiên 3: Ascending — DISABLED v5.6 (backtest WR 42.9%, lỗ $70)
         if ($hhCount >= 1 && $hlCount >= 1 && $lhCount < 1) {
-            $upperChain = array_slice($highs, count($highs) - 1 - $hhCount, $hhCount + 1);
-            $lowerChain = array_slice($lows,  count($lows)  - 1 - $hlCount, $hlCount + 1);
-            $projU = $this->linearRegression($upperChain, $currentIdx);
-            $projL = $this->linearRegression($lowerChain, $currentIdx);
-
-            if ($projU <= $projL || !$this->isChannelWideEnough($projU, $projL)) {
-                return array_merge($empty, $counts, ['type' => 'ascending']);
-            }
-
-            return array_merge($counts, [
-                'is_channel'  => true,
-                'upper'       => $projU,
-                'lower'       => $projL,
-                'compression' => 0.0,
-                'type'        => 'ascending',
-                'direction'   => 'LONG',
-            ]);
+            return array_merge($empty, $counts, ['type' => 'ascending']);
         }
 
         // ── Ưu tiên 4: Tam Giác Nén ── BUY STOP + SELL STOP (Kênh cháy loại 2 hợp lệ)
@@ -219,12 +183,34 @@ class PriceActionService
         $lookback = min(50, $n - 6);
         if ($lookback < 2) return null;
 
+        // Bước 1: thử channel detection (Triangle H4 → null = không lọc)
         $channel = $this->detectUnpredictableChannel($h4Klines, lookback: $lookback);
+        if ($channel['is_channel'] && $channel['direction'] !== null) {
+            return $channel['direction'];
+        }
 
-        if (!$channel['is_channel']) return null;
+        // Bước 2: fallback EMA(20) H4 — bắt trend mạnh mà không tạo swing rõ ràng
+        // Thị trường trending = giá nằm hẳn 1 phía EMA và EMA đang nghiêng
+        $slice   = array_slice($h4Klines, -20);
+        $candles = $this->formatCandles($slice);
+        $closes  = array_column($candles, 'close');
+        $period  = 20;
+        $ema     = $closes[0];
+        foreach ($closes as $c) {
+            $ema = ($ema * ($period - 1) + $c) / $period;
+        }
+        $lastClose  = end($closes);
+        $firstClose = $closes[0];
+        $slope      = $lastClose - $firstClose; // dương = tăng, âm = giảm
 
-        // Triangle trên H4 = không rõ macro → không lọc hướng M15
-        return $channel['direction'];
+        // Chỉ xác nhận khi: giá nằm 1 phía EMA + slope rõ ràng (> 0.1% range)
+        $range = max(array_column($candles, 'high')) - min(array_column($candles, 'low'));
+        $slopeThreshold = $range * 0.05; // 5% of H4 range
+
+        if ($lastClose < $ema && $slope < -$slopeThreshold) return 'SHORT';
+        if ($lastClose > $ema && $slope >  $slopeThreshold) return 'LONG';
+
+        return null; // không rõ → cho qua 2 chiều
     }
 
     /**

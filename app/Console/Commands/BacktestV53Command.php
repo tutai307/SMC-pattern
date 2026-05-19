@@ -204,10 +204,11 @@ class BacktestV53Command extends Command
 
             $channelDir = $channel['direction'] ?? null;
 
-            // ── E. HTF alignment filter ────────────────────────────
-            if ($htfBias !== null && $channelDir !== null && $htfBias !== $channelDir) {
-                continue;
-            }
+            // ── E. HTF alignment filter — THUẬN TREND, nghịch thiên thì chết ──
+            // H4 SHORT → chỉ cho SELL. H4 LONG → chỉ cho BUY. H4 null → 2 chiều.
+            // Bounce channel ngược H4 → skip toàn bộ
+            if ($htfBias === 'SHORT' && $channelDir === 'LONG') continue;
+            if ($htfBias === 'LONG'  && $channelDir === 'SHORT') continue;
 
             // ── F. Proximity check — giá phải sát biên kênh ≤ 2.0 giá
             if ($channelType === 'descending' && $barClose < $channel['upper'] - 2.0) continue;
@@ -216,13 +217,26 @@ class BacktestV53Command extends Command
             // ── G. ATR + build signals ─────────────────────────────
             $atr     = $pa->calculateATR($window, 14);
             $signals = $sf->buildSignals($symbol, $channel, $capital, $atr);
-            if ($signals === null) continue; // R:R < 1:1
+            if ($signals === null) continue;
+
+            // ── G2. H4 order-level filter — lọc từng lệnh theo chiều H4 ──
+            // H4 SHORT → xóa mọi BUY_STOP / BUY_LIMIT khỏi danh sách
+            // H4 LONG  → xóa mọi SELL_STOP / SELL_LIMIT khỏi danh sách
+            if ($htfBias !== null) {
+                $signals['orders'] = array_values(array_filter(
+                    $signals['orders'],
+                    fn($o) => $htfBias === 'SHORT'
+                        ? str_starts_with($o['side'], 'SELL')
+                        : str_starts_with($o['side'], 'BUY')
+                ));
+                if (empty($signals['orders'])) continue;
+            }
 
             // ── H. Report window gate — chỉ đặt lệnh trong from/to ──
             if ($reportFrom && $barTs < $reportFrom) continue;
             if ($reportTo   && $barTs > $reportTo)   continue;
 
-            // ── H2. Dedup ──────────────────────────────────────────
+            // ── H2. Dedup — lệch 1 giá = trendline mới, kích hoạt lại ──
             $fp = $channelType . '_' . round($channel['upper'], 0) . '_' . round($channel['lower'], 0);
             if (isset($channelDedup[$fp]) && $i - $channelDedup[$fp] < $dedupBars) continue;
             $channelDedup[$fp] = $i;

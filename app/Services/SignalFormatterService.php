@@ -3,15 +3,15 @@
 namespace App\Services;
 
 /**
- * v5.4 — Signal Generator + Formatter cho XAUUSD.
+ * v5.6 — Signal Generator + Formatter cho XAUUSD.
  *
  * ĐƠN VỊ CHUẨN XAUUSD (đồng bộ biểu đồ MT5):
  *   1 Giá = $1.00 di chuyển (vd: 4400.00 → 4401.00)
  *   1 Lot Exness XAUUSD = 100 oz → 1 Giá × 1 Lot = $100 P&L
  *
- * Hai bài đánh:
- *   BÀI 1 — Đánh Phá Vỡ (Triangle):  BUY/SELL STOP, TP/SL động theo ATR + channel width
- *   BÀI 2 — Đánh Quét Biên (Bounce): DISABLED v5.4 (backtest WR 13-25%, không đủ lợi nhuận)
+ * Chỉ 1 bài đánh:
+ *   BÀI 1 — Đánh Phá Vỡ (Triangle):  BUY/SELL STOP, TP động theo ATR, SL cố định 2.0 giá
+ *   BÀI 2 — Ascending/Descending:    DISABLED v5.6 (backtest WR 39-43%, lỗ ròng)
  *
  * 3 lớp bảo vệ trong generateSafeSignal():
  *   L1. Survival filter:  SL<=0 hoặc TP<SL → null
@@ -159,41 +159,9 @@ class SignalFormatterService
             return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
                     'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
 
-        } elseif ($channelDir === 'LONG') {
-            // ── BÀI 2: Sweep-Catch BUY LIMIT (Ascending channel) ───
-            // Chờ whale chọc râu thủng đáy kênh 1 giá → cắn BUY LIMIT → đón bounce lên
-            $tpGia  = self::TP_BOUNCE_GIA;   // 1.5 giá cố định
-            $rr     = round($tpGia / $slGia, 2);
-            $lot    = $this->calculateExnessLot($capital, $slGia);
-
-            $entry  = round($channel['lower'] - $bufGia, $dec);  // 1.0 giá dưới đáy kênh
-            $orders = [[
-                'side'  => 'BUY_LIMIT',
-                'entry' => $entry,
-                'tp'    => round($entry + $tpGia, $dec),
-                'sl'    => round($entry - $slGia, $dec),
-            ]];
-
-            return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
-                    'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
-
         } else {
-            // ── BÀI 3: Sweep-Catch SELL LIMIT (Descending channel) ─
-            // Chờ whale chọc râu vượt đỉnh kênh 1 giá → cắn SELL LIMIT → đón pullback xuống
-            $tpGia  = self::TP_BOUNCE_GIA;   // 1.5 giá cố định
-            $rr     = round($tpGia / $slGia, 2);
-            $lot    = $this->calculateExnessLot($capital, $slGia);
-
-            $entry  = round($channel['upper'] + $bufGia, $dec);  // 1.0 giá trên đỉnh kênh
-            $orders = [[
-                'side'  => 'SELL_LIMIT',
-                'entry' => $entry,
-                'tp'    => round($entry - $tpGia, $dec),
-                'sl'    => round($entry + $slGia, $dec),
-            ]];
-
-            return ['orders' => $orders, 'sl_gia' => $slGia, 'tp_gia' => $tpGia,
-                    'rr' => $rr, 'lot' => $lot, 'atr' => round($atr, 2)];
+            // Ascending/Descending DISABLED v5.6 — không phát tín hiệu bounce
+            return null;
         }
     }
 
