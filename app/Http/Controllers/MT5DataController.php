@@ -194,6 +194,53 @@ class MT5DataController extends Controller
     }
 
     // ──────────────────────────────────────────────────────────────
+    // POST /api/mt5/bulk-klines  — import lịch sử cho backtest
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Nhận và tích lũy lịch sử klines từ FelixBulkExporter.mq5.
+     * Gọi nhiều lần (chunked) → merge + dedup theo timestamp → lưu 7 ngày.
+     * Backtest đọc qua key: mt5_bulk_{SYMBOL}_{TF}
+     */
+    public function receiveBulkKlines(Request $request): JsonResponse
+    {
+        if (!$this->verifySecret($request)) {
+            return response()->json(['error' => 'unauthorized'], 401);
+        }
+
+        $symbol    = $request->input('symbol', '');
+        $timeframe = $request->input('timeframe', '');
+        $newBatch  = $request->input('klines', []);
+
+        if (!$symbol || !$timeframe || empty($newBatch)) {
+            return response()->json(['error' => 'missing symbol/timeframe/klines'], 422);
+        }
+
+        $sym = $this->marketData->normalizeSymbol($symbol);
+        $tf  = $this->marketData->normalizeTimeframe($timeframe);
+        $key = "mt5_bulk_{$sym}_{$tf}";
+
+        // Merge với batch cũ → dedup theo timestamp → sort tăng dần
+        $existing = \Cache::get($key, []);
+        $byTs     = [];
+        foreach (array_merge($existing, $newBatch) as $bar) {
+            $byTs[(int)$bar[0]] = $bar;
+        }
+        ksort($byTs);
+        $merged = array_values($byTs);
+
+        \Cache::put($key, $merged, now()->addDays(7));
+
+        return response()->json([
+            'ok'        => true,
+            'symbol'    => $sym,
+            'tf'        => $tf,
+            'total_bars'=> count($merged),
+            'new_bars'  => count($newBatch),
+        ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────
     // GET /api/mt5/ping-telegram  — kiểm tra Telegram có hoạt động không
     // ──────────────────────────────────────────────────────────────
 
