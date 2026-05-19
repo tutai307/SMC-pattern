@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\BinanceService;
 use App\Services\PriceActionService;
 use App\Services\SignalFormatterService;
 use Illuminate\Console\Command;
@@ -25,11 +26,14 @@ class BacktestV53Command extends Command
 {
     protected $signature = 'backtest:v53
         {--symbol=XAUUSDT     : Symbol (phải khớp với key mt5_bulk_*)}
+        {--from=2026-05-01    : Ngày bắt đầu (dùng khi --seed)}
+        {--to=2026-05-19      : Ngày kết thúc (dùng khi --seed)}
+        {--seed               : Tự fetch data từ Binance Futures nếu cache trống}
         {--capital=100        : Vốn USD — dùng để tính lot 2% cố định}
         {--expiry-bars=16     : Hủy lệnh pending sau N nến M15 không khớp}
         {--lookback=100       : Lookback channel detection (nến M15)}
         {--htf-lookback=50    : Lookback H4 cho HTF bias}
-        {--dedup-bars=8       : Dedup: cùng kênh không trade lại trong N bars}
+        {--dedup-bars=32      : Dedup: cùng kênh không trade lại trong N bars}
         {--scan-every=1       : Quét channel mỗi N bars (1=mỗi bar, 3=mỗi 45p)}';
 
     protected $description = 'Backtest v5.3 — 4-kênh hình học, không AI, dữ liệu từ MT5';
@@ -37,6 +41,7 @@ class BacktestV53Command extends Command
     public function handle(
         PriceActionService    $pa,
         SignalFormatterService $sf,
+        BinanceService        $binance,
     ): int {
         $symbol      = strtoupper($this->option('symbol'));
         $capital     = (float) $this->option('capital');
@@ -46,18 +51,23 @@ class BacktestV53Command extends Command
         $dedupBars   = (int)   $this->option('dedup-bars');
         $scanEvery   = (int)   $this->option('scan-every');
 
-        // ── Load M15 data ──────────────────────────────────────────
-        $m15Key    = "mt5_bulk_{$symbol}_15m";
-        $m15Klines = Cache::get($m15Key, []);
+        $m15Key = "mt5_bulk_{$symbol}_15m";
+        $h4Key  = "mt5_bulk_{$symbol}_4h";
 
+        // ── Seed từ Binance nếu cache trống ───────────────────────
+        if ($this->option('seed') && count(Cache::get($m15Key, [])) < $lookback + 20) {
+            $this->seedFromBinance($binance, $symbol, $m15Key, $h4Key);
+        }
+
+        // ── Load M15 data ──────────────────────────────────────────
+        $m15Klines = Cache::get($m15Key, []);
         if (count($m15Klines) < $lookback + 20) {
             $this->error("Chưa có data M15 (key: {$m15Key}, bars: " . count($m15Klines) . ")");
-            $this->line("Chạy FelixBulkExporter.mq5 trên MT5 rồi thử lại.");
+            $this->line("Dùng --seed để tự fetch, hoặc chạy FelixBulkExporter.mq5 trên MT5.");
             return 1;
         }
 
         // ── Load H4 data ───────────────────────────────────────────
-        $h4Key    = "mt5_bulk_{$symbol}_4h";
         $h4Klines = Cache::get($h4Key, []);
         $hasH4    = count($h4Klines) >= $htfLookback;
 
@@ -157,8 +167,10 @@ class BacktestV53Command extends Command
             if ($i % $scanEvery !== 0) continue;
 
             // ── C. Channel detection ───────────────────────────────
-            $window = array_slice($m15Klines, max(0, $i + 1 - $lookback), $lookback);
-            if (count($window) < $lookback) continue;
+            // detectUnpredictableChannel cần count >= lookback+6
+            $winSize = $lookback + 6;
+            $window  = array_slice($m15Klines, max(0, $i + 1 - $winSize), $winSize);
+            if (count($window) < $winSize) continue;
 
             $channel     = $pa->detectUnpredictableChannel($window, $lookback);
             $channelType = $channel['type'] ?? 'none';
@@ -201,11 +213,11 @@ class BacktestV53Command extends Command
             // ── I. Lot sizing (2% rule, min 0.01) ─────────────────
             $slGia    = $signals['sl_gia'];
             $tpGia    = $signals['tp_gia'];
-            $rawLot   = $capital > 0 && $slGia > 0
+            $rawLot = $capital > 0 && $slGia > 0
                 ? ($capital * 0.02) / ($slGia * 100.0)
                 : 0.0;
-            $lot      = max(0.01, round($rawLot, 2));
-            $forcedMin = $rawLot < 0.01;
+            if ($rawLot < 0.01) continue; // Layer 2 Hard Stop — HỦY lệnh, không clamp
+            $lot = round($rawLot, 2);
 
             $ocoGroup = count($signals['orders']) > 1
                 ? "oco_{$i}"
@@ -221,7 +233,6 @@ class BacktestV53Command extends Command
                     'sl_gia'      => $slGia,
                     'tp_gia'      => $tpGia,
                     'lot'         => $lot,
-                    'forced_min'  => $forcedMin,
                     'placed_bar'  => $i,
                     'placed_ts'   => $barTs,
                     'channel_type'=> $channelType,
@@ -249,6 +260,50 @@ class BacktestV53Command extends Command
 
         $this->printReport($trades, $capital, $symbol, $dateFrom, $dateTo);
         return 0;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // SEED FROM BINANCE (fallback khi không có MT5 data)
+    // ──────────────────────────────────────────────────────────────
+
+    private function seedFromBinance(
+        BinanceService $binance,
+        string $symbol,
+        string $m15Key,
+        string $h4Key,
+    ): void {
+        $from = $this->option('from');
+        $to   = $this->option('to');
+        $this->line("Fetching {$symbol} từ Binance Futures ({$from} → {$to})...");
+
+        $fromMs = strtotime($from) * 1000;
+        // warmup 200 bars × 15m = 3000 phút = 2.08 ngày
+        $warmupMs = 200 * 15 * 60 * 1000;
+        $toMs     = strtotime($to . ' 23:59:59') * 1000;
+
+        foreach ([
+            ['interval' => '15m', 'key' => $m15Key, 'tfMs' => 15 * 60 * 1000],
+            ['interval' => '4h',  'key' => $h4Key,  'tfMs' => 4 * 60 * 60 * 1000],
+        ] as $tf) {
+            $all    = [];
+            $cursor = $fromMs - $warmupMs;
+            $this->output->write("  [{$tf['interval']}] Tải: ");
+            while ($cursor < $toMs) {
+                $batch = $binance->getKlines($symbol, $tf['interval'], 1000, $cursor);
+                if (empty($batch)) break;
+                foreach ($batch as $k) {
+                    if ((int)$k[0] > $toMs) break 2;
+                    $all[] = $k;
+                }
+                $cursor = (int) end($batch)[0] + $tf['tfMs'];
+                $this->output->write('.');
+                usleep(180000);
+            }
+            $this->line(' ' . count($all) . ' bars');
+            if (!empty($all)) {
+                Cache::put($tf['key'], $all, now()->addDays(7));
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -321,7 +376,6 @@ class BacktestV53Command extends Command
             $needed = (int) ceil(0.01 * $t['sl_gia'] * 100 / 0.02);
             $minCapRequired = max($minCapRequired, $needed);
         }
-        $forcedMinCount = count(array_filter($trades, fn($t) => $t['forced_min'] ?? false));
 
         $this->line('');
         $this->info('══════════════════════════════════════════════════════');
@@ -357,15 +411,12 @@ class BacktestV53Command extends Command
             $this->line(sprintf('  [TRIANGLE  ]  %d lệnh  WR %.1f%%  %+.2f giá  %+.2f USD',
                 $tTri['n'], $tTri['wr'], $tTri['gia'], $tTri['usd']));
 
-        // Capital warning
-        if ($forcedMinCount > 0) {
+        // Capital note — min capital for lot >= 0.01
+        if ($minCapRequired > $capital) {
             $this->line('──────────────────────────────────────────────────────');
             $this->warn(sprintf(
-                '  ⚠  %d/%d lệnh dùng lot 0.01 bắt buộc (2%% risk = lot < 0.01).',
-                $forcedMinCount, count($trades)
-            ));
-            $this->warn(sprintf(
-                '     Vốn tối thiểu để giữ đúng 2%% risk: ~$%d', $minCapRequired
+                '  ⚠  Vốn tối thiểu để giữ đúng 2%% risk: ~$%d (hiện tại: $%.0f)',
+                $minCapRequired, $capital
             ));
         }
 

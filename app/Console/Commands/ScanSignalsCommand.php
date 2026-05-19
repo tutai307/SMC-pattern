@@ -195,13 +195,13 @@ class ScanSignalsCommand extends Command
         $atr = $this->priceActionService->calculateATR($klines, 14);
         $this->line("[{$ts}] [{$symbol}] ATR(14) = {$atr} giá");
 
-        // ── 7. Dedup — cùng kênh chỉ báo 1 lần/2 giờ ─────────────
+        // ── 7. Dedup — cùng kênh chỉ báo 1 lần/8 giờ ─────────────
         $dedupKey = "v5_scan_{$symbol}_{$timeframe}_" . round($upper, 0) . '_' . round($lower, 0);
         if (Cache::has($dedupKey)) {
-            $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 2h)");
+            $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 8h)");
             return;
         }
-        Cache::put($dedupKey, true, now()->addHours(2));
+        Cache::put($dedupKey, true, now()->addHours(8));
 
         // ── 8. Generate safe signal — 3 lớp bảo vệ ──────────────
         try {
