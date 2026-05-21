@@ -28,7 +28,8 @@ class ScanSignalsCommand extends Command
         {--daily-target=50  : Mục tiêu ngày (giá) — đạt rồi khóa máy nghỉ}
         {--swing-strength=12 : Fractal bars mỗi bên để confirm MacroSwing}
         {--swing-lookback=100: Số nến M15 tối đa quét Swing}
-        {--lot=0.05          : Lot mỗi lệnh (EA default 0.05)}
+        {--lot=0             : Lot cố định (0 = tự tính theo --capital và --risk-pct)}
+        {--risk-pct=2.0      : % vốn rủi ro mỗi lệnh khi tự tính lot (default 2%)}
         {--fixed-sl=5.0      : SL cố định (giá) từ entry}
         {--entry-buf=1.5     : Buffer trên SwingHigh / dưới SwingLow}
         {--wedge-ratio=0.80  : Wedge convergence ratio}
@@ -125,9 +126,16 @@ class ScanSignalsCommand extends Command
         $swingLook = (int)   $this->option('swing-lookback');
         $entryBuf  = (float) $this->option('entry-buf');
         $fixedSL   = (float) $this->option('fixed-sl');
-        $lot       = (float) $this->option('lot');
         $wedgeRatio= (float) $this->option('wedge-ratio');
         $rr        = (float) $this->option('rr');
+        $capital   = (float) $this->option('capital');
+        $riskPct   = (float) $this->option('risk-pct');
+        $lot       = (float) $this->option('lot');
+        if ($lot <= 0 && $capital > 0) {
+            // Tự tính lot: (capital × risk%) / (SL × 100), min 0.01
+            $lot = max(0.01, round(($capital * $riskPct / 100) / ($fixedSL * 100), 2));
+        }
+        if ($lot <= 0) $lot = 0.01;
 
         $n = count($klines);
         [$sh1, $sh2, $sl1, $sl2] = $this->findFractalSwings($klines, $n - 1, $swingStr, $swingLook);
@@ -162,12 +170,20 @@ class ScanSignalsCommand extends Command
         $this->line("[{$ts}] [{$symbol}] Trend: {$trendReason}");
 
         // ── 4. Tính entry / SL / TP ──────────────────────────────
+        // Dynamic RR theo trend (override --rr nếu không truyền tường minh)
+        $dynamicRR = match(true) {
+            str_contains($trendReason, 'WEDGE')   => 2.5,
+            str_contains($trendReason, 'SIDEWAY') => 1.5,
+            default                                => 2.0, // UPTREND / DOWNTREND
+        };
+        $effectiveRR = $rr !== 3.0 ? $rr : $dynamicRR; // 3.0 = default chưa đổi → dùng dynamic
+
         $entryBuyPrice  = round($sh1 + $entryBuf, 2);
         $entrySellPrice = round($sl1 - $entryBuf, 2);
         $slBuyPrice     = round($entryBuyPrice  - $fixedSL, 2);
         $slSellPrice    = round($entrySellPrice + $fixedSL, 2);
-        $tpBuyPrice     = round($entryBuyPrice  + $fixedSL * $rr, 2);
-        $tpSellPrice    = round($entrySellPrice - $fixedSL * $rr, 2);
+        $tpBuyPrice     = round($entryBuyPrice  + $fixedSL * $effectiveRR, 2);
+        $tpSellPrice    = round($entrySellPrice - $fixedSL * $effectiveRR, 2);
 
         $hasBuy  = $allowBuy  && $entryBuyPrice  > $currentPrice;
         $hasSell = $allowSell && $entrySellPrice < $currentPrice;
@@ -195,7 +211,7 @@ class ScanSignalsCommand extends Command
             $hasSell ? $entrySellPrice : null,
             $hasSell ? $slSellPrice    : null,
             $hasSell ? $tpSellPrice    : null,
-            $trendReason, $lot, $fixedSL, $rr
+            $trendReason, $lot, $fixedSL, $effectiveRR
         );
         $this->telegramService->sendRaw($msg);
 
