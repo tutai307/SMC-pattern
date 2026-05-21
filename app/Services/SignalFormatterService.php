@@ -343,4 +343,89 @@ class SignalFormatterService
             . "✅ Felix đã khóa scan — <i>Nghỉ ngơi, đừng tham!</i>\n"
             . "🔄 Quét lại lúc đầu phiên ngày mai.";
     }
+
+    /**
+     * Format Telegram cho MacroSwing v8.1 (FelixLocalTrader logic).
+     *
+     * @param string      $symbol
+     * @param string      $timeframe
+     * @param float       $currentPrice
+     * @param float       $sh1          SwingHigh gần nhất
+     * @param float       $sh2          SwingHigh cũ hơn (0 = không có)
+     * @param float       $sl1          SwingLow gần nhất
+     * @param float       $sl2          SwingLow cũ hơn (0 = không có)
+     * @param float|null  $entryBuy     null = không có BUY setup
+     * @param float|null  $slBuy
+     * @param float|null  $entrySell    null = không có SELL setup
+     * @param float|null  $slSell
+     * @param string      $trendReason  ví dụ "UPTREND→BUY", "DOWN+WEDGE→BUY"
+     * @param float       $lot
+     * @param float       $fixedSL
+     * @param float       $beTrigger    1.5
+     * @param float       $lockProfit   0.3
+     * @param float       $trailMult    0.30
+     */
+    public function formatMacroSwingMessage(
+        string  $symbol,
+        string  $timeframe,
+        float   $currentPrice,
+        float   $sh1,
+        float   $sh2,
+        float   $sl1,
+        float   $sl2,
+        ?float  $entryBuy,
+        ?float  $slBuy,
+        ?float  $tpBuy,
+        ?float  $entrySell,
+        ?float  $slSell,
+        ?float  $tpSell,
+        string  $trendReason,
+        float   $lot,
+        float   $fixedSL,
+        float   $rr         = 3.0
+    ): string {
+        $time    = now('Asia/Ho_Chi_Minh')->format('H:i d/m');
+        $riskUsd = round($fixedSL * $lot * 100, 2);
+        $winUsd  = round($fixedSL * $rr * $lot * 100, 2);
+        $tpPts   = round($fixedSL * $rr, 1);
+
+        $trendEmoji = match(true) {
+            str_contains($trendReason, 'UPTREND')   => '📈',
+            str_contains($trendReason, 'DOWNTREND') => '📉',
+            str_contains($trendReason, 'WEDGE')     => '🔺',
+            default                                  => '➡',
+        };
+
+        $sh2Str = $sh2 > 0 ? " <i>/ {$sh2}</i>" : '';
+        $sl2Str = $sl2 > 0 ? " <i>/ {$sl2}</i>" : '';
+
+        $msg  = "🥇 <b>FELIX MACRO SWING — {$symbol} {$timeframe}</b>  <i>{$time}</i>\n";
+        $msg .= "━━━━━━━━━━━━━━━━━━━━\n";
+        $msg .= "  🏔 SwingHigh: <code>{$sh1}</code>{$sh2Str}\n";
+        $msg .= "  ⛰ SwingLow : <code>{$sl1}</code>{$sl2Str}\n";
+        $msg .= "  {$trendEmoji} <b>{$trendReason}</b>  |  Giá: <code>{$currentPrice}</code>\n";
+        $msg .= "━━━━━━━━━━━━━━━━━━━━\n";
+
+        if ($entryBuy !== null && $slBuy !== null && $tpBuy !== null) {
+            $msg .= "⬆ <b>BUY STOP</b>\n";
+            $msg .= "  📌 Entry : <code>{$entryBuy}</code>\n";
+            $msg .= "  🎯 TP    : <code>{$tpBuy}</code>  (+{$tpPts} giá / R:R 1:{$rr})\n";
+            $msg .= "  🛡 SL    : <code>{$slBuy}</code>  (-{$fixedSL} giá)\n";
+            $msg .= "  💼 Lot: <b>{$lot}</b>  |  ✅ +\${$winUsd}  ❌ -\${$riskUsd}\n";
+        }
+
+        if ($entrySell !== null && $slSell !== null && $tpSell !== null) {
+            if ($entryBuy !== null) $msg .= "\n";
+            $msg .= "⬇ <b>SELL STOP</b>\n";
+            $msg .= "  📌 Entry : <code>{$entrySell}</code>\n";
+            $msg .= "  🎯 TP    : <code>{$tpSell}</code>  (-{$tpPts} giá / R:R 1:{$rr})\n";
+            $msg .= "  🛡 SL    : <code>{$slSell}</code>  (+{$fixedSL} giá)\n";
+            $msg .= "  💼 Lot: <b>{$lot}</b>  |  ✅ +\${$winUsd}  ❌ -\${$riskUsd}\n";
+        }
+
+        $msg .= "━━━━━━━━━━━━━━━━━━━━\n";
+        $msg .= "⏳ Pending — hết hạn sau 4 giờ nếu không fill";
+
+        return $msg;
+    }
 }

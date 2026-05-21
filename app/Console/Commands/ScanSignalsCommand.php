@@ -25,7 +25,14 @@ class ScanSignalsCommand extends Command
     protected $signature = 'signals:scan
         {--interval=300     : Giây giữa mỗi lần quét (mặc định 5 phút)}
         {--capital=0        : Vốn tài khoản USD}
-        {--daily-target=50  : Mục tiêu ngày (giá) — đạt rồi khóa máy nghỉ}';
+        {--daily-target=50  : Mục tiêu ngày (giá) — đạt rồi khóa máy nghỉ}
+        {--swing-strength=12 : Fractal bars mỗi bên để confirm MacroSwing}
+        {--swing-lookback=100: Số nến M15 tối đa quét Swing}
+        {--lot=0.05          : Lot mỗi lệnh (EA default 0.05)}
+        {--fixed-sl=5.0      : SL cố định (giá) từ entry}
+        {--entry-buf=1.5     : Buffer trên SwingHigh / dưới SwingLow}
+        {--wedge-ratio=0.80  : Wedge convergence ratio}
+        {--rr=3.0            : Risk:Reward cho TP cụ thể (default 3.0 = TP = entry ± SL×3)}';
 
     protected $description = 'v5.3 — Quét kênh giá Gold/Silver theo hình học thuần túy + Telegram';
 
@@ -97,164 +104,106 @@ class ScanSignalsCommand extends Command
         }
     }
 
-    /**
-     * Pipeline Top-Down cho 1 cặp:
-     *   1. Check data availability
-     *   2. H4 macro bias (optional, graceful fallback nếu không có data)
-     *   3. M15 channel detection (4 mô hình)
-     *   4. HTF alignment filter
-     *   5. Proximity check (bounce channels)
-     *   6. ATR calculation
-     *   7. Dedup
-     *   8. generateSafeSignal (3 lớp bảo vệ)
-     *   9. Telegram alert
-     */
     private function scanGold(string $symbol, string $timeframe): void
     {
-        $ts      = now()->format('H:i:s');
-        $capital = (float) $this->option('capital');
+        $ts = now()->format('H:i:s');
 
-        // ── 0. Time filter — phiên Âu+Mỹ 14h-23h HCM ────────────
-        $hhmmHCM = (int) now('Asia/Ho_Chi_Minh')->format('Hi'); // 1430 = 14:30
-        if ($hhmmHCM < 1400 || $hhmmHCM >= 2300) {
-            $this->line("[{$ts}] [{$symbol}] Ngoài phiên Âu+Mỹ (14h-23h HCM) — skip");
-            return;
-        }
-
-        // ── 1. Kiểm tra data từ MT5 EA ────────────────────────────
+        // ── 1. Load klines từ MT5 EA ─────────────────────────────
         if (!$this->marketData->hasData($symbol, $timeframe)) {
             $this->warn("[{$ts}] [{$symbol}] Chưa có data từ EA — chờ EA push");
             return;
         }
-
         $klines       = $this->marketData->getKlines($symbol, $timeframe, 200);
         $currentPrice = (float) ($this->marketData->getPrice($symbol) ?? 0);
-
-        if (empty($klines) || $currentPrice <= 0) {
-            $this->warn("[{$ts}] [{$symbol}] Data trống — EA cần push lại");
+        if (count($klines) < 50 || $currentPrice <= 0) {
+            $this->warn("[{$ts}] [{$symbol}] Data không đủ ({$currentPrice})");
             return;
         }
 
-        // ── 2. Top-Down: W1 / D1 / H4 analysis ───────────────────
-        $h4Klines = $this->marketData->buildH4FromM15($klines);
-        $d1Klines = $this->marketData->buildD1FromM15($klines);
+        // ── 2. MacroSwing detection ───────────────────────────────
+        $swingStr  = (int)   $this->option('swing-strength');
+        $swingLook = (int)   $this->option('swing-lookback');
+        $entryBuf  = (float) $this->option('entry-buf');
+        $fixedSL   = (float) $this->option('fixed-sl');
+        $lot       = (float) $this->option('lot');
+        $wedgeRatio= (float) $this->option('wedge-ratio');
+        $rr        = (float) $this->option('rr');
 
-        $htfBias  = !empty($h4Klines) ? $this->priceActionService->getHTFBias($h4Klines) : null;
-        $w1Bias   = $this->priceActionService->getW1Bias($klines, $currentPrice);
-        $d1Bias   = $this->priceActionService->getD1Bias($d1Klines);
-        $h4Label  = $this->priceActionService->getH4Label($h4Klines);
+        $n = count($klines);
+        [$sh1, $sh2, $sl1, $sl2] = $this->findFractalSwings($klines, $n - 1, $swingStr, $swingLook);
 
-        $htfLabel = match ($htfBias) {
-            'LONG'  => '⬆ TĂNG',
-            'SHORT' => '⬇ GIẢM',
-            default => '➡ không rõ / không có data H4',
-        };
-        $this->line("[{$ts}] [{$symbol}] W1:{$w1Bias} | D1:{$d1Bias} | H4:{$htfLabel}");
+        if ($sh1 <= 0 || $sl1 <= 0) {
+            $this->line("[{$ts}] [{$symbol}] Không tìm được MacroSwing đủ dùng");
+            return;
+        }
+        $this->line("[{$ts}] [{$symbol}] SH={$sh1}/{$sh2} SL={$sl1}/{$sl2}");
 
-        // ── 3. M15 Channel Detection (4 mô hình) ─────────────────
-        $channel     = $this->priceActionService->detectUnpredictableChannel($klines, lookback: 100);
-        $channelType = $channel['type'] ?? 'none';
-        $channelDir  = $channel['direction'] ?? null;
+        // ── 3. Smart Trend & Wedge Filter ────────────────────────
+        $allowBuy = true; $allowSell = true; $trendReason = 'SIDEWAY→BOTH';
+        if ($sh2 > 0 && $sl2 > 0) {
+            $downtrend = ($sh1 < $sh2 && $sl1 < $sl2);
+            $uptrend   = ($sh1 > $sh2 && $sl1 > $sl2);
+            if ($downtrend) {
+                $dH = $sh2 - $sh1; $dL = $sl2 - $sl1;
+                if ($dH > 0 && $dL < $dH * $wedgeRatio) {
+                    $allowBuy = true; $allowSell = false; $trendReason = 'DOWN+FALLING_WEDGE→BUY';
+                } else {
+                    $allowBuy = false; $allowSell = true; $trendReason = 'DOWNTREND→SELL';
+                }
+            } elseif ($uptrend) {
+                $dH = $sh1 - $sh2; $dL = $sl1 - $sl2;
+                if ($dH > 0 && $dH < $dL * $wedgeRatio) {
+                    $allowBuy = false; $allowSell = true; $trendReason = 'UP+RISING_WEDGE→SELL';
+                } else {
+                    $allowBuy = true; $allowSell = false; $trendReason = 'UPTREND→BUY';
+                }
+            }
+        }
+        $this->line("[{$ts}] [{$symbol}] Trend: {$trendReason}");
 
-        $lh = $channel['lh_count']; $hl = $channel['hl_count'];
-        $hh = $channel['hh_count']; $ll = $channel['ll_count'];
+        // ── 4. Tính entry / SL / TP ──────────────────────────────
+        $entryBuyPrice  = round($sh1 + $entryBuf, 2);
+        $entrySellPrice = round($sl1 - $entryBuf, 2);
+        $slBuyPrice     = round($entryBuyPrice  - $fixedSL, 2);
+        $slSellPrice    = round($entrySellPrice + $fixedSL, 2);
+        $tpBuyPrice     = round($entryBuyPrice  + $fixedSL * $rr, 2);
+        $tpSellPrice    = round($entrySellPrice - $fixedSL * $rr, 2);
 
-        if (!$channel['is_channel']) {
-            // Log lý do bị loại
-            $reason = match ($channelType) {
-                'expanding'     => "EXPANDING (HH={$hh} LL={$ll}) — Biên mở rộng, NGỒI CHƠI",
-                'triangle_weak' => "TRIANGLE yếu " . round($channel['compression'] * 100) . "% < 50% — chưa đủ nén",
-                default         => "Không có mô hình (LH={$lh} HL={$hl} HH={$hh} LL={$ll})",
-            };
-            $this->line("[{$ts}] [{$symbol}] {$reason}");
+        $hasBuy  = $allowBuy  && $entryBuyPrice  > $currentPrice;
+        $hasSell = $allowSell && $entrySellPrice < $currentPrice;
+
+        if (!$hasBuy && !$hasSell) {
+            $this->line("[{$ts}] [{$symbol}] Breakout đã qua hoặc bị filter — không có setup hợp lệ");
             return;
         }
 
-        $upper = $channel['upper'];
-        $lower = $channel['lower'];
-        $this->line("[{$ts}] [{$symbol}] Kênh {$channelType} | upper={$upper} lower={$lower} | LH={$lh} HL={$hl} HH={$hh} LL={$ll}");
-
-        // ── 4. HTF alignment filter ───────────────────────────────
-        // M15 direction PHẢI khớp với H4 macro (nếu H4 có data rõ ràng)
-        // Triangle (dir=null) được chấp nhận bất kể HTF vì đánh cả hai chiều
-        if ($htfBias !== null && $channelDir !== null && $htfBias !== $channelDir) {
-            $this->line("[{$ts}] [{$symbol}] HTF={$htfBias} ngược chiều M15={$channelDir} — skip (top-down filter)");
-            return;
-        }
-
-        // ── 5. Proximity check — chỉ alert khi giá sát biên cần sweep (≤ 2.0 giá)
-        // SELL LIMIT tại upper+1.0 → cần price đang ≥ upper-2.0 (sắp chọc râu)
-        // BUY LIMIT tại lower-1.0  → cần price đang ≤ lower+2.0 (sắp chọc râu)
-        if ($channelType === 'descending' && $currentPrice < $upper - 2.0) {
-            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} còn cách upper={$upper} quá xa — chờ tiếp cận");
-            return;
-        }
-        if ($channelType === 'ascending' && $currentPrice > $lower + 2.0) {
-            $this->line("[{$ts}] [{$symbol}] Giá {$currentPrice} còn cách lower={$lower} quá xa — chờ tiếp cận");
-            return;
-        }
-
-        // ── 6. ATR ────────────────────────────────────────────────
-        $atr = $this->priceActionService->calculateATR($klines, 14);
-        $this->line("[{$ts}] [{$symbol}] ATR(14) = {$atr} giá");
-
-        // ── 7. Dedup — cùng kênh chỉ báo 1 lần/8 giờ ─────────────
-        // Round về band 25-giá: OLS drift ~0.7/bar × 32 bars = 22 giá → band 25 ổn định suốt 8h dedup
-        $dedupKey = "v5_scan_{$symbol}_{$timeframe}_{$channelType}_" . (round($upper / 25) * 25) . '_' . (round($lower / 25) * 25);
+        // ── 5. Dedup — cùng swing chỉ báo 1 lần / 4 giờ ──────────
+        $dedupKey = "v8_scan_{$symbol}_" . round($sh1) . '_' . round($sl1);
         if (Cache::has($dedupKey)) {
-            $this->line("[{$ts}] [{$symbol}] Alert đã gửi cho kênh này — skip (dedup 8h)");
+            $this->line("[{$ts}] [{$symbol}] Cùng swing — dedup 4h");
             return;
         }
-        Cache::put($dedupKey, true, now()->addHours(8));
+        Cache::put($dedupKey, true, now()->addHours(4));
 
-        // ── 8. Generate safe signal — 3 lớp bảo vệ ──────────────
-        try {
-            $signals = $this->signalFormatter->generateSafeSignal([
-                'symbol'        => $symbol,
-                'current_price' => $currentPrice,
-                'channel'       => $channel,
-                'atr'           => $atr,
-            ], $capital);
-        } catch (\RuntimeException $e) {
-            // Vốn không đủ — log, không phát Telegram, xóa dedup để thử lại sau
-            Cache::forget($dedupKey);
-            $this->warn("[{$ts}] [{$symbol}] ❌ {$e->getMessage()}");
-            return;
-        }
-
-        if ($signals === null) {
-            Cache::forget($dedupKey);
-            $this->line("[{$ts}] [{$symbol}] Setup không đạt: R:R < 1 hoặc entry mâu thuẫn giá — skip");
-            return;
-        }
-
-        // ── 9. Format + Send Telegram ─────────────────────────────
-        $h4Align = match ($htfBias) {
-            'LONG'  => 'thuận xu hướng H4 TĂNG',
-            'SHORT' => 'thuận xu hướng H4 GIẢM',
-            default => 'H4 không rõ — trade 2 chiều',
-        };
-        $reason = match ($channelType) {
-            'descending' => "Whale quét râu đỉnh kênh giảm, đón pullback xuống ({$h4Align})",
-            'ascending'  => "Whale quét râu đáy kênh tăng, đón bounce lên ({$h4Align})",
-            default      => "Phá vỡ Tam giác nén M15, {$h4Align}",
-        };
-        $analysis = [
-            'w1'     => $w1Bias,
-            'd1'     => $d1Bias,
-            'h4'     => $h4Label,
-            'reason' => $reason,
-        ];
-        $msg = $this->signalFormatter->formatTelegramMessage(
-            $symbol, $timeframe, $channel, $signals, $currentPrice, $analysis
+        // ── 6. Format + Send Telegram ─────────────────────────────
+        $msg = $this->signalFormatter->formatMacroSwingMessage(
+            $symbol, $timeframe, $currentPrice,
+            $sh1, $sh2, $sl1, $sl2,
+            $hasBuy  ? $entryBuyPrice  : null,
+            $hasBuy  ? $slBuyPrice     : null,
+            $hasBuy  ? $tpBuyPrice     : null,
+            $hasSell ? $entrySellPrice : null,
+            $hasSell ? $slSellPrice    : null,
+            $hasSell ? $tpSellPrice    : null,
+            $trendReason, $lot, $fixedSL, $rr
         );
         $this->telegramService->sendRaw($msg);
 
-        $slGia = $signals['sl_gia'];
-        $tpGia = $signals['tp_gia'];
-        $rr    = $signals['rr'];
-        $lot   = $signals['lot'];
-        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi | {$channelType} | TP:{$tpGia}g SL:{$slGia}g R:R=1:{$rr} Lot:{$lot}");
+        $setups = collect([
+            $hasBuy  ? "BUY@{$entryBuyPrice}  SL={$slBuyPrice}"  : null,
+            $hasSell ? "SELL@{$entrySellPrice} SL={$slSellPrice}" : null,
+        ])->filter()->implode(' | ');
+        $this->info("[{$ts}] [{$symbol}] ✅ Alert gửi | {$trendReason} | {$setups} | Lot={$lot}");
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -287,5 +236,36 @@ class ScanSignalsCommand extends Command
     private function dailyKey(string $symbol): string
     {
         return 'v5_daily_gia_' . strtoupper($symbol) . '_' . now()->format('Y-m-d');
+    }
+
+    /**
+     * Tìm 2 SwingHigh + 2 SwingLow gần nhất bằng fractal (giống BacktestCommand v7.7).
+     * klines: [[ts,o,h,l,c], ...] — index 2=high, 3=low
+     * Returns: [sh1, sh2, sl1, sl2] — 0 nếu không tìm được
+     */
+    private function findFractalSwings(array $klines, int $idx, int $sw, int $lookback): array
+    {
+        $sh1 = 0.0; $sh2 = 0.0; $sl1 = 0.0; $sl2 = 0.0;
+        $limit = max(0, $idx - $lookback);
+        for ($i = $idx - $sw - 1; $i >= $limit + $sw; $i--) {
+            if ($sh1 > 0 && $sh2 > 0 && $sl1 > 0 && $sl2 > 0) break;
+            $h = (float)($klines[$i][2] ?? 0);
+            $l = (float)($klines[$i][3] ?? 0);
+            $isH = ($sh1 == 0 || $sh2 == 0) && $h > 0;
+            $isL = ($sl1 == 0 || $sl2 == 0) && $l > 0;
+            for ($j = 1; $j <= $sw && ($isH || $isL); $j++) {
+                if ($isH) {
+                    if (($klines[$i - $j][2] ?? 0) >= $h) $isH = false;
+                    if (($klines[$i + $j][2] ?? 0) >= $h) $isH = false;
+                }
+                if ($isL) {
+                    if (($klines[$i - $j][3] ?? 0) <= $l) $isL = false;
+                    if (($klines[$i + $j][3] ?? 0) <= $l) $isL = false;
+                }
+            }
+            if ($isH) { if ($sh1 == 0) $sh1 = $h; else $sh2 = $h; }
+            if ($isL) { if ($sl1 == 0) $sl1 = $l; else $sl2 = $l; }
+        }
+        return [$sh1, $sh2, $sl1, $sl2];
     }
 }
