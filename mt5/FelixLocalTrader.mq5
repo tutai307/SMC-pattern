@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| FelixLocalTrader.mq5                                             |
-//| Felix v8.0 — Macro Sniper (Q-Invest Thầy Quyết 19/5)           |
+//| Felix v8.1 — Macro Sniper (Q-Invest Thầy Quyết 19/5)           |
 //| Rule 1: Macro Swing (Str=12, Look=100) — chỉ bắt Kênh Giá lớn  |
 //| Rule 2: Smart Trend & Wedge Filter                               |
 //| Rule 3: Fixed Lot only                                           |
@@ -9,8 +9,8 @@
 //| Pha 2: ATR Trail bám sát — sóng yếu tự chốt 3-5 giá            |
 //| Pha 3: Hard TP=10 — sóng mạnh chốt ngay, không trailing         |
 //+------------------------------------------------------------------+
-#property copyright "Felix v8.0 — Macro Sniper"
-#property version   "8.00"
+#property copyright "Felix v8.1 — Macro Sniper"
+#property version   "8.10"
 
 //══════════════════════════════════════════════════════════════════
 //  INPUTS
@@ -90,12 +90,12 @@ int OnInit()
 {
     g_atrHandle = iATR(_Symbol, PERIOD_M15, ATR_Period);
     if (g_atrHandle == INVALID_HANDLE) {
-        Print("Felix v8.0: FAILED to create ATR handle — retcode=", GetLastError());
+        Print("Felix v8.1: FAILED to create ATR handle — retcode=", GetLastError());
         return INIT_FAILED;
     }
 
     Print(StringFormat(
-        "Felix v8.0 MACRO SNIPER | Magic=%d | MacroSwing=%d×%d | Wedge=%s(%.0f%%) | Lot=%.2f | SL=±%.1f HardTP=+%.1f | Ph1@%.1f→+%.2f | Ph3@%.1f→+%.2f | ATR(%d)×%.2f | MaxDay=%d | Trading=%s",
+        "Felix v8.1 MACRO SNIPER | Magic=%d | MacroSwing=%d×%d | Wedge=%s(%.0f%%) | Lot=%.2f | SL=±%.1f HardTP=+%.1f | Lock@%.1f→+%.2f | Trail@%.1f→+%.2f | ATR(%d)×%.2f | MaxDay=%d | Trading=%s",
         MagicNumber, SwingStrength, SwingLookback,
         EnableWedgeFilter ? "ON" : "OFF", WedgeRatio * 100,
         FixedLot, FixedSL_Distance, Fixed_TP_Points,
@@ -111,7 +111,7 @@ void OnDeinit(const int reason)
         IndicatorRelease(g_atrHandle);
         g_atrHandle = INVALID_HANDLE;
     }
-    Print("Felix v8.0: Deinit reason=", reason);
+    Print("Felix v8.1: Deinit reason=", reason);
 }
 
 //══════════════════════════════════════════════════════════════════
@@ -127,7 +127,7 @@ void OnTick()
         if (CopyBuffer(g_atrHandle, 0, 1, 1, _atrCheck) < 1) return; // ATR chưa có đủ data
         g_ready   = true;
         g_lastBar = iTime(_Symbol, PERIOD_M15, 0);
-        Print("Felix v8.0: Data sẵn sàng — bắt đầu scan");
+        Print("Felix v8.1: Data sẵn sàng — bắt đầu scan");
         ResetDayCounterIfNeeded();
         SyncState();
         ScanSetup();
@@ -505,15 +505,17 @@ bool ModifySL(ulong ticket, double newSL)
 //══════════════════════════════════════════════════════════════════
 //  MANAGE TRAILING STOP — gọi MỌI TICK (real-time)
 //
-//  Pha A — Instant ATR Trail (NGAY TỪ TICK 1 SAU FILL, không chờ):
-//    dynamicTrail = ATR(nến vừa đóng) × ATR_Multiplier
-//    BUY:  newSL = bid − dynamicTrail  (chỉ tiến lên, không lùi)
-//    SELL: newSL = ask + dynamicTrail  (chỉ tiến xuống, không lùi)
+//  Pha 1 — Fixed SL (trước khi lock):
+//    SL giữ nguyên tại entry ± FixedSL_Distance — chờ giá xác nhận hướng
 //
-//  Pha B — Early Lock (một lần, khi lãi >= BE_Trigger):
-//    BUY:  newSL = max(newSL, entry + Lock_Profit)
-//    SELL: newSL = min(newSL, entry − Lock_Profit)
-//    → Đảm bảo SL không bao giờ dưới entry + Lock_Profit sau khi kích hoạt
+//  Pha 2 — Early Lock (một lần, khi lãi >= BE_Trigger):
+//    BUY:  SL → entry + Lock_Profit
+//    SELL: SL → entry − Lock_Profit
+//
+//  Pha 3 — ATR Trail (CHỈ SAU KHI đã lock BE):
+//    dynamicTrail = ATR(nến vừa đóng) × ATR_Multiplier
+//    BUY:  newSL = bid − dynamicTrail  (chỉ tiến lên)
+//    SELL: newSL = ask + dynamicTrail  (chỉ tiến xuống)
 //══════════════════════════════════════════════════════════════════
 
 void ManageTrailingStop()
@@ -548,16 +550,7 @@ void ManageTrailingStop()
         if (isBuy) {
             double profit = bid - entry;
 
-            // ── Pha A: Instant ATR Trail (luôn chạy từ tick 1) ───
-            double trailSL = NormalizeDouble(bid - dynamicTrail, dg);
-            if (trailSL > newSL) {
-                Print(StringFormat("Felix TRAIL [#%d]: SL %.2f → %.2f (bid=%.2f ATR=%.2f×%.2f=%.2f)",
-                                   g_trades[i].id, newSL, trailSL, bid,
-                                   atrBuf[0], ATR_Multiplier, dynamicTrail));
-                newSL = trailSL;
-            }
-
-            // ── Pha B: Early Lock (một lần, lãi >= BE_Trigger=1.5) ─
+            // ── Pha 2: Early Lock (một lần, lãi >= BE_Trigger) ──────
             if (!g_trades[i].beActivated && profit >= BE_Trigger) {
                 double lockSL = NormalizeDouble(entry + Lock_Profit, dg);
                 if (newSL < lockSL) {
@@ -568,31 +561,30 @@ void ManageTrailingStop()
                 g_trades[i].beActivated = true;
             }
 
-            // ── Pha C: Trail Activation (một lần, lãi >= Trail_Activation=4.0) ─
-            if (!g_trades[i].trailActivated && profit >= Trail_Activation) {
-                double activeSL = NormalizeDouble(entry + BE_Trigger, dg);
-                if (newSL < activeSL) {
-                    Print(StringFormat("Felix ACTIVE [#%d]: SL %.2f → entry+%.2f=%.2f (profit=+%.2f)",
-                                       g_trades[i].id, newSL, BE_Trigger, activeSL, profit));
-                    newSL = activeSL;
+            // ── Pha 3: ATR Trail (chỉ sau khi đã lock BE) ───────────
+            if (g_trades[i].beActivated) {
+                double trailSL = NormalizeDouble(bid - dynamicTrail, dg);
+                if (trailSL > newSL) {
+                    newSL = trailSL;
                 }
-                g_trades[i].trailActivated = true;
+
+                // Trail Activation: lãi >= Trail_Activation → SL ≥ entry+BE_Trigger
+                if (!g_trades[i].trailActivated && profit >= Trail_Activation) {
+                    double activeSL = NormalizeDouble(entry + BE_Trigger, dg);
+                    if (newSL < activeSL) {
+                        Print(StringFormat("Felix ACTIVE [#%d]: SL %.2f → entry+%.2f=%.2f (profit=+%.2f)",
+                                           g_trades[i].id, newSL, BE_Trigger, activeSL, profit));
+                        newSL = activeSL;
+                    }
+                    g_trades[i].trailActivated = true;
+                }
             }
 
         } else {
             // SELL
             double profit = entry - ask;
 
-            // ── Pha A: Instant ATR Trail (luôn chạy từ tick 1) ───
-            double trailSL = NormalizeDouble(ask + dynamicTrail, dg);
-            if (trailSL < newSL) {
-                Print(StringFormat("Felix TRAIL [#%d]: SL %.2f → %.2f (ask=%.2f ATR=%.2f×%.2f=%.2f)",
-                                   g_trades[i].id, newSL, trailSL, ask,
-                                   atrBuf[0], ATR_Multiplier, dynamicTrail));
-                newSL = trailSL;
-            }
-
-            // ── Pha B: Early Lock (một lần, lãi >= BE_Trigger=1.5) ─
+            // ── Pha 2: Early Lock (một lần, lãi >= BE_Trigger) ──────
             if (!g_trades[i].beActivated && profit >= BE_Trigger) {
                 double lockSL = NormalizeDouble(entry - Lock_Profit, dg);
                 if (newSL > lockSL) {
@@ -603,15 +595,23 @@ void ManageTrailingStop()
                 g_trades[i].beActivated = true;
             }
 
-            // ── Pha C: Trail Activation (một lần, lãi >= Trail_Activation=4.0) ─
-            if (!g_trades[i].trailActivated && profit >= Trail_Activation) {
-                double activeSL = NormalizeDouble(entry - BE_Trigger, dg);
-                if (newSL > activeSL) {
-                    Print(StringFormat("Felix ACTIVE [#%d]: SL %.2f → entry-%.2f=%.2f (profit=+%.2f)",
-                                       g_trades[i].id, newSL, BE_Trigger, activeSL, profit));
-                    newSL = activeSL;
+            // ── Pha 3: ATR Trail (chỉ sau khi đã lock BE) ───────────
+            if (g_trades[i].beActivated) {
+                double trailSL = NormalizeDouble(ask + dynamicTrail, dg);
+                if (trailSL < newSL) {
+                    newSL = trailSL;
                 }
-                g_trades[i].trailActivated = true;
+
+                // Trail Activation: lãi >= Trail_Activation → SL ≤ entry-BE_Trigger
+                if (!g_trades[i].trailActivated && profit >= Trail_Activation) {
+                    double activeSL = NormalizeDouble(entry - BE_Trigger, dg);
+                    if (newSL > activeSL) {
+                        Print(StringFormat("Felix ACTIVE [#%d]: SL %.2f → entry-%.2f=%.2f (profit=+%.2f)",
+                                           g_trades[i].id, newSL, BE_Trigger, activeSL, profit));
+                        newSL = activeSL;
+                    }
+                    g_trades[i].trailActivated = true;
+                }
             }
         }
 

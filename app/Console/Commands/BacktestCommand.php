@@ -1121,12 +1121,7 @@ class BacktestCommand extends Command
                         $closePrice = $barClose;
                         $outcome    = 'FAKEOUT';
                     } else {
-                        // Phase A: Instant ATR Trail (LUÔN chạy từ bar 1)
-                        $trailSL = $barHigh - $dynamicTrail;
-                        if ($trailSL > $position['currentSL'])
-                            $position['currentSL'] = $trailSL;
-
-                        // Phase B: Early Lock (một lần khi lãi >= BE_Trigger)
+                        // Phase 2: Early Lock (một lần khi lãi >= BE_Trigger)
                         if (!$beActivated && ($barHigh - $entry) >= $beTrigger) {
                             $lockSL = $entry + $lockProfit;
                             if ($position['currentSL'] < $lockSL)
@@ -1137,15 +1132,21 @@ class BacktestCommand extends Command
                                 date('m-d H:i', $ts/1000), $beTrigger, $position['currentSL'], $lockProfit));
                         }
 
-                        // Phase C: Trail Activation (một lần khi lãi >= Trail_Activation)
-                        if (!$position['trailActivated'] && ($barHigh - $entry) >= $trailActivation) {
-                            $activeSL = $entry + $beTrigger;
-                            if ($position['currentSL'] < $activeSL) {
-                                $position['currentSL'] = $activeSL;
-                                $this->line(sprintf("    %s  BUY  TRAIL_ACT profit≥%.1f → SL→%.2f",
-                                    date('m-d H:i', $ts/1000), $trailActivation, $position['currentSL']));
+                        // Phase 3: ATR Trail (chỉ sau khi đã lock BE)
+                        if ($beActivated) {
+                            $trailSL = $barHigh - $dynamicTrail;
+                            if ($trailSL > $position['currentSL'])
+                                $position['currentSL'] = $trailSL;
+
+                            if (!$position['trailActivated'] && ($barHigh - $entry) >= $trailActivation) {
+                                $activeSL = $entry + $beTrigger;
+                                if ($position['currentSL'] < $activeSL) {
+                                    $position['currentSL'] = $activeSL;
+                                    $this->line(sprintf("    %s  BUY  TRAIL_ACT profit≥%.1f → SL→%.2f",
+                                        date('m-d H:i', $ts/1000), $trailActivation, $position['currentSL']));
+                                }
+                                $position['trailActivated'] = true;
                             }
-                            $position['trailActivated'] = true;
                         }
                     }
                 } else {
@@ -1165,12 +1166,7 @@ class BacktestCommand extends Command
                         $closePrice = $barClose;
                         $outcome    = 'FAKEOUT';
                     } else {
-                        // Phase A: Instant ATR Trail (LUÔN chạy từ bar 1)
-                        $trailSL = $barLow + $dynamicTrail;
-                        if ($trailSL < $position['currentSL'])
-                            $position['currentSL'] = $trailSL;
-
-                        // Phase B: Early Lock (một lần khi lãi >= BE_Trigger)
+                        // Phase 2: Early Lock (một lần khi lãi >= BE_Trigger)
                         if (!$beActivated && ($entry - $barLow) >= $beTrigger) {
                             $lockSL = $entry - $lockProfit;
                             if ($position['currentSL'] > $lockSL)
@@ -1181,15 +1177,21 @@ class BacktestCommand extends Command
                                 date('m-d H:i', $ts/1000), $beTrigger, $position['currentSL'], $lockProfit));
                         }
 
-                        // Phase C: Trail Activation (một lần khi lãi >= Trail_Activation)
-                        if (!$position['trailActivated'] && ($entry - $barLow) >= $trailActivation) {
-                            $activeSL = $entry - $beTrigger;
-                            if ($position['currentSL'] > $activeSL) {
-                                $position['currentSL'] = $activeSL;
-                                $this->line(sprintf("    %s  SELL TRAIL_ACT profit≥%.1f → SL→%.2f",
-                                    date('m-d H:i', $ts/1000), $trailActivation, $position['currentSL']));
+                        // Phase 3: ATR Trail (chỉ sau khi đã lock BE)
+                        if ($beActivated) {
+                            $trailSL = $barLow + $dynamicTrail;
+                            if ($trailSL < $position['currentSL'])
+                                $position['currentSL'] = $trailSL;
+
+                            if (!$position['trailActivated'] && ($entry - $barLow) >= $trailActivation) {
+                                $activeSL = $entry - $beTrigger;
+                                if ($position['currentSL'] > $activeSL) {
+                                    $position['currentSL'] = $activeSL;
+                                    $this->line(sprintf("    %s  SELL TRAIL_ACT profit≥%.1f → SL→%.2f",
+                                        date('m-d H:i', $ts/1000), $trailActivation, $position['currentSL']));
+                                }
+                                $position['trailActivated'] = true;
                             }
-                            $position['trailActivated'] = true;
                         }
                     }
                 }
