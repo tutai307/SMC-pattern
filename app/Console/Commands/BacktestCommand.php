@@ -63,7 +63,8 @@ class BacktestCommand extends Command
         {--max-per-day=3 : Max trades filled per day (0 = unlimited)}
         {--fixed-sl=0 : Fixed SL distance (giá) — 0 = dùng Swing SL cũ (v7.7: 10.0)}
         {--fixed-tp=0 : Hard TP distance (giá) — 0 = trailing only (v7.8)}
-        {--trail-activation=4.0 : Profit level để force SL ≥ entry+BE_Trigger (Pha C)}';
+        {--trail-activation=4.0 : Profit level để force SL ≥ entry+BE_Trigger (Pha C)}
+        {--lot=0 : Fixed lot size — P&L = pts × lot × 100 (XAUUSD). 0 = dùng --risk mode}';
 
 
 
@@ -1051,6 +1052,7 @@ class BacktestCommand extends Command
         $fixedSL         = (float) $this->option('fixed-sl');
         $fixedTP         = (float) $this->option('fixed-tp');
         $trailActivation = (float) $this->option('trail-activation');
+        $lot             = (float) $this->option('lot'); // 0 = dùng risk mode
 
         $N       = count($m15);
         $warmup  = max($swingLook + $swingStr * 2 + 5, $atrPeriod + 2);
@@ -1065,7 +1067,8 @@ class BacktestCommand extends Command
         $slLabel  = $fixedSL > 0 ? "FixedSL=±{$fixedSL}" : "SL=Swing";
         $tpLabel  = $fixedTP > 0 ? "FixedTP=±{$fixedTP}" : "TP=Trail";
         $this->info("SWING BACKTEST {$version} — XAUUSD M15 | {$fromLabel} → {$toLabel}");
-        $this->info("Sw={$swingStr}×{$swingLook} | Lock={$beTrigger}+{$lockProfit} | Trail≥{$trailActivation} | ATR({$atrPeriod})×{$atrMult} | {$slLabel} | {$tpLabel} | FO=" . ($foTol*100) . "% | Wedge=" . ($wedgeFilter?'ON':'OFF') . " | MaxDay={$maxPerDay} | Risk=\${$risk}");
+        $sizeLabel = $lot > 0 ? "Lot={$lot}" : "Risk=\${$risk}";
+        $this->info("Sw={$swingStr}×{$swingLook} | Lock={$beTrigger}+{$lockProfit} | Trail≥{$trailActivation} | ATR({$atrPeriod})×{$atrMult} | {$slLabel} | {$tpLabel} | FO=" . ($foTol*100) . "% | Wedge=" . ($wedgeFilter?'ON':'OFF') . " | MaxDay={$maxPerDay} | {$sizeLabel}");
         $this->line(str_repeat('─', 72));
 
         $trades       = [];
@@ -1200,7 +1203,11 @@ class BacktestCommand extends Command
                     $pnlPts = $position['dir'] === 'BUY'
                         ? ($closePrice - $entry)
                         : ($entry - $closePrice);
-                    $pnl       = $slDist > 0 ? round($pnlPts / $slDist * $risk, 2) : 0;
+                    // Lot mode: P&L = pts × lot × 100 (XAUUSD 100 oz/lot)
+                    // Risk mode: P&L = pts / slDist × risk
+                    $pnl       = $lot > 0
+                        ? round($pnlPts * $lot * 100, 2)
+                        : ($slDist > 0 ? round($pnlPts / $slDist * $risk, 2) : 0);
                     $rMultiple = $slDist > 0 ? round($pnlPts / $slDist, 2) : 0;
                     $capital  += $pnl;
                     $sign      = $pnl >= 0 ? '+' : '';
