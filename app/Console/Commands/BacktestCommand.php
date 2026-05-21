@@ -1020,11 +1020,19 @@ class BacktestCommand extends Command
     private function runSwingBacktest(int $fromTs, int $toTs, string $fromLabel, string $toLabel, float $capital, float $risk): int
     {
         $sym    = 'XAUUSDT';
-        $m15raw = \Cache::get("mt5_bulk_{$sym}_15m", []);
+        // Luôn đọc entry mới nhất từ DB (Railway và local dùng khác cache prefix)
+        $row = \DB::table('cache')
+            ->where('key', 'like', "%mt5_bulk_{$sym}_15m")
+            ->orderByDesc('expiration')
+            ->first();
+        $m15raw = $row ? (@unserialize($row->value) ?: []) : [];
+        if (empty($m15raw)) $m15raw = \Cache::get("mt5_bulk_{$sym}_15m", []);
         if (empty($m15raw)) {
             $this->error("Không có MT5 data. Chạy FelixBulkExporter trên MT5 trước.");
             return 1;
         }
+        $lastBar = end($m15raw);
+        $this->line("MT5 data: " . count($m15raw) . " bars, last=" . date('Y-m-d H:i', $lastBar[0]/1000));
         $m15 = array_map(fn($b) => [(int)$b[0],(float)$b[1],(float)$b[2],(float)$b[3],(float)$b[4]], $m15raw);
 
         $entryBuf    = (float) $this->option('entry-buf');
